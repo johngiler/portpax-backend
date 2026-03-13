@@ -19,6 +19,7 @@ router.register("ports", views.PortViewSet, basename="port")
 router.register("berths", views.BerthViewSet, basename="berth")
 router.register("ships", views.ShipViewSet, basename="ship")
 router.register("scales", views.ScaleViewSet, basename="scale")
+router.register("port-fee-rules", views.PortFeeRuleViewSet, basename="portfeerule")
 
 urlpatterns += [
     path("", include(router.urls)),

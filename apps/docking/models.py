@@ -9,6 +9,8 @@ class ShippingLine(models.Model):
     """Naviera (cliente)."""
     name = models.CharField(max_length=255)
     code = models.CharField(max_length=50, blank=True)
+    # Para tarifas portuarias: RCL, NCL, MSC, CCL, VV, Others (según PDF Port Fees)
+    fee_tier = models.CharField(max_length=20, blank=True)
 
     class Meta:
         ordering = ["name"]
@@ -56,6 +58,7 @@ class Ship(models.Model):
         ShippingLine, on_delete=models.CASCADE, related_name="ships"
     )
     name = models.CharField(max_length=255)
+    code = models.CharField(max_length=80, blank=True, help_text="Clave catálogo, ej. HAL ZUIDERDAM, RCI VISION")
     imo = models.CharField(max_length=20, blank=True)
     capacity_pax = models.PositiveIntegerField(null=True, blank=True)
     length_m = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
@@ -88,3 +91,27 @@ class Scale(models.Model):
 
     def __str__(self):
         return f"{self.ship.name} @ {self.port.name} ({self.date})"
+
+
+class PortFeeRule(models.Model):
+    """Tarifa por pasajero en un puerto por 'tier' de naviera (RCL, NCL, MSC, etc.)."""
+    port = models.ForeignKey(Port, on_delete=models.CASCADE, related_name="fee_rules")
+    fee_tier = models.CharField(max_length=20, help_text="RCL, NCL, MSC, CCL, VV, Others")
+    amount_per_pax_usd = models.DecimalField(
+        max_digits=10, decimal_places=2, help_text="USD por pasajero"
+    )
+    minimum_charge_usd = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    valid_from = models.DateField(null=True, blank=True)
+    valid_to = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["port", "fee_tier"]
+        verbose_name = "Tarifa portuaria"
+        verbose_name_plural = "Tarifas portuarias"
+        unique_together = [["port", "fee_tier"]]
+
+    def __str__(self):
+        return f"{self.port.name} — {self.fee_tier}: ${self.amount_per_pax_usd}"

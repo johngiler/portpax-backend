@@ -3,13 +3,13 @@ Serializers para la API de Docking/Muellaje.
 """
 from rest_framework import serializers
 
-from .models import Berth, Port, Scale, Ship, ShippingLine
+from .models import Berth, Port, PortFeeRule, Scale, Ship, ShippingLine
 
 
 class ShippingLineSerializer(serializers.ModelSerializer):
     class Meta:
         model = ShippingLine
-        fields = ["id", "name", "code"]
+        fields = ["id", "name", "code", "fee_tier"]
 
 
 class PortSerializer(serializers.ModelSerializer):
@@ -33,7 +33,19 @@ class ShipSerializer(serializers.ModelSerializer):
         model = Ship
         fields = [
             "id", "shipping_line", "shipping_line_name",
-            "name", "imo", "capacity_pax", "length_m", "draft_m",
+            "name", "code", "imo", "capacity_pax", "length_m", "draft_m",
+        ]
+
+
+class PortFeeRuleSerializer(serializers.ModelSerializer):
+    port_name = serializers.CharField(source="port.name", read_only=True)
+
+    class Meta:
+        model = PortFeeRule
+        fields = [
+            "id", "port", "port_name", "fee_tier",
+            "amount_per_pax_usd", "minimum_charge_usd",
+            "valid_from", "valid_to", "notes",
         ]
 
 

@@ -5,10 +5,11 @@ from rest_framework import viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import Berth, Port, Scale, Ship, ShippingLine
+from .models import Berth, Port, PortFeeRule, Scale, Ship, ShippingLine
 from .pagination import DefaultPagination
 from .serializers import (
     BerthSerializer,
+    PortFeeRuleSerializer,
     PortSerializer,
     ScaleSerializer,
     ShipSerializer,
@@ -43,6 +44,12 @@ class ShipViewSet(viewsets.ModelViewSet):
 class ScaleViewSet(viewsets.ModelViewSet):
     queryset = Scale.objects.select_related("ship", "port", "berth").all()
     serializer_class = ScaleSerializer
+    pagination_class = DefaultPagination
+
+
+class PortFeeRuleViewSet(viewsets.ModelViewSet):
+    queryset = PortFeeRule.objects.select_related("port").all()
+    serializer_class = PortFeeRuleSerializer
     pagination_class = DefaultPagination
 
 
