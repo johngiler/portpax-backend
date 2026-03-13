@@ -29,8 +29,9 @@ cd "$BACKEND_DIR"
 echo "[deploy] Syncing backend -> $REMOTE_HOST:$REMOTE_PATH"
 rsync -avz --delete "${RSYNC_EXCLUDE[@]}" -e ssh "$BACKEND_DIR/" "$REMOTE_HOST:$REMOTE_PATH/"
 
-echo "[deploy] Fixing ownership and running: install deps, migrate, collectstatic, restart..."
+echo "[deploy] Fixing ownership and running: install deps, migrate, collectstatic, restart service..."
 ssh "$REMOTE_HOST" "chown -R git:git $REMOTE_PATH"
-ssh "$REMOTE_HOST" "cd $REMOTE_PATH && sudo -u git .venv/bin/pip install -q -r requirements.txt && sudo -u git .venv/bin/python manage.py migrate --noinput && sudo -u git .venv/bin/python manage.py collectstatic --noinput --clear 2>/dev/null || true && systemctl restart portpax-api 2>/dev/null || echo ' (service portpax-api not found)'"
+ssh "$REMOTE_HOST" "cd $REMOTE_PATH && sudo -u git .venv/bin/pip install -q -r requirements.txt && sudo -u git .venv/bin/python manage.py migrate --noinput && sudo -u git .venv/bin/python manage.py collectstatic --noinput --clear 2>/dev/null || true"
+ssh "$REMOTE_HOST" "systemctl restart portpax-api 2>/dev/null || true; systemctl reload nginx 2>/dev/null || true"
 
 echo "[deploy] Done. https://api.portpax.com"
