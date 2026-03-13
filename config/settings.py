@@ -163,3 +163,9 @@ DJOSER = {
         "user_list": ["rest_framework.permissions.IsAdminUser"],
     },
 }
+
+# local settings
+try:
+    from .local_settings import *
+except ImportError:
+    pass

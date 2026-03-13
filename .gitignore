@@ -18,3 +18,9 @@ __pycache__/
 .vscode/
 *.swp
 *.swo
+
+# local settings
+config/local_settings.py
+
+# dump para migrar a Postgres (puede contener datos sensibles)
+data/
