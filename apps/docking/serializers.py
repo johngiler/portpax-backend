@@ -46,5 +46,5 @@ class ScaleSerializer(serializers.ModelSerializer):
         model = Scale
         fields = [
             "id", "ship", "ship_name", "port", "port_name",
-            "berth", "berth_name", "date", "pax_count",
+            "berth", "berth_name", "date", "pax_count", "crew_count",
         ]

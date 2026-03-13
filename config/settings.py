@@ -129,4 +129,6 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
     ],
+    "DEFAULT_PAGINATION_CLASS": "apps.docking.pagination.DefaultPagination",
+    "PAGE_SIZE": 20,
 }

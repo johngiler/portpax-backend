@@ -79,6 +79,7 @@ class Scale(models.Model):
     )
     date = models.DateField()
     pax_count = models.PositiveIntegerField(null=True, blank=True)
+    crew_count = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ["-date", "port", "ship"]
