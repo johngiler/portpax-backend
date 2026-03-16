@@ -51,12 +51,13 @@ class PortFeeRuleSerializer(serializers.ModelSerializer):
 
 class ScaleSerializer(serializers.ModelSerializer):
     ship_name = serializers.CharField(source="ship.name", read_only=True)
+    shipping_line_name = serializers.CharField(source="ship.shipping_line.name", read_only=True)
     port_name = serializers.CharField(source="port.name", read_only=True)
-    berth_name = serializers.CharField(source="berth.name", read_only=True)
+    berth_name = serializers.CharField(source="berth.name", read_only=True, allow_null=True)
 
     class Meta:
         model = Scale
         fields = [
-            "id", "ship", "ship_name", "port", "port_name",
+            "id", "ship", "ship_name", "shipping_line_name", "port", "port_name",
             "berth", "berth_name", "date", "pax_count", "crew_count",
         ]

@@ -11,6 +11,7 @@ urlpatterns = [
     path("stats/", views.api_docking_stats),
     path("metrics/scales-by-month/", views_metrics.api_metrics_scales_by_month),
     path("metrics/scales-by-year/", views_metrics.api_metrics_scales_by_year),
+    path("metrics/revenue-estimate/", views_metrics.api_metrics_revenue_estimate),
 ]
 
 router = DefaultRouter()

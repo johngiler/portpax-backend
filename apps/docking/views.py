@@ -42,7 +42,7 @@ class ShipViewSet(viewsets.ModelViewSet):
 
 
 class ScaleViewSet(viewsets.ModelViewSet):
-    queryset = Scale.objects.select_related("ship", "port", "berth").all()
+    queryset = Scale.objects.select_related("ship", "ship__shipping_line", "port", "berth").all()
     serializer_class = ScaleSerializer
     pagination_class = DefaultPagination
 
