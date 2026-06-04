@@ -45,8 +45,6 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt",
     "corsheaders",
     "djoser",
-    "apps.core",
-    "apps.docking",
 ]
 
 MIDDLEWARE = [

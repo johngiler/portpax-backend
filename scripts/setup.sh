@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# One-time server setup for PortPax API (Ubuntu). Run as root on api.portpax.com.
+# One-time server setup for PortPax API (Ubuntu). Run as root on the server.
 # Installs: Postgres, Nginx, Certbot, Python venv + system deps for Django/psycopg.
 #
 # After this: copy backend to /home/git/backend, create .env, run init_db.sh, then deploy.

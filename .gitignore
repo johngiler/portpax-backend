@@ -1,12 +1,9 @@
 # Virtualenv
-.venv/
-venv/
-env/
+.venv
 
 # Django
 *.log
 db.sqlite3
-media/
 staticfiles/
 __pycache__/
 *.pyc
@@ -19,8 +16,7 @@ __pycache__/
 *.swp
 *.swo
 
-# local settings
 config/local_settings.py
-
-# dump para migrar a Postgres (puede contener datos sensibles)
 data/
+media/
+static/
