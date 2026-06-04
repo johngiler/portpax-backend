@@ -20,3 +20,4 @@ config/local_settings.py
 data/
 media/
 static/
+.DS_Store
