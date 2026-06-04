@@ -33,7 +33,8 @@ chown -R www-data:www-data /var/www/letsencrypt
 
 echo "[setup] Done. Next steps:"
 echo "  1. Copy backend code to /home/git/backend (or clone)"
-echo "  2. Copy .env to /home/git/backend/.env"
-echo "  3. Run init_db.sh (as postgres or root) to create DB"
-echo "  4. As git: cd /home/git/backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
-echo "  5. Deploy nginx config and run certbot, then deploy.sh / systemd"
+echo "  2. Copy .env.dev.template to /home/git/backend/.env and fill secrets"
+echo "  3. Copy local_settings.dev.template.py to config/local_settings.py"
+echo "  4. Run init_db.sh (as postgres or root) to create DB"
+echo "  5. As git: cd /home/git/backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+echo "  6. Deploy nginx config and run certbot, then deploy.sh / systemd"
