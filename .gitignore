@@ -16,7 +16,7 @@ __pycache__/
 *.swp
 *.swo
 
-config/local_settings.py
+config/settings/local_settings.py
 data/
 media/
 static/

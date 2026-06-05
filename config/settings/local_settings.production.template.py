@@ -1,9 +1,9 @@
 """
-DEV environment (BCT) — copy to config/local_settings.py on api.portpax.com
+PRODUCTION environment (ITM) — copy to config/settings/local_settings.py on api.itmgroup.mx
 
-  cp config/local_settings.dev.template.py config/local_settings.py
+  cp config/settings/local_settings.production.template.py config/settings/local_settings.py
 
-Requires backend/.env (see .env.dev.template).
+Requires backend/.env (see .env.production.template).
 """
 
 import os
@@ -11,17 +11,17 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-PORTPAX_ENV = "DEV"
+PORTPAX_ENV = "PRODUCTION"
 
 SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
-DEBUG = os.environ.get("DEBUG", "false").lower() in ("1", "true", "yes")
+DEBUG = False
 
 ALLOWED_HOSTS = [
     h.strip()
-    for h in os.environ.get("ALLOWED_HOSTS", "api.portpax.com").split(",")
+    for h in os.environ.get("ALLOWED_HOSTS", "api.itmgroup.mx").split(",")
     if h.strip()
 ]
 
@@ -29,7 +29,7 @@ CORS_ALLOWED_ORIGINS = [
     o.strip()
     for o in os.environ.get(
         "CORS_ALLOWED_ORIGINS",
-        "https://itm.portpax.com",
+        "https://portpax.itmgroup.mx",
     ).split(",")
     if o.strip()
 ]

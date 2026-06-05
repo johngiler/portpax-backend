@@ -1,12 +1,12 @@
 """
-LOCAL environment — copy to config/local_settings.py
+LOCAL environment — copy to config/settings/local_settings.py
 
-  cp config/local_settings.local.template.py config/local_settings.py
+  cp config/settings/local_settings.local.template.py config/settings/local_settings.py
 """
 
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 PORTPAX_ENV = "LOCAL"
 

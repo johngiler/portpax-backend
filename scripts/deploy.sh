@@ -18,7 +18,7 @@ RSYNC_EXCLUDE=(
   --exclude "__pycache__"
   --exclude "*.pyc"
   --exclude ".env"
-  --exclude "config/local_settings.py"
+  --exclude "config/settings/local_settings.py"
   --exclude "db.sqlite3"
   --exclude "staticfiles"
   --exclude ".git"
