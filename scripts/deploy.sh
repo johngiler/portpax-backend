@@ -2,10 +2,10 @@
 #
 # Deploy PortPax backend to api.portpax.com (portpax-api).
 # Requires: rsync, SSH config Host portpax-api -> api.portpax.com, root on remote.
-# Target: /home/git/backend (gunicorn via systemd unit portpax-api).
+# Target: /home/git/backend (gunicorn via systemd unit gunicorn.service).
 #
 # Server-only files (never overwritten by rsync):
-#   .env, config/settings/local_settings.py, .venv, db.sqlite3, staticfiles/
+#   .env, config/settings/local_settings.py, .venv, db.sqlite3, media/, static/
 #
 
 set -e
@@ -22,8 +22,9 @@ RSYNC_EXCLUDE=(
   --exclude ".env"
   --exclude "config/settings/local_settings.py"
   --exclude "db.sqlite3"
-  --exclude "staticfiles"
   --exclude ".git"
+  --exclude "media/"
+  --exclude "static/"
 )
 
 cd "$BACKEND_DIR"
@@ -59,12 +60,15 @@ sudo -u git .venv/bin/python manage.py collectstatic --noinput --clear 2>/dev/nu
 echo "[deploy] Remote: venv, migrate, collectstatic..."
 ssh "$REMOTE_HOST" "$REMOTE_SETUP"
 
-echo "[deploy] Restarting portpax-api..."
-if ssh "$REMOTE_HOST" "systemctl is-enabled portpax-api >/dev/null 2>&1"; then
-  ssh "$REMOTE_HOST" "systemctl restart portpax-api && systemctl reload nginx"
+echo "[deploy] Restarting gunicorn.service..."
+if ssh "$REMOTE_HOST" "systemctl is-enabled gunicorn.service >/dev/null 2>&1"; then
+  ssh "$REMOTE_HOST" "systemctl restart gunicorn.service && systemctl reload nginx"
 else
-  echo "[deploy] WARN: portpax-api systemd unit not installed. On server run:"
-  echo "  cd $REMOTE_PATH && ./scripts/install_server_config.sh"
+  echo "[deploy] WARN: gunicorn.service systemd unit not installed. On server run:"
+  echo "cp scripts/systemd/gunicorn.service /etc/systemd/system/gunicorn.service"
+  echo "systemctl daemon-reload"
+  echo "systemctl enable gunicorn.service"
+  echo "systemctl start gunicorn.service"
 fi
 
 echo "[deploy] Done. https://api.portpax.com/api/health/"
