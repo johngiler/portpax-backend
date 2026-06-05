@@ -19,5 +19,4 @@ __pycache__/
 config/settings/local_settings.py
 data/
 media/
-static/
 .DS_Store
