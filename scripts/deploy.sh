@@ -5,7 +5,7 @@
 # Target: /home/git/backend (gunicorn via systemd unit gunicorn.service).
 #
 # Server-only files (never overwritten by rsync):
-#   .env, config/settings/local_settings.py, .venv, db.sqlite3, media/, static/
+#   .env, config/settings/local_settings.py, .venv, db.sqlite3, media/, static/, staticfiles/
 #
 
 set -e
@@ -25,6 +25,7 @@ RSYNC_EXCLUDE=(
   --exclude ".git"
   --exclude "media/"
   --exclude "static/"
+  --exclude "staticfiles/"
 )
 
 cd "$BACKEND_DIR"
