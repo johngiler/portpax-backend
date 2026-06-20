@@ -28,9 +28,25 @@ class Position(models.Model):
         decimal_places=2,
         null=True,
         blank=True,
-        help_text="Max LOA for this slot in current mooring layout.",
+        help_text="Max LOA (eslora) for this slot (m).",
     )
-    min_draft_m = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    min_draft_m = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Min depth / calado at berth line (m).",
+    )
+    bollard_count = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Number of bollards (bitas) at this position.",
+    )
+    fender_count = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Number of fenders (defensas) at this position.",
+    )
     out_of_service = models.BooleanField(default=False)
     effective_from = models.DateField(null=True, blank=True)
     effective_until = models.DateField(null=True, blank=True)
