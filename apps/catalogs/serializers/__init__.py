@@ -7,6 +7,7 @@ from apps.catalogs.serializers.port_image import PortImageSerializer
 from apps.catalogs.serializers.position import PositionSerializer
 from apps.catalogs.serializers.position_image import PositionImageSerializer
 from apps.catalogs.serializers.shipping_line import ShippingLineSerializer
+from apps.catalogs.serializers.shipping_line_detail import ShippingLineDetailSerializer
 from apps.catalogs.serializers.shipping_line_group import ShippingLineGroupSerializer
 from apps.catalogs.serializers.vessel import VesselSerializer
 
@@ -19,6 +20,7 @@ __all__ = [
     "PortSerializer",
     "PositionImageSerializer",
     "PositionSerializer",
+    "ShippingLineDetailSerializer",
     "ShippingLineGroupSerializer",
     "ShippingLineSerializer",
     "VesselSerializer",

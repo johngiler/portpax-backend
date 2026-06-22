@@ -12,6 +12,12 @@ class Vessel(models.Model):
         related_name="vessels",
     )
     name = models.CharField(max_length=128)
+    logo = models.ImageField(
+        upload_to="vessels/logos/",
+        blank=True,
+        null=True,
+        help_text="Vessel image thumbnail (single image).",
+    )
     vessel_class = models.CharField(max_length=128, blank=True)
     gross_tonnage = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     pax_capacity = models.PositiveIntegerField(null=True, blank=True)

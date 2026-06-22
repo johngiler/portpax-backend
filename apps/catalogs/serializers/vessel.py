@@ -1,9 +1,11 @@
 from rest_framework import serializers
 
 from apps.catalogs.models import Vessel
+from apps.core.serializers.mixins import WebPImageFieldsMixin
 
 
-class VesselSerializer(serializers.ModelSerializer):
+class VesselSerializer(WebPImageFieldsMixin, serializers.ModelSerializer):
+    webp_image_fields = ("logo",)
     shipping_line_name = serializers.CharField(source="shipping_line.name", read_only=True)
     group_name = serializers.CharField(source="shipping_line.group.name", read_only=True)
     total_persons = serializers.SerializerMethodField()
@@ -16,6 +18,7 @@ class VesselSerializer(serializers.ModelSerializer):
             "shipping_line_name",
             "group_name",
             "name",
+            "logo",
             "vessel_class",
             "gross_tonnage",
             "pax_capacity",

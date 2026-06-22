@@ -13,6 +13,12 @@ class ShippingLine(models.Model):
     )
     code = models.SlugField(max_length=64, unique=True)
     name = models.CharField(max_length=128)
+    logo = models.ImageField(
+        upload_to="shipping_lines/logos/",
+        blank=True,
+        null=True,
+        help_text="Shipping line logo thumbnail (single image).",
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
