@@ -5,7 +5,10 @@ from apps.catalogs.models import (
     MooringScenario,
     MooringScenarioSlot,
     Port,
+    PortBollard,
+    PortImage,
     Position,
+    PositionImage,
     ShippingLine,
     ShippingLineGroup,
     Vessel,
@@ -42,6 +45,18 @@ class MooringScenarioSlotInline(admin.TabularInline):
     fields = ("slot_label", "position", "max_loa_m", "sort_order")
 
 
+class PortBollardInline(admin.TabularInline):
+    model = PortBollard
+    extra = 0
+    fields = ("capacity_t", "bollard_type", "quantity", "label", "sort_order", "is_active")
+
+
+class PortImageInline(admin.TabularInline):
+    model = PortImage
+    extra = 0
+    fields = ("image", "caption", "sort_order", "is_cover")
+
+
 @admin.register(Port)
 class PortAdmin(admin.ModelAdmin):
     list_display = (
@@ -54,7 +69,7 @@ class PortAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "is_active", "country")
     search_fields = ("code", "name", "commercial_name")
-    inlines = (BerthInline, PositionInline)
+    inlines = (BerthInline, PositionInline, PortBollardInline, PortImageInline)
 
 
 @admin.register(Berth)
@@ -62,6 +77,12 @@ class BerthAdmin(admin.ModelAdmin):
     list_display = ("code", "port", "length_m", "width_m", "min_draft_m", "is_active")
     list_filter = ("port", "is_active")
     search_fields = ("code", "name", "port__code")
+
+
+class PositionImageInline(admin.TabularInline):
+    model = PositionImage
+    extra = 0
+    fields = ("image", "caption", "sort_order", "is_cover")
 
 
 @admin.register(Position)
@@ -81,6 +102,7 @@ class PositionAdmin(admin.ModelAdmin):
     )
     list_filter = ("port", "position_type", "out_of_service", "is_projection", "is_active")
     search_fields = ("code", "port__code")
+    inlines = (PositionImageInline,)
 
 
 @admin.register(MooringScenario)

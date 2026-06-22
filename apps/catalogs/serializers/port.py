@@ -21,6 +21,7 @@ class PortSerializer(serializers.ModelSerializer):
             "status",
             "min_berth_draft_m",
             "anchorage_slot_count",
+            "fender_count",
             "largest_vessel_recorded",
             "largest_vessel_loa_m",
             "notes",
@@ -31,7 +32,15 @@ class PortSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "position_count", "position_codes", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "largest_vessel_recorded",
+            "largest_vessel_loa_m",
+            "position_count",
+            "position_codes",
+            "created_at",
+            "updated_at",
+        ]
 
     def get_position_codes(self, obj: Port) -> list[str]:
         positions = obj.positions.all()

@@ -1,18 +1,34 @@
-from django.db.models import Count
+from django.db.models import Count, Prefetch
 from rest_framework import filters, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
-from apps.catalogs.models import Port
-from apps.catalogs.serializers import PortSerializer
+from apps.catalogs.models import Port, Position
+from apps.catalogs.serializers import PortDetailSerializer, PortSerializer
 
 
 class PortViewSet(viewsets.ModelViewSet):
-    queryset = Port.objects.annotate(position_count=Count("positions")).prefetch_related(
-        "positions"
-    )
     serializer_class = PortSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["code", "name", "commercial_name", "country"]
     ordering_fields = ["name", "code", "country", "created_at"]
     ordering = ["name"]
+
+    def get_serializer_class(self):
+        if self.action == "retrieve":
+            return PortDetailSerializer
+        return PortSerializer
+
+    def get_queryset(self):
+        base = Port.objects.annotate(position_count=Count("positions"))
+        if self.action == "retrieve":
+            positions_qs = Position.objects.prefetch_related("images").order_by(
+                "sort_order", "code"
+            )
+            return base.prefetch_related(
+                "berths",
+                Prefetch("positions", queryset=positions_qs),
+                "bollards",
+                "images",
+            )
+        return base.prefetch_related("positions")

@@ -37,6 +37,11 @@ class Port(models.Model):
         default=0,
         help_text="Anchorage positions at port level (e.g. Roatán A1/A2).",
     )
+    fender_count = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Total fenders at port level (docs §2 / §4 inventory).",
+    )
     largest_vessel_recorded = models.CharField(max_length=128, blank=True)
     largest_vessel_loa_m = models.DecimalField(
         max_digits=6,
