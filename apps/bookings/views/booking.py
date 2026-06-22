@@ -1,6 +1,11 @@
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.mixins import ListModelMixin, RetrieveModelMixin, UpdateModelMixin
+from rest_framework.mixins import (
+    DestroyModelMixin,
+    ListModelMixin,
+    RetrieveModelMixin,
+    UpdateModelMixin,
+)
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -10,13 +15,19 @@ from apps.bookings.serializers import (
     BookingSerializer,
     BookingStatusUpdateSerializer,
 )
-from apps.bookings.services.booking import BookingBatchCreateError, create_booking_batch
+from apps.bookings.services.booking import (
+    BookingBatchCreateError,
+    BookingDeleteError,
+    create_booking_batch,
+    delete_cancelled_booking,
+)
 
 
 class BookingViewSet(
     ListModelMixin,
     RetrieveModelMixin,
     UpdateModelMixin,
+    DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
     permission_classes = [IsAuthenticated]
@@ -31,7 +42,7 @@ class BookingViewSet(
     ]
     ordering_fields = ["call_date", "created_at", "booking_code", "status"]
     ordering = ["-call_date", "-created_at"]
-    http_method_names = ["get", "patch", "head", "options", "post"]
+    http_method_names = ["get", "patch", "delete", "head", "options", "post"]
 
     def get_queryset(self):
         qs = Booking.objects.select_related("port", "shipping_line", "vessel")
@@ -60,6 +71,14 @@ class BookingViewSet(
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
         return Response(BookingSerializer(booking, context={"request": request}).data)
+
+    def destroy(self, request, *args, **kwargs):
+        booking = self.get_object()
+        try:
+            delete_cancelled_booking(booking)
+        except BookingDeleteError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=["post"], url_path="batch")
     def batch_create(self, request):
