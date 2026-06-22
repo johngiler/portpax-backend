@@ -19,8 +19,8 @@ class Port(models.Model):
     )
     country = models.CharField(max_length=64)
     region = models.CharField(max_length=128, blank=True)
-    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    latitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
     status = models.CharField(
         max_length=32,
         choices=PortOperationalStatus.choices,
