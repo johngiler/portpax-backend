@@ -24,6 +24,7 @@ class PortSerializer(serializers.ModelSerializer):
             "largest_vessel_recorded",
             "largest_vessel_loa_m",
             "notes",
+            "logo",
             "is_active",
             "position_count",
             "position_codes",

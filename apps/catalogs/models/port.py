@@ -45,6 +45,12 @@ class Port(models.Model):
         blank=True,
     )
     notes = models.TextField(blank=True)
+    logo = models.ImageField(
+        upload_to="ports/logos/",
+        blank=True,
+        null=True,
+        help_text="Port logo thumbnail (single image).",
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
