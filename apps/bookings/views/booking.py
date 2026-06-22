@@ -58,6 +58,12 @@ class BookingViewSet(
         status_param = self.request.query_params.get("status")
         if status_param:
             qs = qs.filter(status=status_param)
+        call_date_from = self.request.query_params.get("call_date_from")
+        if call_date_from:
+            qs = qs.filter(call_date__gte=call_date_from)
+        call_date_to = self.request.query_params.get("call_date_to")
+        if call_date_to:
+            qs = qs.filter(call_date__lte=call_date_to)
         return qs
 
     def get_serializer_class(self):
