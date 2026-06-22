@@ -33,8 +33,6 @@ class PositionInline(admin.TabularInline):
         "min_draft_m",
         "bollard_count",
         "fender_count",
-        "out_of_service",
-        "is_projection",
         "sort_order",
         "is_active",
     )
@@ -104,11 +102,9 @@ class PositionAdmin(admin.ModelAdmin):
         "min_draft_m",
         "bollard_count",
         "fender_count",
-        "out_of_service",
-        "is_projection",
         "is_active",
     )
-    list_filter = ("port", "position_type", "out_of_service", "is_projection", "is_active")
+    list_filter = ("port", "position_type", "is_active")
     search_fields = ("code", "port__code")
     inlines = (PositionImageInline,)
 

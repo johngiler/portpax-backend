@@ -47,13 +47,8 @@ class Position(models.Model):
         blank=True,
         help_text="Number of fenders (defensas) at this position.",
     )
-    out_of_service = models.BooleanField(default=False)
     effective_from = models.DateField(null=True, blank=True)
     effective_until = models.DateField(null=True, blank=True)
-    is_projection = models.BooleanField(
-        default=False,
-        help_text="Future-phase capacity; not current operational state (doc §5.4).",
-    )
     notes = models.TextField(blank=True)
     latitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
     longitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
