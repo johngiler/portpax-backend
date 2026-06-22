@@ -11,3 +11,10 @@ class VesselViewSet(viewsets.ModelViewSet):
     search_fields = ["name", "vessel_class", "shipping_line__name", "shipping_line__group__name"]
     ordering_fields = ["name", "loa_m", "draft_m", "created_at"]
     ordering = ["name"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        shipping_line_id = self.request.query_params.get("shipping_line")
+        if shipping_line_id:
+            qs = qs.filter(shipping_line_id=shipping_line_id)
+        return qs
