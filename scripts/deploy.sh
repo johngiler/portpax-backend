@@ -63,6 +63,7 @@ ssh "$REMOTE_HOST" "$REMOTE_SETUP"
 
 echo "[deploy] Restarting gunicorn.service..."
 if ssh "$REMOTE_HOST" "systemctl is-enabled gunicorn.service >/dev/null 2>&1"; then
+  ssh "$REMOTE_HOST" "sudo bash $REMOTE_PATH/scripts/ensure_gunicorn_logs.sh"
   ssh "$REMOTE_HOST" "systemctl restart gunicorn.service && systemctl reload nginx"
 else
   echo "[deploy] WARN: gunicorn.service systemd unit not installed. On server run:"
