@@ -33,6 +33,8 @@ class PositionSerializer(serializers.ModelSerializer):
             "effective_until",
             "is_projection",
             "notes",
+            "latitude",
+            "longitude",
             "sort_order",
             "is_active",
             "created_at",

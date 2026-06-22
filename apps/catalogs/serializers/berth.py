@@ -17,6 +17,8 @@ class BerthSerializer(serializers.ModelSerializer):
             "walkway_width_m",
             "min_draft_m",
             "notes",
+            "latitude",
+            "longitude",
             "sort_order",
             "is_active",
             "created_at",

@@ -55,6 +55,8 @@ class Position(models.Model):
         help_text="Future-phase capacity; not current operational state (doc §5.4).",
     )
     notes = models.TextField(blank=True)
+    latitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
     sort_order = models.PositiveSmallIntegerField(default=0)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
