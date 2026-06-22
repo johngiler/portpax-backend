@@ -85,6 +85,11 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Image uploads (port/berth/position galleries, logos). Keep nginx client_max_body_size in sync.
+IMAGE_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = IMAGE_UPLOAD_MAX_BYTES
+FILE_UPLOAD_MAX_MEMORY_SIZE = IMAGE_UPLOAD_MAX_BYTES
+
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
