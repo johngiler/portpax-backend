@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from apps.catalogs.views import (
+    BerthImageViewSet,
     BerthViewSet,
     PortBollardViewSet,
     PortImageViewSet,
@@ -17,6 +18,7 @@ router = DefaultRouter()
 router.register("ports", PortViewSet, basename="port")
 router.register("berths", BerthViewSet, basename="berth")
 router.register("positions", PositionViewSet, basename="position")
+router.register("berth-images", BerthImageViewSet, basename="berth-image")
 router.register("port-bollards", PortBollardViewSet, basename="port-bollard")
 router.register("port-images", PortImageViewSet, basename="port-image")
 router.register("position-images", PositionImageViewSet, basename="position-image")

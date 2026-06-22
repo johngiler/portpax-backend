@@ -2,7 +2,7 @@ from django.db.models import Count, Prefetch
 from rest_framework import filters, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
-from apps.catalogs.models import Port, Position
+from apps.catalogs.models import Berth, Port, Position
 from apps.catalogs.serializers import PortDetailSerializer, PortSerializer
 
 
@@ -25,8 +25,9 @@ class PortViewSet(viewsets.ModelViewSet):
             positions_qs = Position.objects.prefetch_related("images").order_by(
                 "sort_order", "code"
             )
+            berths_qs = Berth.objects.prefetch_related("images").order_by("sort_order", "code")
             return base.prefetch_related(
-                "berths",
+                Prefetch("berths", queryset=berths_qs),
                 Prefetch("positions", queryset=positions_qs),
                 "bollards",
                 "images",

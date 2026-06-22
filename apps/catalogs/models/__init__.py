@@ -1,4 +1,5 @@
 from apps.catalogs.models.berth import Berth
+from apps.catalogs.models.berth_image import BerthImage
 from apps.catalogs.models.mooring import MooringScenario, MooringScenarioSlot
 from apps.catalogs.models.port import Port, PortOperationalStatus
 from apps.catalogs.models.port_bollard import BollardType, PortBollard
@@ -11,6 +12,7 @@ from apps.catalogs.models.vessel import Vessel
 
 __all__ = [
     "Berth",
+    "BerthImage",
     "BollardType",
     "MooringScenario",
     "MooringScenarioSlot",

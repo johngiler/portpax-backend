@@ -1,4 +1,5 @@
 from apps.catalogs.serializers.berth import BerthSerializer
+from apps.catalogs.serializers.berth_image import BerthImageSerializer
 from apps.catalogs.serializers.port import PortSerializer
 from apps.catalogs.serializers.port_bollard import PortBollardSerializer
 from apps.catalogs.serializers.port_detail import PortDetailSerializer
@@ -10,6 +11,7 @@ from apps.catalogs.serializers.shipping_line_group import ShippingLineGroupSeria
 from apps.catalogs.serializers.vessel import VesselSerializer
 
 __all__ = [
+    "BerthImageSerializer",
     "BerthSerializer",
     "PortBollardSerializer",
     "PortDetailSerializer",

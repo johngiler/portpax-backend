@@ -1,9 +1,11 @@
 from rest_framework import serializers
 
 from apps.catalogs.models import PortImage
+from apps.core.serializers.mixins import WebPImageFieldsMixin
 
 
-class PortImageSerializer(serializers.ModelSerializer):
+class PortImageSerializer(WebPImageFieldsMixin, serializers.ModelSerializer):
+    webp_image_fields = ("image",)
     class Meta:
         model = PortImage
         fields = [

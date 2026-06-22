@@ -1,9 +1,11 @@
 from rest_framework import serializers
 
 from apps.catalogs.models import Port
+from apps.core.serializers.mixins import WebPImageFieldsMixin
 
 
-class PortSerializer(serializers.ModelSerializer):
+class PortSerializer(WebPImageFieldsMixin, serializers.ModelSerializer):
+    webp_image_fields = ("logo",)
     position_count = serializers.IntegerField(read_only=True, default=0)
     position_codes = serializers.SerializerMethodField()
 

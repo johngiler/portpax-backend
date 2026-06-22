@@ -5,8 +5,34 @@ from apps.catalogs.serializers.berth import BerthSerializer
 from apps.catalogs.serializers.port import PortSerializer
 from apps.catalogs.serializers.port_bollard import PortBollardSerializer
 from apps.catalogs.serializers.port_image import PortImageSerializer
+from apps.catalogs.serializers.berth_image import BerthImageSerializer
 from apps.catalogs.serializers.position import PositionSerializer
 from apps.catalogs.serializers.position_image import PositionImageSerializer
+
+
+def _cover_image_url(obj, images_attr: str, serializer_context) -> str | None:
+    images = getattr(obj, images_attr).all()
+    cover = next((img for img in images if img.is_cover), None)
+    chosen = cover or (images[0] if images else None)
+    if not chosen or not chosen.image:
+        return None
+    request = serializer_context.get("request")
+    url = chosen.image.url
+    if request:
+        return request.build_absolute_uri(url)
+    return url
+
+
+class BerthDetailSerializer(BerthSerializer):
+    images = BerthImageSerializer(many=True, read_only=True)
+    cover_image = serializers.SerializerMethodField()
+
+    class Meta(BerthSerializer.Meta):
+        fields = BerthSerializer.Meta.fields + ["images", "cover_image"]
+        read_only_fields = BerthSerializer.Meta.read_only_fields + ["images", "cover_image"]
+
+    def get_cover_image(self, obj) -> str | None:
+        return _cover_image_url(obj, "images", self.context)
 
 
 class PositionDetailSerializer(PositionSerializer):
@@ -18,20 +44,11 @@ class PositionDetailSerializer(PositionSerializer):
         read_only_fields = PositionSerializer.Meta.read_only_fields + ["images", "cover_image"]
 
     def get_cover_image(self, obj) -> str | None:
-        images = obj.images.all()
-        cover = next((img for img in images if img.is_cover), None)
-        chosen = cover or (images[0] if images else None)
-        if not chosen or not chosen.image:
-            return None
-        request = self.context.get("request")
-        url = chosen.image.url
-        if request:
-            return request.build_absolute_uri(url)
-        return url
+        return _cover_image_url(obj, "images", self.context)
 
 
 class PortDetailSerializer(PortSerializer):
-    berths = BerthSerializer(many=True, read_only=True)
+    berths = BerthDetailSerializer(many=True, read_only=True)
     positions = PositionDetailSerializer(many=True, read_only=True)
     bollards = PortBollardSerializer(many=True, read_only=True)
     images = PortImageSerializer(many=True, read_only=True)

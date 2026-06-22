@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from apps.catalogs.models import (
     Berth,
+    BerthImage,
     MooringScenario,
     MooringScenarioSlot,
     Port,
@@ -72,11 +73,18 @@ class PortAdmin(admin.ModelAdmin):
     inlines = (BerthInline, PositionInline, PortBollardInline, PortImageInline)
 
 
+class BerthImageInline(admin.TabularInline):
+    model = BerthImage
+    extra = 0
+    fields = ("image", "caption", "sort_order", "is_cover")
+
+
 @admin.register(Berth)
 class BerthAdmin(admin.ModelAdmin):
     list_display = ("code", "port", "length_m", "width_m", "min_draft_m", "is_active")
     list_filter = ("port", "is_active")
     search_fields = ("code", "name", "port__code")
+    inlines = (BerthImageInline,)
 
 
 class PositionImageInline(admin.TabularInline):

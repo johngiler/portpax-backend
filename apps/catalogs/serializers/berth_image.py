@@ -1,16 +1,17 @@
 from rest_framework import serializers
 
-from apps.catalogs.models import PositionImage
+from apps.catalogs.models import BerthImage
 from apps.core.serializers.mixins import WebPImageFieldsMixin
 
 
-class PositionImageSerializer(WebPImageFieldsMixin, serializers.ModelSerializer):
+class BerthImageSerializer(WebPImageFieldsMixin, serializers.ModelSerializer):
     webp_image_fields = ("image",)
+
     class Meta:
-        model = PositionImage
+        model = BerthImage
         fields = [
             "id",
-            "position",
+            "berth",
             "image",
             "caption",
             "sort_order",
