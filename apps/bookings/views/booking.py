@@ -1,14 +1,24 @@
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.mixins import ListModelMixin, RetrieveModelMixin, UpdateModelMixin
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.bookings.models import Booking
-from apps.bookings.serializers import BookingBatchCreateSerializer, BookingSerializer
+from apps.bookings.serializers import (
+    BookingBatchCreateSerializer,
+    BookingSerializer,
+    BookingStatusUpdateSerializer,
+)
 from apps.bookings.services.booking import BookingBatchCreateError, create_booking_batch
 
 
-class BookingViewSet(viewsets.ReadOnlyModelViewSet):
+class BookingViewSet(
+    ListModelMixin,
+    RetrieveModelMixin,
+    UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
     permission_classes = [IsAuthenticated]
     serializer_class = BookingSerializer
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -21,6 +31,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
     ]
     ordering_fields = ["call_date", "created_at", "booking_code", "status"]
     ordering = ["-call_date", "-created_at"]
+    http_method_names = ["get", "patch", "head", "options", "post"]
 
     def get_queryset(self):
         qs = Booking.objects.select_related("port", "shipping_line", "vessel")
@@ -37,6 +48,18 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
         if status_param:
             qs = qs.filter(status=status_param)
         return qs
+
+    def get_serializer_class(self):
+        if self.action in ("update", "partial_update"):
+            return BookingStatusUpdateSerializer
+        return BookingSerializer
+
+    def partial_update(self, request, *args, **kwargs):
+        booking = self.get_object()
+        serializer = self.get_serializer(booking, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        booking = serializer.save()
+        return Response(BookingSerializer(booking, context={"request": request}).data)
 
     @action(detail=False, methods=["post"], url_path="batch")
     def batch_create(self, request):
@@ -60,6 +83,6 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
             return Response(payload, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(
-            BookingSerializer(bookings, many=True).data,
+            BookingSerializer(bookings, many=True, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
