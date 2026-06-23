@@ -6,6 +6,7 @@ from rest_framework.mixins import (
     RetrieveModelMixin,
     UpdateModelMixin,
 )
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -13,7 +14,8 @@ from apps.bookings.models import Booking
 from apps.bookings.serializers import (
     BookingBatchCreateSerializer,
     BookingSerializer,
-    BookingStatusUpdateSerializer,
+    BookingUpdateSerializer,
+    BookingValidateSerializer,
 )
 from apps.bookings.services.booking import (
     BookingBatchCreateError,
@@ -21,6 +23,7 @@ from apps.bookings.services.booking import (
     create_booking_batch,
     delete_cancelled_booking,
 )
+from apps.bookings.services.validation import suggest_positions
 
 
 class BookingViewSet(
@@ -32,9 +35,11 @@ class BookingViewSet(
 ):
     permission_classes = [IsAuthenticated]
     serializer_class = BookingSerializer
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = [
         "booking_code",
+        "folio",
         "port__name",
         "port__code",
         "shipping_line__name",
@@ -45,7 +50,12 @@ class BookingViewSet(
     http_method_names = ["get", "patch", "delete", "head", "options", "post"]
 
     def get_queryset(self):
-        qs = Booking.objects.select_related("port", "shipping_line", "vessel")
+        qs = Booking.objects.select_related(
+            "port",
+            "shipping_line",
+            "vessel",
+            "position",
+        ).prefetch_related("audit_entries")
         port_id = self.request.query_params.get("port")
         if port_id:
             qs = qs.filter(port_id=port_id)
@@ -68,7 +78,9 @@ class BookingViewSet(
 
     def get_serializer_class(self):
         if self.action in ("update", "partial_update"):
-            return BookingStatusUpdateSerializer
+            return BookingUpdateSerializer
+        if self.action == "validate":
+            return BookingValidateSerializer
         return BookingSerializer
 
     def partial_update(self, request, *args, **kwargs):
@@ -111,3 +123,33 @@ class BookingViewSet(
             BookingSerializer(bookings, many=True, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=False, methods=["post"], url_path="validate")
+    def validate(self, request):
+        serializer = BookingValidateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = serializer.save()
+        return Response(result)
+
+    @action(detail=False, methods=["get"], url_path="suggest-positions")
+    def suggest_positions(self, request):
+        port_id = request.query_params.get("port")
+        vessel_id = request.query_params.get("vessel")
+        call_date = request.query_params.get("call_date")
+        if not port_id or not vessel_id or not call_date:
+            return Response(
+                {"detail": "Se requieren port, vessel y call_date."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        from datetime import date
+
+        try:
+            parsed_date = date.fromisoformat(call_date)
+        except ValueError:
+            return Response(
+                {"detail": "call_date debe ser ISO (YYYY-MM-DD)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        suggestions = suggest_positions(int(port_id), int(vessel_id), parsed_date)
+        return Response({"positions": suggestions})

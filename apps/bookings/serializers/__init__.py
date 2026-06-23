@@ -1,11 +1,13 @@
 from apps.bookings.serializers.booking import (
     BookingBatchCreateSerializer,
     BookingSerializer,
-    BookingStatusUpdateSerializer,
+    BookingUpdateSerializer,
+    BookingValidateSerializer,
 )
 
 __all__ = [
     "BookingBatchCreateSerializer",
     "BookingSerializer",
-    "BookingStatusUpdateSerializer",
+    "BookingUpdateSerializer",
+    "BookingValidateSerializer",
 ]
