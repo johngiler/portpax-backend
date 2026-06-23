@@ -22,7 +22,11 @@ class PortViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         base = Port.objects.annotate(position_count=Count("positions"))
         if self.action == "retrieve":
-            positions_qs = Position.objects.prefetch_related("images").order_by(
+            positions_qs = Position.objects.prefetch_related(
+                "images",
+                "port_bollards",
+                "port_fenders",
+            ).order_by(
                 "sort_order", "code"
             )
             berths_qs = Berth.objects.prefetch_related("images").order_by("sort_order", "code")
@@ -30,6 +34,7 @@ class PortViewSet(viewsets.ModelViewSet):
                 Prefetch("berths", queryset=berths_qs),
                 Prefetch("positions", queryset=positions_qs),
                 "bollards",
+                "fenders",
                 "images",
             )
         return base.prefetch_related("positions")

@@ -3,6 +3,7 @@ from apps.catalogs.serializers.berth_image import BerthImageSerializer
 from apps.catalogs.serializers.port import PortSerializer
 from apps.catalogs.serializers.port_bollard import PortBollardSerializer
 from apps.catalogs.serializers.port_detail import PortDetailSerializer
+from apps.catalogs.serializers.port_fender import PortFenderSerializer
 from apps.catalogs.serializers.port_image import PortImageSerializer
 from apps.catalogs.serializers.position import PositionSerializer
 from apps.catalogs.serializers.position_image import PositionImageSerializer
@@ -16,6 +17,7 @@ __all__ = [
     "BerthSerializer",
     "PortBollardSerializer",
     "PortDetailSerializer",
+    "PortFenderSerializer",
     "PortImageSerializer",
     "PortSerializer",
     "PositionImageSerializer",

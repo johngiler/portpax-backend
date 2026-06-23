@@ -6,7 +6,10 @@ from apps.catalogs.serializers import PositionSerializer
 
 
 class PositionViewSet(viewsets.ModelViewSet):
-    queryset = Position.objects.select_related("port", "berth")
+    queryset = Position.objects.select_related("port", "berth").prefetch_related(
+        "port_bollards",
+        "port_fenders",
+    )
     serializer_class = PositionSerializer
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["code", "berth__code"]

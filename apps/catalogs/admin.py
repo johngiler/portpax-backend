@@ -7,6 +7,7 @@ from apps.catalogs.models import (
     MooringScenarioSlot,
     Port,
     PortBollard,
+    PortFender,
     PortImage,
     Position,
     PositionImage,
@@ -50,6 +51,12 @@ class PortBollardInline(admin.TabularInline):
     fields = ("capacity_t", "bollard_type", "quantity", "label", "sort_order", "is_active")
 
 
+class PortFenderInline(admin.TabularInline):
+    model = PortFender
+    extra = 0
+    fields = ("fender_type", "quantity", "sort_order", "notes", "is_active")
+
+
 class PortImageInline(admin.TabularInline):
     model = PortImage
     extra = 0
@@ -68,7 +75,7 @@ class PortAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "is_active", "country")
     search_fields = ("code", "name", "commercial_name")
-    inlines = (BerthInline, PositionInline, PortBollardInline, PortImageInline)
+    inlines = (BerthInline, PositionInline, PortBollardInline, PortFenderInline, PortImageInline)
 
 
 class BerthImageInline(admin.TabularInline):

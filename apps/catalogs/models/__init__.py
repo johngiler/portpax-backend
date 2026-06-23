@@ -3,6 +3,7 @@ from apps.catalogs.models.berth_image import BerthImage
 from apps.catalogs.models.mooring import MooringScenario, MooringScenarioSlot
 from apps.catalogs.models.port import Port, PortOperationalStatus
 from apps.catalogs.models.port_bollard import BollardType, PortBollard
+from apps.catalogs.models.port_fender import PortFender
 from apps.catalogs.models.port_image import PortImage
 from apps.catalogs.models.position import Position, PositionType
 from apps.catalogs.models.position_component import PositionComponent
@@ -19,6 +20,7 @@ __all__ = [
     "MooringScenarioSlot",
     "Port",
     "PortBollard",
+    "PortFender",
     "PortImage",
     "PortOperationalStatus",
     "Position",

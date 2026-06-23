@@ -4,6 +4,7 @@ from apps.catalogs.models import Port
 from apps.catalogs.serializers.berth import BerthSerializer
 from apps.catalogs.serializers.port import PortSerializer
 from apps.catalogs.serializers.port_bollard import PortBollardSerializer
+from apps.catalogs.serializers.port_fender import PortFenderSerializer
 from apps.catalogs.serializers.port_image import PortImageSerializer
 from apps.catalogs.serializers.berth_image import BerthImageSerializer
 from apps.catalogs.serializers.position import PositionSerializer
@@ -51,24 +52,33 @@ class PortDetailSerializer(PortSerializer):
     berths = BerthDetailSerializer(many=True, read_only=True)
     positions = PositionDetailSerializer(many=True, read_only=True)
     bollards = PortBollardSerializer(many=True, read_only=True)
+    fenders = PortFenderSerializer(many=True, read_only=True)
     images = PortImageSerializer(many=True, read_only=True)
     bollard_total = serializers.SerializerMethodField()
+    fender_total = serializers.SerializerMethodField()
 
     class Meta(PortSerializer.Meta):
         fields = PortSerializer.Meta.fields + [
             "berths",
             "positions",
             "bollards",
+            "fenders",
             "bollard_total",
+            "fender_total",
             "images",
         ]
         read_only_fields = PortSerializer.Meta.read_only_fields + [
             "berths",
             "positions",
             "bollards",
+            "fenders",
             "bollard_total",
+            "fender_total",
             "images",
         ]
 
     def get_bollard_total(self, obj: Port) -> int:
         return sum(b.quantity for b in obj.bollards.all() if b.is_active)
+
+    def get_fender_total(self, obj: Port) -> int:
+        return sum(f.quantity for f in obj.fenders.all() if f.is_active)
