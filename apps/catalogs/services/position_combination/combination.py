@@ -3,6 +3,10 @@ from decimal import Decimal
 from django.core.exceptions import ValidationError
 
 from apps.catalogs.models import Position, PositionComponent, PositionType
+from apps.catalogs.utils.position_code import (
+    build_combined_position_code,
+    position_short_code,
+)
 
 
 def position_is_combined(position: Position) -> bool:
@@ -64,8 +68,12 @@ def derive_combined_defaults(first: Position, second: Position) -> dict:
     berth_ids = {first.berth_id, second.berth_id}
     berth_id = first.berth_id if first.berth_id == second.berth_id else None
 
+    port_code = first.port.code
+    first_short = position_short_code(port_code, first.code)
+    second_short = position_short_code(port_code, second.code)
+
     return {
-        "code": f"{first.code}+{second.code}",
+        "code": build_combined_position_code(port_code, first_short, second_short),
         "position_type": PositionType.PIER,
         "berth": berth_id,
         "max_loa_m": _sum_decimal(first.max_loa_m, second.max_loa_m),

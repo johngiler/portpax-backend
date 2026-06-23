@@ -3,6 +3,7 @@ from datetime import date
 from apps.catalogs.models import Port, Position, Vessel
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.validation.rules import validate_booking
+from apps.catalogs.utils.position_code import position_short_code
 
 
 def validate_booking_instance(booking: Booking) -> dict:
@@ -97,7 +98,7 @@ def suggest_positions(port_id: int, vessel_id: int, call_date: date) -> list[dic
             suggestions.append(
                 {
                     "id": position.id,
-                    "code": position.code,
+                    "code": position_short_code(port.code, position.code),
                     "position_type": position.position_type,
                     "max_loa_m": str(position.max_loa_m) if position.max_loa_m else None,
                     "occupied": occupied,

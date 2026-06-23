@@ -9,6 +9,7 @@ from apps.bookings.services.booking.status import (
     update_booking_status,
 )
 from apps.bookings.services.validation import validate_booking_params
+from apps.catalogs.utils.position_code import position_short_code
 
 
 class BookingAuditEntrySerializer(serializers.ModelSerializer):
@@ -38,7 +39,7 @@ class BookingSerializer(serializers.ModelSerializer):
     shipping_line_code = serializers.CharField(source="shipping_line.code", read_only=True)
     shipping_line_name = serializers.CharField(source="shipping_line.name", read_only=True)
     vessel_name = serializers.CharField(source="vessel.name", read_only=True)
-    position_code = serializers.CharField(source="position.code", read_only=True, allow_null=True)
+    position_code = serializers.SerializerMethodField()
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     cancellation_evidence_url = serializers.SerializerMethodField()
     confirmation_pdf_url = serializers.SerializerMethodField()
@@ -85,6 +86,11 @@ class BookingSerializer(serializers.ModelSerializer):
         if request:
             return request.build_absolute_uri(logo.url)
         return logo.url
+
+    def get_position_code(self, obj: Booking) -> str | None:
+        if not obj.position_id:
+            return None
+        return position_short_code(obj.port.code, obj.position.code)
 
     def _file_url(self, field) -> str | None:
         if not field:

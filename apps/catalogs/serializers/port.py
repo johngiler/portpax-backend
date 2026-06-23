@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from apps.catalogs.models import Port
+from apps.catalogs.utils.position_code import position_short_code
 from apps.core.serializers.mixins import WebPImageFieldsMixin
 
 
@@ -48,7 +49,7 @@ class PortSerializer(WebPImageFieldsMixin, serializers.ModelSerializer):
         positions = obj.positions.all()
         if hasattr(positions, "order_by"):
             positions = positions.order_by("sort_order", "code")
-        return [p.code for p in positions]
+        return [position_short_code(obj.code, p.code) for p in positions]
 
     def validate_code(self, value: str) -> str:
         return value.strip().lower().replace(" ", "_")

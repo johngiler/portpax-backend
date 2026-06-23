@@ -2,12 +2,13 @@ from rest_framework import serializers
 
 from django.core.exceptions import ValidationError
 
-from apps.catalogs.models import Position, PositionType
+from apps.catalogs.models import Port, Position, PositionType
 from apps.catalogs.services.position_combination import (
     clear_position_components,
     sync_position_components,
     validate_component_ids,
 )
+from apps.catalogs.utils.position_code import build_position_code, position_short_code
 
 
 class PositionComponentRefSerializer(serializers.Serializer):
@@ -24,6 +25,7 @@ class PositionSerializer(serializers.ModelSerializer):
     )
     port_name = serializers.CharField(source="port.name", read_only=True)
     port_code = serializers.CharField(source="port.code", read_only=True)
+    short_code = serializers.SerializerMethodField()
     is_combined = serializers.SerializerMethodField()
     component_positions = serializers.SerializerMethodField()
     component_position_ids = serializers.ListField(
@@ -40,6 +42,7 @@ class PositionSerializer(serializers.ModelSerializer):
             "port",
             "port_name",
             "port_code",
+            "short_code",
             "berth",
             "berth_code",
             "code",
@@ -66,6 +69,7 @@ class PositionSerializer(serializers.ModelSerializer):
             "berth_code",
             "port_name",
             "port_code",
+            "short_code",
             "is_combined",
             "component_positions",
             "created_at",
@@ -76,12 +80,18 @@ class PositionSerializer(serializers.ModelSerializer):
         super().__init__(*args, **kwargs)
         self._pending_component_ids: list[int] | None | object = object()
 
+    def get_short_code(self, obj: Position) -> str:
+        return position_short_code(obj.port.code, obj.code)
+
     def get_is_combined(self, obj: Position) -> bool:
         return bool(self._component_links(obj))
 
     def get_component_positions(self, obj: Position) -> list[dict]:
         return [
-            {"id": link.source_position_id, "code": link.source_position.code}
+            {
+                "id": link.source_position_id,
+                "code": position_short_code(obj.port.code, link.source_position.code),
+            }
             for link in self._component_links(obj)
         ]
 
@@ -117,6 +127,11 @@ class PositionSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"component_position_ids": "Indica exactamente dos posiciones base o deja vacío."}
                 )
+
+        port_id = attrs.get("port") or (self.instance.port_id if self.instance else None)
+        if port_id and "code" in attrs:
+            port_code = Port.objects.values_list("code", flat=True).get(pk=port_id)
+            attrs["code"] = build_position_code(port_code, attrs["code"])
 
         return attrs
 
