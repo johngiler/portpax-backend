@@ -37,16 +37,6 @@ class Position(models.Model):
         blank=True,
         help_text="Min depth / calado at berth line (m).",
     )
-    port_bollards = models.ManyToManyField(
-        "catalogs.PortBollard",
-        blank=True,
-        related_name="positions",
-    )
-    port_fenders = models.ManyToManyField(
-        "catalogs.PortFender",
-        blank=True,
-        related_name="positions",
-    )
     bollard_count = models.PositiveSmallIntegerField(
         null=True,
         blank=True,

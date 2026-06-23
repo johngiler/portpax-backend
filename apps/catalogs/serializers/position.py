@@ -3,7 +3,17 @@ from rest_framework import serializers
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 
-from apps.catalogs.models import Port, PortBollard, PortFender, Position, PositionType
+from apps.catalogs.models import (
+    Port,
+    Position,
+    PositionBollardLine,
+    PositionFenderLine,
+    PositionType,
+)
+from apps.catalogs.serializers.position_inventory import (
+    PositionBollardAllocationSerializer,
+    PositionFenderAllocationSerializer,
+)
 from apps.catalogs.services.position_combination import (
     clear_position_components,
     sync_position_components,
@@ -12,6 +22,8 @@ from apps.catalogs.services.position_combination import (
 from apps.catalogs.utils.position_code import build_position_code, position_short_code
 
 _PENDING_COMPONENTS_UNSET = object()
+_PENDING_BOLLARD_ALLOCATIONS_UNSET = object()
+_PENDING_FENDER_ALLOCATIONS_UNSET = object()
 
 
 class PositionComponentRefSerializer(serializers.Serializer):
@@ -37,18 +49,8 @@ class PositionSerializer(serializers.ModelSerializer):
         allow_null=True,
         write_only=True,
     )
-    port_bollard_ids = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=PortBollard.objects.all(),
-        source="port_bollards",
-        required=False,
-    )
-    port_fender_ids = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=PortFender.objects.all(),
-        source="port_fenders",
-        required=False,
-    )
+    bollard_allocations = PositionBollardAllocationSerializer(many=True, required=False, write_only=True)
+    fender_allocations = PositionFenderAllocationSerializer(many=True, required=False, write_only=True)
 
     class Meta:
         model = Position
@@ -64,8 +66,8 @@ class PositionSerializer(serializers.ModelSerializer):
             "position_type",
             "max_loa_m",
             "min_draft_m",
-            "port_bollard_ids",
-            "port_fender_ids",
+            "bollard_allocations",
+            "fender_allocations",
             "bollard_count",
             "fender_count",
             "effective_from",
@@ -97,6 +99,20 @@ class PositionSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._pending_component_ids: list[int] | None | object = _PENDING_COMPONENTS_UNSET
+        self._pending_bollard_allocations: list[dict] | object = _PENDING_BOLLARD_ALLOCATIONS_UNSET
+        self._pending_fender_allocations: list[dict] | object = _PENDING_FENDER_ALLOCATIONS_UNSET
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["bollard_allocations"] = PositionBollardAllocationSerializer(
+            instance.bollard_lines.all(),
+            many=True,
+        ).data
+        data["fender_allocations"] = PositionFenderAllocationSerializer(
+            instance.fender_lines.all(),
+            many=True,
+        ).data
+        return data
 
     def get_short_code(self, obj: Position) -> str:
         return position_short_code(obj.port.code, obj.code)
@@ -170,48 +186,99 @@ class PositionSerializer(serializers.ModelSerializer):
                     {"code": f"Ya existe una posición «{short}» en este puerto."}
                 )
 
-        self._apply_inventory_links(attrs, _port_id)
+        self._apply_inventory_allocations(attrs, _port_id)
 
         return attrs
 
-    def _apply_inventory_links(self, attrs, port_id: int | None) -> None:
+    def _apply_inventory_allocations(self, attrs, port_id: int | None) -> None:
         if not port_id:
             return
 
-        if "port_bollards" in attrs:
-            bollards = attrs.get("port_bollards") or []
-            for bollard in bollards:
+        if "bollard_allocations" in attrs:
+            raw = attrs.pop("bollard_allocations") or []
+            seen_bollards: set[int] = set()
+            for item in raw:
+                bollard = item["port_bollard"]
                 if bollard.port_id != port_id:
                     raise serializers.ValidationError(
-                        {"port_bollard_ids": "Todas las bitas deben pertenecer al mismo puerto."}
+                        {
+                            "bollard_allocations": "Todas las bitas deben pertenecer al mismo puerto."
+                        }
                     )
-            attrs["bollard_count"] = sum(b.quantity for b in bollards) if bollards else None
+                if bollard.id in seen_bollards:
+                    raise serializers.ValidationError(
+                        {
+                            "bollard_allocations": "No repitas el mismo tipo de bita en la posición."
+                        }
+                    )
+                seen_bollards.add(bollard.id)
+            self._pending_bollard_allocations = raw
+            attrs["bollard_count"] = sum(item["quantity"] for item in raw) if raw else None
 
-        if "port_fenders" in attrs:
-            fenders = attrs.get("port_fenders") or []
-            for fender in fenders:
+        if "fender_allocations" in attrs:
+            raw = attrs.pop("fender_allocations") or []
+            seen_fenders: set[int] = set()
+            for item in raw:
+                fender = item["port_fender"]
                 if fender.port_id != port_id:
                     raise serializers.ValidationError(
-                        {"port_fender_ids": "Todas las defensas deben pertenecer al mismo puerto."}
+                        {
+                            "fender_allocations": "Todas las defensas deben pertenecer al mismo puerto."
+                        }
                     )
-            attrs["fender_count"] = sum(f.quantity for f in fenders) if fenders else None
+                if fender.id in seen_fenders:
+                    raise serializers.ValidationError(
+                        {
+                            "fender_allocations": "No repitas el mismo tipo de defensa en la posición."
+                        }
+                    )
+                seen_fenders.add(fender.id)
+            self._pending_fender_allocations = raw
+            attrs["fender_count"] = sum(item["quantity"] for item in raw) if raw else None
 
     def create(self, validated_data):
+        validated_data.pop("bollard_allocations", None)
+        validated_data.pop("fender_allocations", None)
         try:
             position = super().create(validated_data)
         except IntegrityError as exc:
             raise self._integrity_error(exc) from exc
         self._apply_components(position)
+        self._apply_inventory_lines(position)
         return position
 
     def update(self, instance, validated_data):
+        validated_data.pop("bollard_allocations", None)
+        validated_data.pop("fender_allocations", None)
         try:
             position = super().update(instance, validated_data)
         except IntegrityError as exc:
             raise self._integrity_error(exc) from exc
         if self._pending_component_ids is not _PENDING_COMPONENTS_UNSET:
             self._apply_components(position)
+        self._apply_inventory_lines(position)
         return position
+
+    def _apply_inventory_lines(self, position: Position) -> None:
+        if self._pending_bollard_allocations is not _PENDING_BOLLARD_ALLOCATIONS_UNSET:
+            position.bollard_lines.all().delete()
+            for index, item in enumerate(self._pending_bollard_allocations):
+                PositionBollardLine.objects.create(
+                    position=position,
+                    port_bollard=item["port_bollard"],
+                    quantity=item["quantity"],
+                    sort_order=index,
+                )
+
+        if self._pending_fender_allocations is not _PENDING_FENDER_ALLOCATIONS_UNSET:
+            position.fender_lines.all().delete()
+            for index, item in enumerate(self._pending_fender_allocations):
+                PositionFenderLine.objects.create(
+                    position=position,
+                    port_fender=item["port_fender"],
+                    quantity=item["quantity"],
+                    sort_order=index,
+                )
 
     def _integrity_error(self, exc: IntegrityError) -> serializers.ValidationError:
         message = str(exc)

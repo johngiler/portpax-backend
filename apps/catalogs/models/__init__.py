@@ -6,7 +6,9 @@ from apps.catalogs.models.port_bollard import BollardType, PortBollard
 from apps.catalogs.models.port_fender import PortFender
 from apps.catalogs.models.port_image import PortImage
 from apps.catalogs.models.position import Position, PositionType
+from apps.catalogs.models.position_bollard_line import PositionBollardLine
 from apps.catalogs.models.position_component import PositionComponent
+from apps.catalogs.models.position_fender_line import PositionFenderLine
 from apps.catalogs.models.position_image import PositionImage
 from apps.catalogs.models.shipping_line import ShippingLine
 from apps.catalogs.models.shipping_line_group import ShippingLineGroup
@@ -24,7 +26,9 @@ __all__ = [
     "PortImage",
     "PortOperationalStatus",
     "Position",
+    "PositionBollardLine",
     "PositionComponent",
+    "PositionFenderLine",
     "PositionImage",
     "PositionType",
     "ShippingLine",

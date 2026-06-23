@@ -7,8 +7,8 @@ from apps.catalogs.serializers import PositionSerializer
 
 class PositionViewSet(viewsets.ModelViewSet):
     queryset = Position.objects.select_related("port", "berth").prefetch_related(
-        "port_bollards",
-        "port_fenders",
+        "bollard_lines__port_bollard",
+        "fender_lines__port_fender",
     )
     serializer_class = PositionSerializer
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]

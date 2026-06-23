@@ -24,8 +24,8 @@ class PortViewSet(viewsets.ModelViewSet):
         if self.action == "retrieve":
             positions_qs = Position.objects.prefetch_related(
                 "images",
-                "port_bollards",
-                "port_fenders",
+                "bollard_lines__port_bollard",
+                "fender_lines__port_fender",
             ).order_by(
                 "sort_order", "code"
             )
