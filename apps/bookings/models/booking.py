@@ -43,6 +43,7 @@ class Booking(models.Model):
     )
     planned_pax = models.PositiveIntegerField(null=True, blank=True)
     actual_pax = models.PositiveIntegerField(null=True, blank=True)
+    actual_crew = models.PositiveIntegerField(null=True, blank=True)
     notes = models.TextField(blank=True)
     cancellation_evidence = models.FileField(
         upload_to="bookings/cancellation_evidence/",

@@ -101,6 +101,7 @@ def update_booking_operational(
     etd=None,
     planned_pax=None,
     actual_pax=None,
+    actual_crew=None,
 ) -> Booking:
     changes: dict = {}
     update_fields = ["updated_at"]
@@ -129,6 +130,11 @@ def update_booking_operational(
         changes["actual_pax"] = {"from": booking.actual_pax, "to": actual_pax}
         booking.actual_pax = actual_pax
         update_fields.append("actual_pax")
+
+    if actual_crew is not None:
+        changes["actual_crew"] = {"from": booking.actual_crew, "to": actual_crew}
+        booking.actual_crew = actual_crew
+        update_fields.append("actual_crew")
 
     if len(update_fields) > 1:
         booking.save(update_fields=update_fields)

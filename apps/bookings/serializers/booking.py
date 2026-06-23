@@ -67,6 +67,7 @@ class BookingSerializer(serializers.ModelSerializer):
             "etd",
             "planned_pax",
             "actual_pax",
+            "actual_crew",
             "status",
             "status_display",
             "notes",
@@ -117,6 +118,7 @@ class BookingUpdateSerializer(serializers.Serializer):
     etd = serializers.TimeField(required=False, allow_null=True)
     planned_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     actual_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    actual_crew = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     cancellation_evidence = serializers.FileField(required=False, allow_null=True)
 
     def update(self, instance, validated_data):
@@ -138,7 +140,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                 raise serializers.ValidationError({"status": str(exc)}) from exc
 
         operational_fields = {}
-        for key in ("position", "eta", "etd", "planned_pax", "actual_pax"):
+        for key in ("position", "eta", "etd", "planned_pax", "actual_pax", "actual_crew"):
             if key in validated_data:
                 operational_fields[key] = validated_data[key]
 
@@ -151,6 +153,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                 etd=operational_fields.get("etd"),
                 planned_pax=operational_fields.get("planned_pax"),
                 actual_pax=operational_fields.get("actual_pax"),
+                actual_crew=operational_fields.get("actual_crew"),
             )
 
         return instance

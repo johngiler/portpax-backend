@@ -10,7 +10,9 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.bookings.models import Booking
+from django.utils import timezone
+
+from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.serializers import (
     BookingBatchCreateSerializer,
     BookingSerializer,
@@ -24,6 +26,7 @@ from apps.bookings.services.booking import (
     delete_cancelled_booking,
 )
 from apps.bookings.services.validation import suggest_positions
+from apps.bookings.utils.list_ordering import apply_booking_list_ordering
 
 
 class BookingViewSet(
@@ -36,7 +39,7 @@ class BookingViewSet(
     permission_classes = [IsAuthenticated]
     serializer_class = BookingSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [filters.SearchFilter]
     search_fields = [
         "booking_code",
         "folio",
@@ -45,8 +48,6 @@ class BookingViewSet(
         "shipping_line__name",
         "vessel__name",
     ]
-    ordering_fields = ["call_date", "created_at", "booking_code", "status"]
-    ordering = ["-call_date", "-created_at"]
     http_method_names = ["get", "patch", "delete", "head", "options", "post"]
 
     def get_queryset(self):
@@ -66,7 +67,12 @@ class BookingViewSet(
         if vessel_id:
             qs = qs.filter(vessel_id=vessel_id)
         status_param = self.request.query_params.get("status")
-        if status_param:
+        if status_param == "completed":
+            qs = qs.filter(
+                call_date__lt=timezone.localdate(),
+                status__in=[BookingStatus.REQUESTED, BookingStatus.CONFIRMED],
+            )
+        elif status_param:
             qs = qs.filter(status=status_param)
         call_date_from = self.request.query_params.get("call_date_from")
         if call_date_from:
@@ -74,7 +80,8 @@ class BookingViewSet(
         call_date_to = self.request.query_params.get("call_date_to")
         if call_date_to:
             qs = qs.filter(call_date__lte=call_date_to)
-        return qs
+        ordering = self.request.query_params.get("ordering", "call_date_proximity")
+        return apply_booking_list_ordering(qs, ordering)
 
     def get_serializer_class(self):
         if self.action in ("update", "partial_update"):
