@@ -160,3 +160,42 @@ class BookingViewSet(
 
         suggestions = suggest_positions(int(port_id), int(vessel_id), parsed_date)
         return Response({"positions": suggestions})
+
+    @action(detail=False, methods=["get"], url_path="dashboard-stats")
+    def dashboard_stats(self, request):
+        from apps.bookings.services.dashboard_stats import build_dashboard_stats
+
+        year_params = request.query_params.getlist("year")
+        if not year_params:
+            single = request.query_params.get("years")
+            if single:
+                year_params = [part.strip() for part in single.split(",") if part.strip()]
+        years: list[int] = []
+        for raw in year_params:
+            try:
+                years.append(int(raw))
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "year debe ser un entero o lista de enteros."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if not years:
+            years = [timezone.localdate().year]
+
+        def optional_int(key: str) -> int | None:
+            raw = request.query_params.get(key)
+            if not raw:
+                return None
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return None
+
+        return Response(
+            build_dashboard_stats(
+                years=years,
+                port_id=optional_int("port"),
+                shipping_line_id=optional_int("shipping_line"),
+                shipping_line_group_id=optional_int("shipping_line_group"),
+            )
+        )
