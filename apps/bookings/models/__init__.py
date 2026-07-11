@@ -1,3 +1,3 @@
-from apps.bookings.models.booking import Booking, BookingStatus
+from apps.bookings.models.booking import Booking, BookingStatus, CancellationReason
 
-__all__ = ["Booking", "BookingStatus"]
+__all__ = ["Booking", "BookingStatus", "CancellationReason"]

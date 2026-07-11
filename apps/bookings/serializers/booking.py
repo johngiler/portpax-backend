@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from apps.audit.models import BookingAuditEntry
-from apps.bookings.models import Booking, BookingStatus
+from apps.bookings.models import Booking, BookingStatus, CancellationReason
 from apps.bookings.services.booking.status import (
     BookingStatusError,
     BookingValidationError,
@@ -41,6 +41,11 @@ class BookingSerializer(serializers.ModelSerializer):
     vessel_name = serializers.CharField(source="vessel.name", read_only=True)
     position_code = serializers.SerializerMethodField()
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    cancellation_reason = serializers.CharField(read_only=True)
+    cancellation_reason_display = serializers.CharField(
+        source="get_cancellation_reason_display",
+        read_only=True,
+    )
     cancellation_evidence_url = serializers.SerializerMethodField()
     confirmation_pdf_url = serializers.SerializerMethodField()
     audit_entries = BookingAuditEntrySerializer(many=True, read_only=True)
@@ -71,6 +76,8 @@ class BookingSerializer(serializers.ModelSerializer):
             "status",
             "status_display",
             "notes",
+            "cancellation_reason",
+            "cancellation_reason_display",
             "cancellation_evidence_url",
             "confirmation_pdf_url",
             "audit_entries",
@@ -119,11 +126,17 @@ class BookingUpdateSerializer(serializers.Serializer):
     planned_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     actual_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     actual_crew = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    cancellation_reason = serializers.ChoiceField(
+        choices=CancellationReason.choices,
+        required=False,
+        allow_blank=True,
+    )
     cancellation_evidence = serializers.FileField(required=False, allow_null=True)
 
     def update(self, instance, validated_data):
         user = self.context.get("request").user if self.context.get("request") else None
         cancellation_evidence = validated_data.pop("cancellation_evidence", None)
+        cancellation_reason = validated_data.pop("cancellation_reason", None)
         new_status = validated_data.pop("status", None)
 
         if new_status:
@@ -132,6 +145,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                     instance,
                     new_status,
                     user=user,
+                    cancellation_reason=cancellation_reason,
                     cancellation_evidence=cancellation_evidence,
                 )
             except BookingValidationError as exc:

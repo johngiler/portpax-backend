@@ -10,6 +10,12 @@ class BookingStatus(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
+class CancellationReason(models.TextChoices):
+    BAD_WEATHER = "bad_weather", "Mal tiempo"
+    SHIPPING_LINE_DECISION = "shipping_line_decision", "Decisión naviera"
+    ITM_DECISION = "itm_decision", "Decisión ITM"
+
+
 class Booking(models.Model):
     port = models.ForeignKey(Port, on_delete=models.PROTECT, related_name="bookings")
     shipping_line = models.ForeignKey(
@@ -45,6 +51,12 @@ class Booking(models.Model):
     actual_pax = models.PositiveIntegerField(null=True, blank=True)
     actual_crew = models.PositiveIntegerField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    cancellation_reason = models.CharField(
+        max_length=40,
+        choices=CancellationReason.choices,
+        blank=True,
+        help_text="Reason selected when cancelling (provisional catalog).",
+    )
     cancellation_evidence = models.FileField(
         upload_to="bookings/cancellation_evidence/",
         null=True,

@@ -1,5 +1,5 @@
 from apps.audit.services.record import record_booking_audit
-from apps.bookings.models import Booking, BookingStatus
+from apps.bookings.models import Booking, BookingStatus, CancellationReason
 from apps.bookings.services.confirmation_pdf import save_confirmation_pdf
 from apps.bookings.services.folio import assign_folio
 from apps.bookings.services.position_assignment import auto_assign_position
@@ -28,6 +28,7 @@ def update_booking_status(
     new_status: str,
     *,
     user=None,
+    cancellation_reason: str | None = None,
     cancellation_evidence=None,
 ) -> Booking:
     allowed = ALLOWED_TRANSITIONS.get(booking.status, set())
@@ -36,10 +37,12 @@ def update_booking_status(
         target = dict(BookingStatus.choices).get(new_status, new_status)
         raise BookingStatusError(f"No se puede cambiar de «{current}» a «{target}».")
 
-    if new_status == BookingStatus.CANCELLED and not cancellation_evidence and not booking.cancellation_evidence:
-        raise BookingStatusError(
-            "Se requiere evidencia (archivo) para cancelar la reserva.",
-        )
+    if new_status == BookingStatus.CANCELLED:
+        reason = cancellation_reason or booking.cancellation_reason
+        if not reason:
+            raise BookingStatusError("Selecciona el motivo de cancelación.")
+        if reason not in CancellationReason.values:
+            raise BookingStatusError("Motivo de cancelación no válido.")
 
     if new_status == BookingStatus.CONFIRMED:
         if not booking.position_id:
@@ -69,6 +72,9 @@ def update_booking_status(
     booking.status = new_status
 
     update_fields = ["status", "updated_at"]
+    if new_status == BookingStatus.CANCELLED and cancellation_reason:
+        booking.cancellation_reason = cancellation_reason
+        update_fields.append("cancellation_reason")
     if cancellation_evidence:
         booking.cancellation_evidence = cancellation_evidence
         update_fields.append("cancellation_evidence")
