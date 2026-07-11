@@ -2,42 +2,26 @@
 
 from __future__ import annotations
 
-from calendar import monthrange
 from datetime import date
 
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Sum
 
 from apps.bookings.models import Booking, BookingStatus, CancellationReason
 from apps.catalogs.models import Port, Position, PositionType
 
 
-def _year_bounds(year: int) -> tuple[date, date]:
-    return date(year, 1, 1), date(year, 12, 31)
-
-
-def _days_in_year(year: int) -> int:
-    return 366 if monthrange(year, 2)[1] == 29 else 365
-
-
 def build_dashboard_stats(
     *,
-    years: list[int],
+    date_from: date,
+    date_to: date,
     port_id: int | None = None,
     shipping_line_id: int | None = None,
     shipping_line_group_id: int | None = None,
 ) -> dict:
-    years = sorted({int(y) for y in years})
-    if not years:
-        years = [date.today().year]
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
 
-    year_q = Q()
-    for year in years:
-        date_from, date_to = _year_bounds(year)
-        year_q |= Q(call_date__gte=date_from, call_date__lte=date_to)
-
-    qs = Booking.objects.filter(year_q)
-    range_from = _year_bounds(years[0])[0]
-    range_to = _year_bounds(years[-1])[1]
+    qs = Booking.objects.filter(call_date__gte=date_from, call_date__lte=date_to)
 
     if port_id:
         qs = qs.filter(port_id=port_id)
@@ -71,7 +55,8 @@ def build_dashboard_stats(
     if port_id:
         positions_qs = positions_qs.filter(port_id=port_id)
     position_count = positions_qs.count()
-    capacity_slot_days = position_count * sum(_days_in_year(y) for y in years)
+    day_count = (date_to - date_from).days + 1
+    capacity_slot_days = position_count * day_count
     occupied_slot_days = qs.filter(status=BookingStatus.CONFIRMED).count()
     occupancy_pct = (
         round((occupied_slot_days / capacity_slot_days) * 100, 1)
@@ -160,11 +145,14 @@ def build_dashboard_stats(
     if port_id:
         ports_in_scope = ports_in_scope.filter(id=port_id)
 
+    years = sorted({date_from.year, date_to.year})
+
     return {
         "years": years,
         "year": years[0] if len(years) == 1 else None,
-        "date_from": range_from.isoformat(),
-        "date_to": range_to.isoformat(),
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "day_count": day_count,
         "kpis": {
             "occupancy_pct": occupancy_pct,
             "capacity_slot_days": capacity_slot_days,

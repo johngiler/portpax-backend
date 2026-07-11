@@ -163,24 +163,32 @@ class BookingViewSet(
 
     @action(detail=False, methods=["get"], url_path="dashboard-stats")
     def dashboard_stats(self, request):
+        from datetime import date as date_cls
+
         from apps.bookings.services.dashboard_stats import build_dashboard_stats
 
-        year_params = request.query_params.getlist("year")
-        if not year_params:
-            single = request.query_params.get("years")
-            if single:
-                year_params = [part.strip() for part in single.split(",") if part.strip()]
-        years: list[int] = []
-        for raw in year_params:
+        today = timezone.localdate()
+        default_from = date_cls(today.year, 1, 1)
+        default_to = date_cls(today.year, 12, 31)
+
+        def parse_date(key: str, fallback: date_cls) -> date_cls | Response:
+            raw = request.query_params.get(key)
+            if not raw:
+                return fallback
             try:
-                years.append(int(raw))
-            except (TypeError, ValueError):
+                return date_cls.fromisoformat(raw)
+            except ValueError:
                 return Response(
-                    {"detail": "year debe ser un entero o lista de enteros."},
+                    {"detail": f"{key} debe ser ISO (YYYY-MM-DD)."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-        if not years:
-            years = [timezone.localdate().year]
+
+        date_from = parse_date("date_from", default_from)
+        if isinstance(date_from, Response):
+            return date_from
+        date_to = parse_date("date_to", default_to)
+        if isinstance(date_to, Response):
+            return date_to
 
         def optional_int(key: str) -> int | None:
             raw = request.query_params.get(key)
@@ -193,7 +201,8 @@ class BookingViewSet(
 
         return Response(
             build_dashboard_stats(
-                years=years,
+                date_from=date_from,
+                date_to=date_to,
                 port_id=optional_int("port"),
                 shipping_line_id=optional_int("shipping_line"),
                 shipping_line_group_id=optional_int("shipping_line_group"),
