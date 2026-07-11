@@ -10,7 +10,7 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
     serializer_class = ShippingLineSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["code", "name", "group__name"]
+    search_fields = ["code", "name", "group__name", "vessels__name"]
     ordering_fields = ["name", "code", "created_at"]
     ordering = ["name"]
 
