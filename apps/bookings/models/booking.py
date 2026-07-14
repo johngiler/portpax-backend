@@ -35,13 +35,6 @@ class Booking(models.Model):
     eta = models.TimeField(null=True, blank=True, help_text="Estimated time of arrival.")
     etd = models.TimeField(null=True, blank=True, help_text="Estimated time of departure.")
     booking_code = models.CharField(max_length=64, unique=True)
-    folio = models.CharField(
-        max_length=64,
-        unique=True,
-        null=True,
-        blank=True,
-        help_text="Port + year + shipping line + sequential (assigned on confirm).",
-    )
     status = models.CharField(
         max_length=20,
         choices=BookingStatus.choices,

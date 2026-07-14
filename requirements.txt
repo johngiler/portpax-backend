@@ -9,4 +9,5 @@ psycopg[binary]
 PyJWT
 python-dotenv
 Pillow
+openpyxl
 reportlab

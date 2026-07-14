@@ -38,7 +38,9 @@ class BookingSerializer(serializers.ModelSerializer):
     port_logo = serializers.SerializerMethodField()
     shipping_line_code = serializers.CharField(source="shipping_line.code", read_only=True)
     shipping_line_name = serializers.CharField(source="shipping_line.name", read_only=True)
+    shipping_line_logo = serializers.SerializerMethodField()
     vessel_name = serializers.CharField(source="vessel.name", read_only=True)
+    vessel_logo = serializers.SerializerMethodField()
     position_code = serializers.SerializerMethodField()
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     cancellation_reason = serializers.CharField(read_only=True)
@@ -55,7 +57,6 @@ class BookingSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "booking_code",
-            "folio",
             "port",
             "port_code",
             "port_name",
@@ -63,8 +64,10 @@ class BookingSerializer(serializers.ModelSerializer):
             "shipping_line",
             "shipping_line_code",
             "shipping_line_name",
+            "shipping_line_logo",
             "vessel",
             "vessel_name",
+            "vessel_logo",
             "position",
             "position_code",
             "call_date",
@@ -86,20 +89,6 @@ class BookingSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    def get_port_logo(self, obj) -> str | None:
-        logo = obj.port.logo
-        if not logo:
-            return None
-        request = self.context.get("request")
-        if request:
-            return request.build_absolute_uri(logo.url)
-        return logo.url
-
-    def get_position_code(self, obj: Booking) -> str | None:
-        if not obj.position_id:
-            return None
-        return position_short_code(obj.port.code, obj.position.code)
-
     def _file_url(self, field) -> str | None:
         if not field:
             return None
@@ -107,6 +96,20 @@ class BookingSerializer(serializers.ModelSerializer):
         if request:
             return request.build_absolute_uri(field.url)
         return field.url
+
+    def get_port_logo(self, obj) -> str | None:
+        return self._file_url(obj.port.logo)
+
+    def get_shipping_line_logo(self, obj) -> str | None:
+        return self._file_url(obj.shipping_line.logo)
+
+    def get_vessel_logo(self, obj) -> str | None:
+        return self._file_url(obj.vessel.logo)
+
+    def get_position_code(self, obj: Booking) -> str | None:
+        if not obj.position_id:
+            return None
+        return position_short_code(obj.port.code, obj.position.code)
 
     def get_cancellation_evidence_url(self, obj) -> str | None:
         return self._file_url(obj.cancellation_evidence)

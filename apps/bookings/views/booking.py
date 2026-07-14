@@ -1,3 +1,5 @@
+from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.mixins import (
@@ -9,8 +11,6 @@ from rest_framework.mixins import (
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-
-from django.utils import timezone
 
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.serializers import (
@@ -25,6 +25,7 @@ from apps.bookings.services.booking import (
     create_booking_batch,
     delete_cancelled_booking,
 )
+from apps.bookings.services.booking_export import build_bookings_csv, build_bookings_xlsx
 from apps.bookings.services.validation import suggest_positions
 from apps.bookings.utils.list_ordering import apply_booking_list_ordering
 
@@ -42,7 +43,6 @@ class BookingViewSet(
     filter_backends = [filters.SearchFilter]
     search_fields = [
         "booking_code",
-        "folio",
         "port__name",
         "port__code",
         "shipping_line__name",
@@ -160,6 +160,44 @@ class BookingViewSet(
 
         suggestions = suggest_positions(int(port_id), int(vessel_id), parsed_date)
         return Response({"positions": suggestions})
+
+    @action(detail=False, methods=["get"], url_path="export")
+    def export(self, request):
+        """Download bookings report (xlsx/csv) using the same filters as the list.
+
+        Query param is `export_format` (not `format`) — DRF reserves `format`
+        for content negotiation and returns 404 for unknown suffixes like xlsx.
+        """
+        fmt = (request.query_params.get("export_format") or "xlsx").lower()
+        if fmt not in ("xlsx", "csv"):
+            return Response(
+                {"detail": "export_format debe ser xlsx o csv."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        bookings = list(self.filter_queryset(self.get_queryset()))
+        if not bookings:
+            return Response(
+                {"detail": "No hay reservas para exportar con los filtros aplicados."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        stamp = timezone.localdate().isoformat()
+        if fmt == "csv":
+            content = build_bookings_csv(bookings)
+            response = HttpResponse(content, content_type="text/csv; charset=utf-8")
+            response["Content-Disposition"] = f'attachment; filename="reservas_{stamp}.csv"'
+            return response
+
+        content = build_bookings_xlsx(bookings)
+        response = HttpResponse(
+            content,
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        )
+        response["Content-Disposition"] = f'attachment; filename="reservas_{stamp}.xlsx"'
+        return response
 
     @action(detail=False, methods=["get"], url_path="dashboard-stats")
     def dashboard_stats(self, request):

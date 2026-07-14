@@ -1,7 +1,6 @@
 from apps.audit.services.record import record_booking_audit
 from apps.bookings.models import Booking, BookingStatus, CancellationReason
 from apps.bookings.services.confirmation_pdf import save_confirmation_pdf
-from apps.bookings.services.folio import assign_folio
 from apps.bookings.services.position_assignment import auto_assign_position
 from apps.bookings.services.validation import validate_booking_instance
 
@@ -80,8 +79,6 @@ def update_booking_status(
         update_fields.append("cancellation_evidence")
 
     if new_status == BookingStatus.CONFIRMED:
-        assign_folio(booking)
-        update_fields.append("folio")
         save_confirmation_pdf(booking)
         update_fields.append("confirmation_pdf")
 
