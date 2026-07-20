@@ -115,7 +115,7 @@ def create_booking_batch(
                     position=position,
                     call_date=call_date,
                     booking_code=code,
-                    status=BookingStatus.REQUESTED,
+                    status=BookingStatus.NR,
                     notes=notes,
                     created_by=created_by,
                 )

@@ -30,12 +30,24 @@ class Position(models.Model):
         blank=True,
         help_text="Max LOA (eslora) for this slot (m).",
     )
+    max_beam_m = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Max beam (manga) for this slot (m).",
+    )
     min_draft_m = models.DecimalField(
         max_digits=5,
         decimal_places=2,
         null=True,
         blank=True,
         help_text="Min depth / calado at berth line (m).",
+    )
+    min_eta = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Earliest recommended ETA for this position (warning if earlier).",
     )
     bollard_count = models.PositiveSmallIntegerField(
         null=True,

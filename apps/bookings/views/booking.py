@@ -1,7 +1,9 @@
+from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.mixins import (
     DestroyModelMixin,
     ListModelMixin,
@@ -12,6 +14,8 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.accounts.permissions import DenyViewerWrites, user_can_access_port, user_port_ids
+from apps.bookings.constants import ACTIVE_BOOKING_STATUSES
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.serializers import (
     BookingBatchCreateSerializer,
@@ -29,6 +33,8 @@ from apps.bookings.services.booking_export import build_bookings_csv, build_book
 from apps.bookings.services.validation import suggest_positions
 from apps.bookings.utils.list_ordering import apply_booking_list_ordering
 
+_PORT_ACCESS_DENIED = "No tienes acceso a este puerto."
+
 
 class BookingViewSet(
     ListModelMixin,
@@ -37,7 +43,7 @@ class BookingViewSet(
     DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, DenyViewerWrites]
     serializer_class = BookingSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     filter_backends = [filters.SearchFilter]
@@ -50,6 +56,10 @@ class BookingViewSet(
     ]
     http_method_names = ["get", "patch", "delete", "head", "options", "post"]
 
+    def _ensure_port_access(self, port_id) -> None:
+        if not user_can_access_port(self.request.user, int(port_id)):
+            raise PermissionDenied(_PORT_ACCESS_DENIED)
+
     def get_queryset(self):
         qs = Booking.objects.select_related(
             "port",
@@ -57,6 +67,9 @@ class BookingViewSet(
             "vessel",
             "position",
         ).prefetch_related("audit_entries")
+        allowed_ports = user_port_ids(self.request.user)
+        if allowed_ports is not None:
+            qs = qs.filter(port_id__in=allowed_ports)
         port_id = self.request.query_params.get("port")
         if port_id:
             qs = qs.filter(port_id=port_id)
@@ -69,8 +82,11 @@ class BookingViewSet(
         status_param = self.request.query_params.get("status")
         if status_param == "completed":
             qs = qs.filter(
-                call_date__lt=timezone.localdate(),
-                status__in=[BookingStatus.REQUESTED, BookingStatus.CONFIRMED],
+                Q(
+                    call_date__lt=timezone.localdate(),
+                    status__in=ACTIVE_BOOKING_STATUSES,
+                )
+                | Q(status=BookingStatus.R)
             )
         elif status_param:
             qs = qs.filter(status=status_param)
@@ -92,6 +108,7 @@ class BookingViewSet(
 
     def partial_update(self, request, *args, **kwargs):
         booking = self.get_object()
+        self._ensure_port_access(booking.port_id)
         serializer = self.get_serializer(booking, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
@@ -110,6 +127,7 @@ class BookingViewSet(
         serializer = BookingBatchCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        self._ensure_port_access(data["port"])
 
         try:
             bookings = create_booking_batch(
@@ -135,6 +153,7 @@ class BookingViewSet(
     def validate(self, request):
         serializer = BookingValidateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        self._ensure_port_access(serializer.validated_data["port"])
         result = serializer.save()
         return Response(result)
 
@@ -148,6 +167,7 @@ class BookingViewSet(
                 {"detail": "Se requieren port, vessel y call_date."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        self._ensure_port_access(port_id)
         from datetime import date
 
         try:

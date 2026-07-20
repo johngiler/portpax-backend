@@ -11,6 +11,7 @@ from apps.catalogs.models import (
     PortImage,
     Position,
     PositionImage,
+    PositionPairConstraint,
     ShippingLine,
     ShippingLineGroup,
     Vessel,
@@ -31,7 +32,9 @@ class PositionInline(admin.TabularInline):
         "position_type",
         "berth",
         "max_loa_m",
+        "max_beam_m",
         "min_draft_m",
+        "min_eta",
         "bollard_count",
         "fender_count",
         "sort_order",
@@ -106,7 +109,9 @@ class PositionAdmin(admin.ModelAdmin):
         "position_type",
         "berth",
         "max_loa_m",
+        "max_beam_m",
         "min_draft_m",
+        "min_eta",
         "bollard_count",
         "fender_count",
         "is_active",
@@ -114,6 +119,19 @@ class PositionAdmin(admin.ModelAdmin):
     list_filter = ("port", "position_type", "is_active")
     search_fields = ("code", "port__code")
     inlines = (PositionImageInline,)
+
+
+@admin.register(PositionPairConstraint)
+class PositionPairConstraintAdmin(admin.ModelAdmin):
+    list_display = (
+        "port",
+        "position_a",
+        "position_b",
+        "max_loa_combined",
+        "max_loa_hard_cap",
+    )
+    list_filter = ("port",)
+    search_fields = ("port__code", "position_a__code", "position_b__code")
 
 
 @admin.register(MooringScenario)

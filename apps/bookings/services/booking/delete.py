@@ -6,6 +6,6 @@ class BookingDeleteError(Exception):
 
 
 def delete_cancelled_booking(booking: Booking) -> None:
-    if booking.status != BookingStatus.CANCELLED:
+    if booking.status != BookingStatus.C:
         raise BookingDeleteError("Solo se pueden eliminar reservas canceladas.")
     booking.delete()

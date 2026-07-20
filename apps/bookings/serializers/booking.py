@@ -73,6 +73,8 @@ class BookingSerializer(serializers.ModelSerializer):
             "call_date",
             "eta",
             "etd",
+            "eta_real",
+            "etd_real",
             "planned_pax",
             "actual_pax",
             "actual_crew",
@@ -126,6 +128,8 @@ class BookingUpdateSerializer(serializers.Serializer):
     position = serializers.IntegerField(required=False, allow_null=True)
     eta = serializers.TimeField(required=False, allow_null=True)
     etd = serializers.TimeField(required=False, allow_null=True)
+    eta_real = serializers.TimeField(required=False, allow_null=True)
+    etd_real = serializers.TimeField(required=False, allow_null=True)
     planned_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     actual_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     actual_crew = serializers.IntegerField(required=False, allow_null=True, min_value=0)
@@ -142,36 +146,74 @@ class BookingUpdateSerializer(serializers.Serializer):
         cancellation_reason = validated_data.pop("cancellation_reason", None)
         new_status = validated_data.pop("status", None)
 
-        if new_status:
-            try:
+        operational_keys = (
+            "position",
+            "eta",
+            "etd",
+            "eta_real",
+            "etd_real",
+            "planned_pax",
+            "actual_pax",
+            "actual_crew",
+        )
+        operational_fields = {
+            key: validated_data[key] for key in operational_keys if key in validated_data
+        }
+
+        try:
+            if new_status == BookingStatus.R:
+                pre_r = {
+                    k: v
+                    for k, v in operational_fields.items()
+                    if k not in ("actual_pax", "eta_real", "etd_real")
+                }
+                if pre_r:
+                    instance = update_booking_operational(
+                        instance,
+                        user=user,
+                        position_id=pre_r.get("position"),
+                        eta=pre_r.get("eta"),
+                        etd=pre_r.get("etd"),
+                        planned_pax=pre_r.get("planned_pax"),
+                        actual_crew=pre_r.get("actual_crew"),
+                    )
                 instance = update_booking_status(
                     instance,
                     new_status,
                     user=user,
                     cancellation_reason=cancellation_reason,
                     cancellation_evidence=cancellation_evidence,
+                    actual_pax=operational_fields.get("actual_pax"),
+                    eta_real=operational_fields.get("eta_real"),
+                    etd_real=operational_fields.get("etd_real"),
                 )
-            except BookingValidationError as exc:
-                raise serializers.ValidationError({"status": exc.errors}) from exc
-            except BookingStatusError as exc:
-                raise serializers.ValidationError({"status": str(exc)}) from exc
-
-        operational_fields = {}
-        for key in ("position", "eta", "etd", "planned_pax", "actual_pax", "actual_crew"):
-            if key in validated_data:
-                operational_fields[key] = validated_data[key]
-
-        if operational_fields:
-            instance = update_booking_operational(
-                instance,
-                user=user,
-                position_id=operational_fields.get("position"),
-                eta=operational_fields.get("eta"),
-                etd=operational_fields.get("etd"),
-                planned_pax=operational_fields.get("planned_pax"),
-                actual_pax=operational_fields.get("actual_pax"),
-                actual_crew=operational_fields.get("actual_crew"),
-            )
+            else:
+                if operational_fields:
+                    instance = update_booking_operational(
+                        instance,
+                        user=user,
+                        position_id=operational_fields.get("position"),
+                        eta=operational_fields.get("eta"),
+                        etd=operational_fields.get("etd"),
+                        eta_real=operational_fields.get("eta_real"),
+                        etd_real=operational_fields.get("etd_real"),
+                        planned_pax=operational_fields.get("planned_pax"),
+                        actual_pax=operational_fields.get("actual_pax"),
+                        actual_crew=operational_fields.get("actual_crew"),
+                    )
+                if new_status:
+                    instance = update_booking_status(
+                        instance,
+                        new_status,
+                        user=user,
+                        cancellation_reason=cancellation_reason,
+                        cancellation_evidence=cancellation_evidence,
+                    )
+        except BookingValidationError as exc:
+            field = "status" if new_status else "position"
+            raise serializers.ValidationError({field: exc.errors}) from exc
+        except BookingStatusError as exc:
+            raise serializers.ValidationError({"status": str(exc)}) from exc
 
         return instance
 
@@ -181,6 +223,8 @@ class BookingValidateSerializer(serializers.Serializer):
     vessel = serializers.IntegerField()
     call_dates = serializers.ListField(child=serializers.DateField(), allow_empty=False)
     position = serializers.IntegerField(required=False, allow_null=True)
+    eta = serializers.TimeField(required=False, allow_null=True)
+    etd = serializers.TimeField(required=False, allow_null=True)
 
     def validate_call_dates(self, value):
         unique = sorted({d for d in value})
@@ -194,6 +238,8 @@ class BookingValidateSerializer(serializers.Serializer):
             vessel_id=validated_data["vessel"],
             call_dates=validated_data["call_dates"],
             position_id=validated_data.get("position"),
+            eta=validated_data.get("eta"),
+            etd=validated_data.get("etd"),
         )
 
 

@@ -34,12 +34,14 @@ def build_dashboard_stats(
         row["status"]: row["c"]
         for row in qs.values("status").annotate(c=Count("id"))
     }
-    requested = status_counts.get(BookingStatus.REQUESTED, 0)
-    confirmed = status_counts.get(BookingStatus.CONFIRMED, 0)
-    cancelled = status_counts.get(BookingStatus.CANCELLED, 0)
-    total = requested + confirmed + cancelled
+    nr = status_counts.get(BookingStatus.NR, 0)
+    hold = status_counts.get(BookingStatus.H, 0)
+    confirmed = status_counts.get(BookingStatus.CO, 0)
+    real = status_counts.get(BookingStatus.R, 0)
+    cancelled = status_counts.get(BookingStatus.C, 0)
+    total = nr + hold + confirmed + real + cancelled
 
-    active_qs = qs.exclude(status=BookingStatus.CANCELLED)
+    active_qs = qs.exclude(status=BookingStatus.C)
     pax_agg = active_qs.aggregate(
         planned=Sum("planned_pax"),
         actual=Sum("actual_pax"),
@@ -57,7 +59,9 @@ def build_dashboard_stats(
     position_count = positions_qs.count()
     day_count = (date_to - date_from).days + 1
     capacity_slot_days = position_count * day_count
-    occupied_slot_days = qs.filter(status=BookingStatus.CONFIRMED).count()
+    occupied_slot_days = qs.filter(
+        status__in=[BookingStatus.CO, BookingStatus.R],
+    ).count()
     occupancy_pct = (
         round((occupied_slot_days / capacity_slot_days) * 100, 1)
         if capacity_slot_days > 0
@@ -83,7 +87,7 @@ def build_dashboard_stats(
         .order_by("call_date__month")
     )
     month_map: dict[int, dict[str, int]] = {
-        m: {"requested": 0, "confirmed": 0, "cancelled": 0, "total": 0}
+        m: {"nr": 0, "h": 0, "co": 0, "r": 0, "c": 0, "total": 0}
         for m in range(1, 13)
     }
     for row in by_month_raw:
@@ -115,7 +119,7 @@ def build_dashboard_stats(
     )
 
     cancel_reasons = list(
-        qs.filter(status=BookingStatus.CANCELLED)
+        qs.filter(status=BookingStatus.C)
         .exclude(cancellation_reason="")
         .values("cancellation_reason")
         .annotate(c=Count("id"))
@@ -159,9 +163,11 @@ def build_dashboard_stats(
             "occupied_slot_days": occupied_slot_days,
             "position_count": position_count,
             "total_bookings": total,
-            "requested": requested,
-            "confirmed": confirmed,
-            "cancelled": cancelled,
+            "nr": nr,
+            "h": hold,
+            "co": confirmed,
+            "r": real,
+            "c": cancelled,
             "planned_pax": planned_pax,
             "actual_pax": actual_pax,
             "ports_count": ports_in_scope.count(),
@@ -199,8 +205,10 @@ def build_dashboard_stats(
         "by_cancellation_reason": by_cancellation_reason,
         "by_weekday": by_weekday,
         "status_breakdown": [
-            {"status": "requested", "label": "Solicitadas", "count": requested},
-            {"status": "confirmed", "label": "Confirmadas", "count": confirmed},
-            {"status": "cancelled", "label": "Canceladas", "count": cancelled},
+            {"status": "nr", "label": "Nuevas solicitudes", "count": nr},
+            {"status": "h", "label": "Hold", "count": hold},
+            {"status": "co", "label": "Confirmadas", "count": confirmed},
+            {"status": "r", "label": "Real", "count": real},
+            {"status": "c", "label": "Canceladas", "count": cancelled},
         ],
     }

@@ -1,8 +1,9 @@
 from datetime import date
 
-from apps.catalogs.models import Port, Position, Vessel
-from apps.bookings.models import Booking, BookingStatus
+from apps.bookings.constants import OCCUPATION_CONFLICT_STATUSES
+from apps.bookings.models import Booking
 from apps.bookings.services.validation.rules import validate_booking
+from apps.catalogs.models import Port, Position, Vessel
 from apps.catalogs.utils.position_code import position_short_code
 
 
@@ -17,6 +18,8 @@ def validate_booking_instance(booking: Booking) -> dict:
         vessel=booking.vessel,
         call_date=booking.call_date,
         position=position,
+        eta=booking.eta,
+        etd=booking.etd,
         exclude_booking_id=booking.id,
     )
 
@@ -27,6 +30,8 @@ def validate_booking_params(
     vessel_id: int,
     call_dates: list[date],
     position_id: int | None = None,
+    eta=None,
+    etd=None,
 ) -> dict:
     port = Port.objects.get(pk=port_id)
     vessel = Vessel.objects.get(pk=vessel_id)
@@ -46,6 +51,8 @@ def validate_booking_params(
             vessel=vessel,
             call_date=call_date,
             position=position,
+            eta=eta,
+            etd=etd,
         )
         if position is None:
             missing = no_position_available_warning(port, vessel, call_date)
@@ -93,7 +100,7 @@ def suggest_positions(port_id: int, vessel_id: int, call_date: date) -> list[dic
             occupied = Booking.objects.filter(
                 position=position,
                 call_date=call_date,
-                status__in=[BookingStatus.REQUESTED, BookingStatus.CONFIRMED],
+                status__in=OCCUPATION_CONFLICT_STATUSES,
             ).exists()
             suggestions.append(
                 {

@@ -56,11 +56,12 @@ def auto_assign_position(
         if any(issue.level == "error" for issue in physical_issues):
             continue
 
-        if validate_position_availability(
+        occupancy_issues = validate_position_availability(
             position.id,
             call_date,
             exclude_booking_id,
-        ):
+        )
+        if any(issue.level == "error" for issue in occupancy_issues):
             continue
 
         candidates.append((_rank_position(vessel, position, port), position))

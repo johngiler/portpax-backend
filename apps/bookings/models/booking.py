@@ -5,9 +5,11 @@ from apps.catalogs.models import Port, Position, ShippingLine, Vessel
 
 
 class BookingStatus(models.TextChoices):
-    REQUESTED = "requested", "Requested"
-    CONFIRMED = "confirmed", "Confirmed"
-    CANCELLED = "cancelled", "Cancelled"
+    NR = "nr", "New Request"
+    H = "h", "Hold"
+    CO = "co", "Confirmed"
+    R = "r", "Real"
+    C = "c", "Cancelled"
 
 
 class CancellationReason(models.TextChoices):
@@ -34,11 +36,21 @@ class Booking(models.Model):
     call_date = models.DateField()
     eta = models.TimeField(null=True, blank=True, help_text="Estimated time of arrival.")
     etd = models.TimeField(null=True, blank=True, help_text="Estimated time of departure.")
+    eta_real = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Actual time of arrival (set when closing to Real).",
+    )
+    etd_real = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Actual time of departure (set when closing to Real).",
+    )
     booking_code = models.CharField(max_length=64, unique=True)
     status = models.CharField(
         max_length=20,
         choices=BookingStatus.choices,
-        default=BookingStatus.REQUESTED,
+        default=BookingStatus.NR,
     )
     planned_pax = models.PositiveIntegerField(null=True, blank=True)
     actual_pax = models.PositiveIntegerField(null=True, blank=True)

@@ -1,4 +1,6 @@
-from apps.core.utils.image_webp import convert_uploaded_image_to_webp
+from rest_framework import serializers
+
+from apps.core.utils.image_webp import ImageConversionError, convert_uploaded_image_to_webp
 
 
 class WebPImageFieldsMixin:
@@ -9,7 +11,12 @@ class WebPImageFieldsMixin:
     def _apply_webp(self, validated_data: dict) -> None:
         for field in self.webp_image_fields:
             if field in validated_data and validated_data[field] is not None:
-                validated_data[field] = convert_uploaded_image_to_webp(validated_data[field])
+                try:
+                    validated_data[field] = convert_uploaded_image_to_webp(
+                        validated_data[field]
+                    )
+                except ImageConversionError as exc:
+                    raise serializers.ValidationError({field: [exc.message]}) from exc
 
     def create(self, validated_data):
         self._apply_webp(validated_data)

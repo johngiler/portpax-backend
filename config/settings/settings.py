@@ -32,6 +32,7 @@ LOCAL_APPS = [
     "apps.catalogs",
     "apps.bookings",
     "apps.audit",
+    "apps.accounts",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -100,6 +101,7 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
+        "apps.accounts.permissions.IsFrontendAppUser",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
@@ -113,6 +115,7 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Internal ITM Group platform — Booking module (Phase 1 MVP).",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
 }
 
 SIMPLE_JWT = {
@@ -120,14 +123,20 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
+    "TOKEN_OBTAIN_SERIALIZER": (
+        "apps.accounts.serializers.jwt.FrontendTokenObtainPairSerializer"
+    ),
+    "TOKEN_REFRESH_SERIALIZER": (
+        "apps.accounts.serializers.jwt.FrontendTokenRefreshSerializer"
+    ),
 }
 
 DJOSER = {
     "LOGIN_FIELD": "username",
     "USER_CREATE_PASSWORD_RETYPE": False,
     "SERIALIZERS": {
-        "user": "djoser.serializers.UserSerializer",
-        "current_user": "djoser.serializers.UserSerializer",
+        "user": "apps.accounts.serializers.CurrentUserSerializer",
+        "current_user": "apps.accounts.serializers.CurrentUserSerializer",
     },
     "PERMISSIONS": {
         "user": ["djoser.permissions.CurrentUserOrAdminOrReadOnly"],

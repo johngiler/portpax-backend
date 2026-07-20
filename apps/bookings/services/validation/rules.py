@@ -1,9 +1,20 @@
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Literal
 
-from apps.bookings.constants import MAX_OVERHANG_M
-from apps.bookings.models import Booking, BookingStatus
-from apps.catalogs.models import Port, Position, Vessel
+from django.db.models import Q
+
+from apps.bookings.constants import (
+    ACTIVE_BOOKING_STATUSES,
+    ETA_CLOSE_GAP_HOURS,
+    MAX_OVERHANG_M,
+    OCCUPATION_CONFLICT_STATUSES,
+)
+from apps.bookings.models import Booking
+from apps.catalogs.models import Port, Position, PositionPairConstraint, Vessel
+
+FULL_DAY_START = time(0, 0)
+FULL_DAY_END = time(23, 59)
 
 
 class ValidationIssue:
@@ -20,6 +31,39 @@ def _decimal(value) -> Decimal | None:
     if value is None:
         return None
     return Decimal(str(value))
+
+
+def occupation_window(eta: time | None, etd: time | None) -> tuple[time, time]:
+    """Missing ETA/ETD → full-day occupation (00:00–23:59)."""
+    return (eta or FULL_DAY_START, etd or FULL_DAY_END)
+
+
+def times_overlap(
+    eta_a: time | None,
+    etd_a: time | None,
+    eta_b: time | None,
+    etd_b: time | None,
+) -> bool:
+    start_a, end_a = occupation_window(eta_a, etd_a)
+    start_b, end_b = occupation_window(eta_b, etd_b)
+    return start_a < end_b and end_a > start_b
+
+
+def window_gap(
+    eta_a: time | None,
+    etd_a: time | None,
+    eta_b: time | None,
+    etd_b: time | None,
+) -> timedelta | None:
+    """Gap between non-overlapping windows; None if they overlap."""
+    start_a, end_a = occupation_window(eta_a, etd_a)
+    start_b, end_b = occupation_window(eta_b, etd_b)
+    if start_a < end_b and end_a > start_b:
+        return None
+    day = datetime(2000, 1, 1)
+    if end_a <= start_b:
+        return datetime.combine(day.date(), start_b) - datetime.combine(day.date(), end_a)
+    return datetime.combine(day.date(), start_a) - datetime.combine(day.date(), end_b)
 
 
 def validate_physical_fit(
@@ -54,6 +98,18 @@ def validate_physical_fit(
                         f"con overhang de {over} m (límite {MAX_OVERHANG_M} m).",
                     )
                 )
+
+    beam = _decimal(vessel.beam_m)
+    max_beam = _decimal(position.max_beam_m)
+    if beam is not None and max_beam is not None and beam > max_beam:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "beam_exceeds_position",
+                f"Manga del barco ({beam} m) excede el máximo de {position.code} "
+                f"({max_beam} m).",
+            )
+        )
 
     draft = _decimal(vessel.draft_m)
     depth_limits = [
@@ -97,7 +153,7 @@ def validate_multi_port_conflict(
     qs = Booking.objects.filter(
         vessel_id=vessel_id,
         call_date=call_date,
-        status__in=[BookingStatus.REQUESTED, BookingStatus.CONFIRMED],
+        status__in=ACTIVE_BOOKING_STATUSES,
     ).exclude(port_id=port_id)
     if exclude_booking_id:
         qs = qs.exclude(pk=exclude_booking_id)
@@ -120,27 +176,134 @@ def validate_position_availability(
     position_id: int,
     call_date,
     exclude_booking_id: int | None = None,
+    *,
+    eta: time | None = None,
+    etd: time | None = None,
 ) -> list[ValidationIssue]:
     qs = Booking.objects.filter(
         position_id=position_id,
         call_date=call_date,
-        status__in=[BookingStatus.REQUESTED, BookingStatus.CONFIRMED],
+        status__in=OCCUPATION_CONFLICT_STATUSES,
     )
     if exclude_booking_id:
         qs = qs.exclude(pk=exclude_booking_id)
 
-    conflict = qs.select_related("vessel").first()
-    if not conflict:
+    issues: list[ValidationIssue] = []
+    for conflict in qs.select_related("vessel"):
+        if times_overlap(eta, etd, conflict.eta, conflict.etd):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "position_occupied",
+                    f"La posición ya está asignada a {conflict.vessel.name} "
+                    f"({conflict.booking_code}) en un horario solapado.",
+                )
+            )
+            continue
+
+        gap = window_gap(eta, etd, conflict.eta, conflict.etd)
+        if gap is not None and gap < timedelta(hours=ETA_CLOSE_GAP_HOURS):
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    "eta_close",
+                    f"Menos de {ETA_CLOSE_GAP_HOURS} h entre esta escala y "
+                    f"{conflict.vessel.name} ({conflict.booking_code}) en la misma posición.",
+                )
+            )
+
+    return issues
+
+
+def validate_min_eta(
+    position: Position | None,
+    eta: time | None,
+) -> list[ValidationIssue]:
+    if not position or not position.min_eta or eta is None:
+        return []
+    if eta < position.min_eta:
+        return [
+            ValidationIssue(
+                "warning",
+                "eta_before_min",
+                f"ETA ({eta.strftime('%H:%M')}) es anterior al mínimo de "
+                f"{position.code} ({position.min_eta.strftime('%H:%M')}).",
+            )
+        ]
+    return []
+
+
+def validate_combined_loa(
+    vessel: Vessel,
+    position: Position | None,
+    call_date,
+    exclude_booking_id: int | None = None,
+) -> list[ValidationIssue]:
+    if not position:
         return []
 
-    return [
-        ValidationIssue(
-            "error",
-            "position_occupied",
-            f"La posición ya está asignada a {conflict.vessel.name} "
-            f"({conflict.booking_code}).",
+    constraints = PositionPairConstraint.objects.filter(
+        port_id=position.port_id,
+    ).filter(Q(position_a_id=position.id) | Q(position_b_id=position.id)).select_related(
+        "position_a",
+        "position_b",
+    )
+
+    issues: list[ValidationIssue] = []
+    our_loa = _decimal(vessel.loa_m)
+    if our_loa is None:
+        return issues
+
+    for constraint in constraints:
+        other_id = (
+            constraint.position_b_id
+            if constraint.position_a_id == position.id
+            else constraint.position_a_id
         )
-    ]
+        other_qs = Booking.objects.filter(
+            position_id=other_id,
+            call_date=call_date,
+            status__in=OCCUPATION_CONFLICT_STATUSES,
+        )
+        if exclude_booking_id:
+            other_qs = other_qs.exclude(pk=exclude_booking_id)
+        other = other_qs.select_related("vessel", "position").first()
+        if not other:
+            continue
+
+        other_loa = _decimal(other.vessel.loa_m)
+        if other_loa is None:
+            continue
+
+        combined = our_loa + other_loa
+        max_combined = _decimal(constraint.max_loa_combined)
+        hard_cap = _decimal(constraint.max_loa_hard_cap)
+        if max_combined is None or hard_cap is None:
+            continue
+
+        other_code = other.position.code if other.position_id else "?"
+        if combined <= max_combined:
+            continue
+        if combined < hard_cap:
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    "combined_loa_orange",
+                    f"LOA combinada ({combined} m) con {other_code} supera "
+                    f"{max_combined} m pero está bajo el tope duro ({hard_cap} m).",
+                )
+            )
+        else:
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    "combined_loa_red",
+                    f"LOA combinada ({combined} m) con {other_code} alcanza o supera "
+                    f"el tope duro ({hard_cap} m).",
+                )
+            )
+
+    return issues
 
 
 def validate_booking(
@@ -149,13 +312,25 @@ def validate_booking(
     vessel: Vessel,
     call_date,
     position: Position | None = None,
+    eta: time | None = None,
+    etd: time | None = None,
     exclude_booking_id: int | None = None,
 ) -> dict:
     issues: list[ValidationIssue] = []
     issues.extend(validate_multi_port_conflict(vessel.id, call_date, port.id, exclude_booking_id))
     if position:
-        issues.extend(validate_position_availability(position.id, call_date, exclude_booking_id))
+        issues.extend(
+            validate_position_availability(
+                position.id,
+                call_date,
+                exclude_booking_id,
+                eta=eta,
+                etd=etd,
+            )
+        )
         issues.extend(validate_physical_fit(vessel, position, port))
+        issues.extend(validate_min_eta(position, eta))
+        issues.extend(validate_combined_loa(vessel, position, call_date, exclude_booking_id))
 
     errors = [i.as_dict() for i in issues if i.level == "error"]
     warnings = [i.as_dict() for i in issues if i.level == "warning"]

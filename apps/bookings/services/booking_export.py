@@ -10,6 +10,7 @@ from django.utils import timezone
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
+from apps.bookings.constants import ACTIVE_BOOKING_STATUSES
 from apps.bookings.models import Booking, BookingStatus
 
 HEADERS = [
@@ -22,6 +23,8 @@ HEADERS = [
     "Fecha de escala",
     "ETA",
     "ETD",
+    "ETA real",
+    "ETD real",
     "PAX planificado",
     "PAX real",
     "Tripulación real",
@@ -32,19 +35,20 @@ HEADERS = [
 ]
 
 STATUS_LABELS_ES = {
-    BookingStatus.REQUESTED: "Solicitada",
-    BookingStatus.CONFIRMED: "Confirmada",
-    BookingStatus.CANCELLED: "Cancelada",
+    BookingStatus.NR: "Nueva solicitud",
+    BookingStatus.H: "Hold",
+    BookingStatus.CO: "Confirmada",
+    BookingStatus.R: "Real",
+    BookingStatus.C: "Cancelada",
 }
 
 
 def _status_label(booking: Booking, today: date) -> str:
-    if booking.status == BookingStatus.CANCELLED:
-        return STATUS_LABELS_ES[BookingStatus.CANCELLED]
-    if booking.call_date < today and booking.status in (
-        BookingStatus.REQUESTED,
-        BookingStatus.CONFIRMED,
-    ):
+    if booking.status == BookingStatus.C:
+        return STATUS_LABELS_ES[BookingStatus.C]
+    if booking.status == BookingStatus.R:
+        return STATUS_LABELS_ES[BookingStatus.R]
+    if booking.call_date < today and booking.status in ACTIVE_BOOKING_STATUSES:
         return "Completada"
     return STATUS_LABELS_ES.get(booking.status, booking.get_status_display())
 
@@ -78,6 +82,8 @@ def booking_export_row(booking: Booking, today: date | None = None) -> list:
         booking.call_date.isoformat(),
         _format_time(booking.eta),
         _format_time(booking.etd),
+        _format_time(booking.eta_real),
+        _format_time(booking.etd_real),
         _cell_value(booking.planned_pax),
         _cell_value(booking.actual_pax),
         _cell_value(booking.actual_crew),
