@@ -11,6 +11,7 @@ from django.db import transaction
 
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.booking.code import resolve_unique_booking_code
+from apps.bookings.services.confirmation_pdf import generate_confirmation_pdfs
 from apps.bookings.services.import_berthing.match import (
     MatchStats,
     resolve_port,
@@ -53,6 +54,8 @@ def import_berthing_rows(
     *,
     delete_data: bool = False,
     dry_run: bool = False,
+    generate_confirmations: bool = True,
+    force_confirmation: bool = False,
 ) -> dict[str, Any]:
     stats = MatchStats()
     created = 0
@@ -155,6 +158,18 @@ def import_berthing_rows(
     with transaction.atomic():
         process()
 
+    confirmation_report: dict[str, Any] = {
+        "generated": 0,
+        "error_count": 0,
+        "errors": [],
+        "skipped": True,
+    }
+    if generate_confirmations:
+        confirmation_report = generate_confirmation_pdfs(
+            only_missing=not force_confirmation,
+        )
+        confirmation_report["skipped"] = False
+
     return {
         "parsed": len(rows),
         "created": created,
@@ -167,6 +182,7 @@ def import_berthing_rows(
         "created_lines": stats.created_lines[:200],
         "created_vessels": stats.created_vessels[:200],
         "deleted_before": delete_data,
+        "confirmations": confirmation_report,
     }
 
 

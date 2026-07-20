@@ -6,6 +6,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from apps.bookings.services.confirmation_pdf import generate_confirmation_pdfs
 from apps.bookings.services.import_berthing.runner import (
     import_berthing_rows,
     load_rows_from_json,
@@ -26,7 +27,8 @@ DEFAULT_REPORT = Path(settings.BASE_DIR) / "data" / "berthing_bookings_import_re
 class Command(BaseCommand):
     help = (
         "Import historic berthing bookings from JSON (or regenerate JSON from Excel). "
-        "Use --delete-data to clear all Booking rows before import."
+        "Use --delete-data to clear all Booking rows before import. "
+        "Use --only-generate-confirmation to backfill CO/CL confirmation PDFs."
     )
 
     def add_arguments(self, parser):
@@ -59,13 +61,61 @@ class Command(BaseCommand):
             action="store_true",
             help="Only regenerate JSON from Excel; skip DB import",
         )
+        parser.add_argument(
+            "--only-generate-confirmation",
+            action="store_true",
+            help=(
+                "Skip import; generate confirmation PDFs for existing CO/CL bookings "
+                "that do not have a file yet (use --force-confirmation to regenerate all)."
+            ),
+        )
+        parser.add_argument(
+            "--force-confirmation",
+            action="store_true",
+            help="Regenerate confirmation PDFs even when a file already exists.",
+        )
+        parser.add_argument(
+            "--skip-confirmation",
+            action="store_true",
+            help="During import, do not generate confirmation PDFs.",
+        )
 
     def handle(self, *args, **options):
+        only_confirmation = options["only_generate_confirmation"]
+        force_confirmation = options["force_confirmation"]
+
+        if only_confirmation:
+            self.stdout.write(
+                "Generating confirmation PDFs for CO/CL bookings "
+                f"({'force' if force_confirmation else 'missing only'}) …"
+            )
+            report = generate_confirmation_pdfs(only_missing=not force_confirmation)
+            DEFAULT_REPORT.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"mode": "only_generate_confirmation", "confirmations": report}
+            DEFAULT_REPORT.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self.stdout.write(json.dumps(payload, indent=2))
+            self.stdout.write(self.style.SUCCESS(f"Report → {DEFAULT_REPORT}"))
+            if report["error_count"]:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"Generated {report['generated']} with {report['error_count']} errors."
+                    )
+                )
+            else:
+                self.stdout.write(
+                    self.style.SUCCESS(f"Generated {report['generated']} confirmation PDF(s).")
+                )
+            return
+
         data_path = Path(options["data"])
         xlsx_folder = options["from_xlsx"]
         delete_data = options["delete_data"]
         dry_run = options["dry_run"]
         parse_only = options["parse_only"]
+        skip_confirmation = options["skip_confirmation"]
 
         if xlsx_folder or parse_only:
             folder = Path(xlsx_folder or DEFAULT_XLSX)
@@ -89,6 +139,8 @@ class Command(BaseCommand):
             rows,
             delete_data=delete_data,
             dry_run=dry_run,
+            generate_confirmations=not dry_run and not skip_confirmation,
+            force_confirmation=force_confirmation,
         )
         DEFAULT_REPORT.parent.mkdir(parents=True, exist_ok=True)
         DEFAULT_REPORT.write_text(
@@ -96,7 +148,8 @@ class Command(BaseCommand):
             encoding="utf-8",
         )
 
-        self.stdout.write(json.dumps({k: v for k, v in report.items() if k != "invalid_rows"}, indent=2))
+        printable = {k: v for k, v in report.items() if k != "invalid_rows"}
+        self.stdout.write(json.dumps(printable, indent=2))
         self.stdout.write(self.style.SUCCESS(f"Report → {DEFAULT_REPORT}"))
 
         if not dry_run:
@@ -112,3 +165,16 @@ class Command(BaseCommand):
                 self.stdout.write(
                     self.style.SUCCESS(f"Imported all {valid} valid rows.")
                 )
+            conf = report.get("confirmations") or {}
+            if not conf.get("skipped"):
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"Confirmations generated: {conf.get('generated', 0)}"
+                    )
+                )
+                if conf.get("error_count"):
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"Confirmation errors: {conf['error_count']}"
+                        )
+                    )

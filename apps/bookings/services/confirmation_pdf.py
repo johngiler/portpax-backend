@@ -6,13 +6,15 @@ Header left logo: port logo (not vessel / shipping line).
 """
 
 from io import BytesIO
+from typing import Any
 
 from django.core.files.base import ContentFile
+from django.db.models import Q, QuerySet
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas
 
-from apps.bookings.models import Booking
+from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.pdf_layout import (
     ACCENT,
     ACCENT_SOFT,
@@ -28,6 +30,10 @@ from apps.bookings.services.pdf_layout import (
     draw_section_title,
     draw_top_accent_bar,
 )
+from apps.catalogs.utils.position_code import position_short_code
+
+# Statuses that get a confirmation slip (M10: CO or CL).
+CONFIRMATION_PDF_STATUSES = (BookingStatus.CO, BookingStatus.CL)
 
 
 def build_confirmation_pdf(booking: Booking) -> bytes:
@@ -127,9 +133,17 @@ def build_confirmation_pdf(booking: Booking) -> bytes:
     y -= 0.85 * cm
 
     port_label = port.commercial_name or port.name
-    position = booking.position.code if booking.position_id else "Por asignar"
+    if booking.position_id and booking.position:
+        berth_label = position_short_code(port.code, booking.position.code)
+    else:
+        berth_label = "Por asignar"
     eta = booking.eta.strftime("%H:%M") if booking.eta else "—"
     etd = booking.etd.strftime("%H:%M") if booking.etd else "—"
+    planned_pax = (
+        f"{booking.planned_pax:,}".replace(",", ".")
+        if booking.planned_pax is not None
+        else "—"
+    )
 
     row1_y = y - card_h + 0.35 * cm
     draw_metric_card(pdf, margin, row1_y, card_w, card_h, "Puerto", port_label)
@@ -139,8 +153,8 @@ def build_confirmation_pdf(booking: Booking) -> bytes:
         row1_y,
         card_w,
         card_h,
-        "Posición",
-        position,
+        "Muelle",
+        berth_label,
     )
     y -= card_h + 0.35 * cm
 
@@ -155,6 +169,18 @@ def build_confirmation_pdf(booking: Booking) -> bytes:
         "ETD",
         etd,
     )
+    y -= card_h + 0.35 * cm
+
+    row3_y = y - card_h + 0.35 * cm
+    draw_metric_card(
+        pdf,
+        margin,
+        row3_y,
+        card_w,
+        card_h,
+        "PAX proyectados",
+        planned_pax,
+    )
 
     draw_footer(pdf, width, margin)
 
@@ -167,3 +193,48 @@ def save_confirmation_pdf(booking: Booking) -> None:
     pdf_bytes = build_confirmation_pdf(booking)
     filename = f"confirmation_{booking.booking_code}.pdf"
     booking.confirmation_pdf.save(filename, ContentFile(pdf_bytes), save=True)
+
+
+def generate_confirmation_pdfs(
+    *,
+    only_missing: bool = True,
+    queryset: QuerySet[Booking] | None = None,
+) -> dict[str, Any]:
+    """
+    Generate confirmation PDFs for CO/CL bookings.
+
+    By default only rows without a stored file (for post-import backfill).
+    Pass only_missing=False to regenerate all.
+    """
+    qs = queryset if queryset is not None else Booking.objects.filter(
+        status__in=CONFIRMATION_PDF_STATUSES,
+    )
+    qs = qs.filter(status__in=CONFIRMATION_PDF_STATUSES).select_related(
+        "port",
+        "shipping_line",
+        "vessel",
+        "position",
+    )
+    if only_missing:
+        qs = qs.filter(Q(confirmation_pdf="") | Q(confirmation_pdf__isnull=True))
+
+    generated = 0
+    errors: list[dict[str, Any]] = []
+    for booking in qs.iterator(chunk_size=50):
+        try:
+            save_confirmation_pdf(booking)
+            generated += 1
+        except Exception as exc:  # noqa: BLE001 — continue batch; report failures
+            errors.append(
+                {
+                    "id": booking.id,
+                    "booking_code": booking.booking_code,
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "generated": generated,
+        "error_count": len(errors),
+        "errors": errors[:100],
+    }

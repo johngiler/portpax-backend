@@ -1,6 +1,9 @@
 from apps.audit.services.record import record_booking_audit
 from apps.bookings.models import Booking, BookingStatus, CancellationReason
-from apps.bookings.services.confirmation_pdf import save_confirmation_pdf
+from apps.bookings.services.confirmation_pdf import (
+    CONFIRMATION_PDF_STATUSES,
+    save_confirmation_pdf,
+)
 from apps.bookings.services.position_assignment import auto_assign_position
 from apps.bookings.services.validation import validate_booking_instance
 
@@ -102,7 +105,7 @@ def update_booking_status(
         if etd_real is not None:
             update_fields.append("etd_real")
 
-    if new_status == BookingStatus.CO:
+    if new_status in CONFIRMATION_PDF_STATUSES:
         save_confirmation_pdf(booking)
         update_fields.append("confirmation_pdf")
 
