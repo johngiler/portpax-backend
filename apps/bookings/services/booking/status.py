@@ -131,6 +131,7 @@ def update_booking_operational(
     changes: dict = {}
     update_fields = ["updated_at"]
     position_changed = False
+    schedule_changed = False
 
     if position_id is not None and position_id != booking.position_id:
         changes["position_id"] = {"from": booking.position_id, "to": position_id}
@@ -138,15 +139,17 @@ def update_booking_operational(
         update_fields.append("position")
         position_changed = True
 
-    if eta is not None:
+    if eta is not None and eta != booking.eta:
         changes["eta"] = {"from": str(booking.eta) if booking.eta else None, "to": str(eta)}
         booking.eta = eta
         update_fields.append("eta")
+        schedule_changed = True
 
-    if etd is not None:
+    if etd is not None and etd != booking.etd:
         changes["etd"] = {"from": str(booking.etd) if booking.etd else None, "to": str(etd)}
         booking.etd = etd
         update_fields.append("etd")
+        schedule_changed = True
 
     if eta_real is not None:
         changes["eta_real"] = {
@@ -179,16 +182,17 @@ def update_booking_operational(
         booking.actual_crew = actual_crew
         update_fields.append("actual_crew")
 
-    if position_changed:
+    if position_changed or schedule_changed:
         # Refresh FK for validation when position was set by id.
-        if booking.position_id:
-            from apps.catalogs.models import Position
+        if position_changed:
+            if booking.position_id:
+                from apps.catalogs.models import Position
 
-            booking.position = Position.objects.select_related("berth", "port").get(
-                pk=booking.position_id,
-            )
-        else:
-            booking.position = None
+                booking.position = Position.objects.select_related("berth", "port").get(
+                    pk=booking.position_id,
+                )
+            else:
+                booking.position = None
         validation = validate_booking_instance(booking)
         if not validation["valid"]:
             raise BookingValidationError(

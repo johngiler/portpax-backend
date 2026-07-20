@@ -3,9 +3,10 @@ from rest_framework import filters, viewsets
 
 from apps.catalogs.models import Position, PositionComponent
 from apps.catalogs.serializers import PositionSerializer
+from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
 
 
-class PositionViewSet(viewsets.ModelViewSet):
+class PositionViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSet):
     queryset = Position.objects.select_related("port", "berth").prefetch_related(
         "bollard_lines__port_bollard",
         "fender_lines__port_fender",
@@ -15,6 +16,7 @@ class PositionViewSet(viewsets.ModelViewSet):
     search_fields = ["code", "berth__code"]
     ordering_fields = ["sort_order", "code", "created_at"]
     ordering = ["sort_order", "code"]
+    port_access_field = "port_id"
 
     def get_queryset(self):
         qs = super().get_queryset()

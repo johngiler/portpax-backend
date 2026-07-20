@@ -3,15 +3,17 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
 from apps.catalogs.models import PortImage
 from apps.catalogs.serializers import PortImageSerializer
+from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
 
 
-class PortImageViewSet(viewsets.ModelViewSet):
+class PortImageViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSet):
     queryset = PortImage.objects.select_related("port")
     serializer_class = PortImageSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     filter_backends = [filters.OrderingFilter]
     ordering_fields = ["sort_order", "id"]
     ordering = ["sort_order", "id"]
+    port_access_field = "port_id"
 
     def get_queryset(self):
         qs = super().get_queryset()

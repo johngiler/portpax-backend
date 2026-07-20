@@ -3,15 +3,17 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
 from apps.catalogs.models import PortFender
 from apps.catalogs.serializers import PortFenderSerializer
+from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
 
 
-class PortFenderViewSet(viewsets.ModelViewSet):
+class PortFenderViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSet):
     queryset = PortFender.objects.select_related("port")
     serializer_class = PortFenderSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     filter_backends = [filters.OrderingFilter]
     ordering_fields = ["sort_order", "fender_type"]
     ordering = ["sort_order", "fender_type"]
+    port_access_field = "port_id"
 
     def get_queryset(self):
         qs = super().get_queryset()

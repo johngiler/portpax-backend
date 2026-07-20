@@ -4,6 +4,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
 from apps.catalogs.models import Berth, Port, Position
 from apps.catalogs.serializers import PortDetailSerializer, PortSerializer
+from apps.catalogs.utils.port_scope import filter_qs_for_user_ports
 
 
 class PortViewSet(viewsets.ModelViewSet):
@@ -21,6 +22,7 @@ class PortViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         base = Port.objects.annotate(position_count=Count("positions"))
+        base = filter_qs_for_user_ports(base, self.request.user, "id")
         if self.action == "retrieve":
             positions_qs = Position.objects.prefetch_related(
                 "images",

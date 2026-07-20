@@ -3,15 +3,17 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
 from apps.catalogs.models import BerthImage
 from apps.catalogs.serializers import BerthImageSerializer
+from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
 
 
-class BerthImageViewSet(viewsets.ModelViewSet):
+class BerthImageViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSet):
     queryset = BerthImage.objects.select_related("berth")
     serializer_class = BerthImageSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     filter_backends = [filters.OrderingFilter]
     ordering_fields = ["sort_order", "id"]
     ordering = ["sort_order", "id"]
+    port_access_field = "berth__port_id"
 
     def get_queryset(self):
         qs = super().get_queryset()
