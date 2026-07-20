@@ -4,11 +4,22 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date
+from typing import Any
 
+from django.core.files.storage import default_storage
 from django.db.models import Count, Sum
 
 from apps.audit.models import BookingAuditEntry
 from apps.bookings.models import Booking, BookingStatus
+
+
+def _absolute_media_url(request: Any, relative_name: str | None) -> str | None:
+    if not relative_name:
+        return None
+    url = default_storage.url(relative_name)
+    if request is not None:
+        return request.build_absolute_uri(url)
+    return url
 
 
 def build_booking_totals(
@@ -19,6 +30,7 @@ def build_booking_totals(
     shipping_line_id: int | None = None,
     without_lta: bool = False,
     allowed_ports: set[int] | None = None,
+    request: Any = None,
 ) -> dict:
     qs = Booking.objects.filter(call_date__gte=date_from, call_date__lte=date_to)
     if allowed_ports is not None:
@@ -42,12 +54,17 @@ def build_booking_totals(
         .order_by("call_date__year", "call_date__month")
     )
     by_port = (
-        qs.values("port_id", "port__code", "port__name")
+        qs.values("port_id", "port__code", "port__name", "port__logo")
         .annotate(calls=Count("id"), planned_pax=Sum("planned_pax"))
         .order_by("-calls")
     )
     by_line = (
-        qs.values("shipping_line_id", "shipping_line__code", "shipping_line__name")
+        qs.values(
+            "shipping_line_id",
+            "shipping_line__code",
+            "shipping_line__name",
+            "shipping_line__logo",
+        )
         .annotate(calls=Count("id"), planned_pax=Sum("planned_pax"))
         .order_by("-calls")
     )
@@ -79,6 +96,7 @@ def build_booking_totals(
                 "port_id": row["port_id"],
                 "code": row["port__code"],
                 "name": row["port__name"],
+                "logo": _absolute_media_url(request, row["port__logo"]),
                 "calls": row["calls"],
                 "planned_pax": row["planned_pax"] or 0,
             }
@@ -89,6 +107,7 @@ def build_booking_totals(
                 "shipping_line_id": row["shipping_line_id"],
                 "code": row["shipping_line__code"],
                 "name": row["shipping_line__name"],
+                "logo": _absolute_media_url(request, row["shipping_line__logo"]),
                 "calls": row["calls"],
                 "planned_pax": row["planned_pax"] or 0,
             }

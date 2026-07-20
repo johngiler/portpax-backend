@@ -4,8 +4,9 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from apps.core.views.search import GlobalSearchView
+from apps.core.views.nav_counts import NavCountsView
 
-__all__ = ["health", "GlobalSearchView"]
+__all__ = ["health", "GlobalSearchView", "NavCountsView"]
 
 
 @api_view(["GET"])

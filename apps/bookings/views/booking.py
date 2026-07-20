@@ -97,6 +97,12 @@ class BookingViewSet(
                 )
                 | Q(status=BookingStatus.R)
             )
+        elif status_param == "action":
+            # Dashboard “Requieren acción”: Hold + NR with call_date from today.
+            qs = qs.filter(
+                status__in=[BookingStatus.NR, BookingStatus.H],
+                call_date__gte=timezone.localdate(),
+            )
         elif status_param:
             qs = qs.filter(status=status_param)
         call_date_from = self.request.query_params.get("call_date_from")
@@ -273,6 +279,8 @@ class BookingViewSet(
                 port_id=optional_int("port"),
                 shipping_line_id=optional_int("shipping_line"),
                 shipping_line_group_id=optional_int("shipping_line_group"),
+                allowed_ports=user_port_ids(request.user),
+                today=timezone.localdate(),
             )
         )
 
@@ -425,6 +433,7 @@ class BookingViewSet(
                 shipping_line_id=optional_int("shipping_line"),
                 without_lta=without_lta,
                 allowed_ports=user_port_ids(request.user),
+                request=request,
             )
         )
 
