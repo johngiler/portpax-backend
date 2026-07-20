@@ -8,6 +8,9 @@ class BookingStatus(models.TextChoices):
     NR = "nr", "New Request"
     H = "h", "Hold"
     CO = "co", "Confirmed"
+    CL = "cl", "Confirmed LTA"
+    LTA = "lta", "LTA"
+    LTD = "ltd", "Long Term Deployment"
     R = "r", "Real"
     C = "c", "Cancelled"
 

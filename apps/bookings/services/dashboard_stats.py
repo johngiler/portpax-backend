@@ -37,9 +37,12 @@ def build_dashboard_stats(
     nr = status_counts.get(BookingStatus.NR, 0)
     hold = status_counts.get(BookingStatus.H, 0)
     confirmed = status_counts.get(BookingStatus.CO, 0)
+    confirmed_lta = status_counts.get(BookingStatus.CL, 0)
+    lta = status_counts.get(BookingStatus.LTA, 0)
+    ltd = status_counts.get(BookingStatus.LTD, 0)
     real = status_counts.get(BookingStatus.R, 0)
     cancelled = status_counts.get(BookingStatus.C, 0)
-    total = nr + hold + confirmed + real + cancelled
+    total = nr + hold + confirmed + confirmed_lta + lta + ltd + real + cancelled
 
     active_qs = qs.exclude(status=BookingStatus.C)
     pax_agg = active_qs.aggregate(
@@ -60,7 +63,13 @@ def build_dashboard_stats(
     day_count = (date_to - date_from).days + 1
     capacity_slot_days = position_count * day_count
     occupied_slot_days = qs.filter(
-        status__in=[BookingStatus.CO, BookingStatus.R],
+        status__in=[
+            BookingStatus.CO,
+            BookingStatus.CL,
+            BookingStatus.LTA,
+            BookingStatus.LTD,
+            BookingStatus.R,
+        ],
     ).count()
     occupancy_pct = (
         round((occupied_slot_days / capacity_slot_days) * 100, 1)
@@ -208,6 +217,9 @@ def build_dashboard_stats(
             {"status": "nr", "label": "Nuevas solicitudes", "count": nr},
             {"status": "h", "label": "Hold", "count": hold},
             {"status": "co", "label": "Confirmadas", "count": confirmed},
+            {"status": "cl", "label": "Confirmadas LTA", "count": confirmed_lta},
+            {"status": "lta", "label": "LTA", "count": lta},
+            {"status": "ltd", "label": "Long Term Deployment", "count": ltd},
             {"status": "r", "label": "Real", "count": real},
             {"status": "c", "label": "Canceladas", "count": cancelled},
         ],

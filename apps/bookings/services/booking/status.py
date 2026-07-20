@@ -19,6 +19,10 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     BookingStatus.NR: {BookingStatus.H, BookingStatus.CO, BookingStatus.C},
     BookingStatus.H: {BookingStatus.CO, BookingStatus.C},
     BookingStatus.CO: {BookingStatus.R, BookingStatus.C},
+    # Historic LTA track: treat as occupied like CO until closed or cancelled.
+    BookingStatus.CL: {BookingStatus.R, BookingStatus.C},
+    BookingStatus.LTA: {BookingStatus.CL, BookingStatus.CO, BookingStatus.R, BookingStatus.C},
+    BookingStatus.LTD: {BookingStatus.R, BookingStatus.C},
     BookingStatus.R: set(),
     BookingStatus.C: set(),
 }

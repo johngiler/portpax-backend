@@ -4,10 +4,10 @@ from decimal import Decimal
 MAX_OVERHANG_M = Decimal("30.00")
 
 # Operational / planned occupancy (excludes Real and Cancelled).
-ACTIVE_BOOKING_STATUSES = ("nr", "h", "co")
+ACTIVE_BOOKING_STATUSES = ("nr", "h", "co", "cl", "lta", "ltd")
 
 # Same-day position conflicts: include Real (berth was used that day).
-OCCUPATION_CONFLICT_STATUSES = ("nr", "h", "co", "r")
+OCCUPATION_CONFLICT_STATUSES = ("nr", "h", "co", "cl", "lta", "ltd", "r")
 
 # Minimum gap between non-overlapping windows on the same position (hours).
 ETA_CLOSE_GAP_HOURS = 2

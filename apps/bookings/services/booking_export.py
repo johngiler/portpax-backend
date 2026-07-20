@@ -38,6 +38,9 @@ STATUS_LABELS_ES = {
     BookingStatus.NR: "Nueva solicitud",
     BookingStatus.H: "Hold",
     BookingStatus.CO: "Confirmada",
+    BookingStatus.CL: "Confirmada LTA",
+    BookingStatus.LTA: "LTA",
+    BookingStatus.LTD: "Long Term Deployment",
     BookingStatus.R: "Real",
     BookingStatus.C: "Cancelada",
 }
