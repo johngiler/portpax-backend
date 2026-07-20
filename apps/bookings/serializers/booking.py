@@ -41,6 +41,13 @@ class BookingSerializer(serializers.ModelSerializer):
     shipping_line_logo = serializers.SerializerMethodField()
     vessel_name = serializers.CharField(source="vessel.name", read_only=True)
     vessel_logo = serializers.SerializerMethodField()
+    vessel_loa_m = serializers.DecimalField(
+        source="vessel.loa_m",
+        max_digits=6,
+        decimal_places=2,
+        read_only=True,
+        allow_null=True,
+    )
     position_code = serializers.SerializerMethodField()
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     cancellation_reason = serializers.CharField(read_only=True)
@@ -68,6 +75,7 @@ class BookingSerializer(serializers.ModelSerializer):
             "vessel",
             "vessel_name",
             "vessel_logo",
+            "vessel_loa_m",
             "position",
             "position_code",
             "call_date",

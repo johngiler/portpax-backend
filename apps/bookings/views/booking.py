@@ -30,6 +30,15 @@ from apps.bookings.services.booking import (
     delete_cancelled_booking,
 )
 from apps.bookings.services.booking_export import build_bookings_csv, build_bookings_xlsx
+from apps.bookings.services.calendar_export import (
+    build_calendar_csv,
+    build_calendar_xlsx,
+    calendar_export_filename,
+)
+from apps.bookings.services.operational_reports import (
+    build_booking_totals,
+    build_weekly_movements,
+)
 from apps.bookings.services.validation import suggest_positions
 from apps.bookings.utils.list_ordering import apply_booking_list_ordering
 
@@ -264,5 +273,187 @@ class BookingViewSet(
                 port_id=optional_int("port"),
                 shipping_line_id=optional_int("shipping_line"),
                 shipping_line_group_id=optional_int("shipping_line_group"),
+            )
+        )
+
+    def _parse_iso_date_param(self, key: str, required: bool = True):
+        from datetime import date as date_cls
+
+        raw = self.request.query_params.get(key)
+        if not raw:
+            if required:
+                return None, Response(
+                    {"detail": f"{key} es obligatorio (YYYY-MM-DD)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            return None, None
+        try:
+            return date_cls.fromisoformat(raw), None
+        except ValueError:
+            return None, Response(
+                {"detail": f"{key} debe ser ISO (YYYY-MM-DD)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["get"], url_path="calendar-export")
+    def calendar_export(self, request):
+        """Export operational calendar rows for one or more ports and a date range.
+
+        `port` accepts a single id or a comma-separated list (one file).
+        """
+        port_raw = request.query_params.get("port")
+        if not port_raw:
+            return Response(
+                {"detail": "port es obligatorio."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            port_ids = [int(part.strip()) for part in port_raw.split(",") if part.strip()]
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "port inválido."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not port_ids:
+            return Response(
+                {"detail": "port es obligatorio."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        for port_id in port_ids:
+            self._ensure_port_access(port_id)
+
+        date_from, err = self._parse_iso_date_param("call_date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("call_date_to")
+        if err:
+            return err
+
+        fmt = (request.query_params.get("export_format") or "xlsx").lower()
+        if fmt not in ("xlsx", "csv"):
+            return Response(
+                {"detail": "export_format debe ser xlsx o csv."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Do not use get_queryset()'s single-port filter (port may be "1,2,3").
+        qs = Booking.objects.select_related(
+            "port",
+            "shipping_line",
+            "vessel",
+            "position",
+        )
+        allowed_ports = user_port_ids(request.user)
+        if allowed_ports is not None:
+            qs = qs.filter(port_id__in=allowed_ports)
+        qs = qs.filter(
+            port_id__in=port_ids,
+            call_date__gte=date_from,
+            call_date__lte=date_to,
+        ).order_by(
+            "port__name",
+            "call_date",
+            "position__sort_order",
+            "vessel__name",
+        )
+        shipping_line_id = request.query_params.get("shipping_line")
+        if shipping_line_id:
+            qs = qs.filter(shipping_line_id=shipping_line_id)
+        status_param = request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(status=status_param)
+
+        bookings = list(qs)
+        if not bookings:
+            return Response(
+                {"detail": "No hay reservas para exportar en ese rango."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        seen: list[str] = []
+        for booking in bookings:
+            code = booking.port.code
+            if code not in seen:
+                seen.append(code)
+        filename = calendar_export_filename(seen, date_from, date_to, fmt)
+        if fmt == "csv":
+            content = build_calendar_csv(bookings)
+            response = HttpResponse(content, content_type="text/csv; charset=utf-8")
+        else:
+            content = build_calendar_xlsx(bookings)
+            response = HttpResponse(
+                content,
+                content_type=(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                ),
+            )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+    @action(detail=False, methods=["get"], url_path="report-totals")
+    def report_totals(self, request):
+        date_from, err = self._parse_iso_date_param("date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("date_to")
+        if err:
+            return err
+
+        def optional_int(key: str) -> int | None:
+            raw = request.query_params.get(key)
+            if not raw:
+                return None
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return None
+
+        without_lta = (request.query_params.get("without_lta") or "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        port_id = optional_int("port")
+        if port_id is not None:
+            self._ensure_port_access(port_id)
+
+        return Response(
+            build_booking_totals(
+                date_from=date_from,
+                date_to=date_to,
+                port_id=port_id,
+                shipping_line_id=optional_int("shipping_line"),
+                without_lta=without_lta,
+                allowed_ports=user_port_ids(request.user),
+            )
+        )
+
+    @action(detail=False, methods=["get"], url_path="report-movements")
+    def report_movements(self, request):
+        date_from, err = self._parse_iso_date_param("date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("date_to")
+        if err:
+            return err
+
+        port_id = None
+        raw_port = request.query_params.get("port")
+        if raw_port:
+            try:
+                port_id = int(raw_port)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "port inválido."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            self._ensure_port_access(port_id)
+
+        return Response(
+            build_weekly_movements(
+                date_from=date_from,
+                date_to=date_to,
+                port_id=port_id,
+                allowed_ports=user_port_ids(request.user),
             )
         )
