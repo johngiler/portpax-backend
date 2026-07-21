@@ -152,6 +152,9 @@ class BookingViewSet(
                 call_dates=data["call_dates"],
                 notes=data.get("notes", ""),
                 created_by=request.user,
+                eta=data.get("eta"),
+                etd=data.get("etd"),
+                planned_pax=data.get("planned_pax"),
             )
         except BookingBatchCreateError as exc:
             payload = {"detail": str(exc)}

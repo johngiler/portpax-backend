@@ -1,3 +1,5 @@
+from apps.accounts.models import UserRole
+from apps.accounts.permissions import user_role
 from apps.audit.services.record import record_booking_audit
 from apps.bookings.models import Booking, BookingStatus, CancellationReason
 from apps.bookings.services.confirmation_pdf import (
@@ -31,6 +33,11 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+def user_may_authorize_exceptions(user) -> bool:
+    """Admin or port_operator may override CL moves and RN-05 red combined LOA."""
+    return user_role(user) in {UserRole.ADMIN, UserRole.PORT_OPERATOR}
+
+
 def update_booking_status(
     booking: Booking,
     new_status: str,
@@ -41,6 +48,7 @@ def update_booking_status(
     actual_pax=None,
     eta_real=None,
     etd_real=None,
+    acknowledge_combined_red: bool = False,
 ) -> Booking:
     allowed = ALLOWED_TRANSITIONS.get(booking.status, set())
     if new_status not in allowed:
@@ -79,8 +87,16 @@ def update_booking_status(
                 booking.position = position
                 booking.save(update_fields=["position", "updated_at"])
 
-        # Position may remain null (TBD). Position checks only run when set.
-        validation = validate_booking_instance(booking)
+        if acknowledge_combined_red and not user_may_authorize_exceptions(user):
+            raise BookingStatusError(
+                "Solo port-operator o admin pueden autorizar la zona roja de LOA combinada."
+            )
+        ack = bool(acknowledge_combined_red) and user_may_authorize_exceptions(user)
+
+        validation = validate_booking_instance(
+            booking,
+            acknowledge_combined_red=ack,
+        )
         if not validation["valid"]:
             raise BookingValidationError(
                 "La reserva no cumple las validaciones operativas.",
@@ -134,25 +150,44 @@ def update_booking_operational(
     planned_pax=None,
     actual_pax=None,
     actual_crew=None,
+    port_operator_override: bool = False,
+    acknowledge_combined_red: bool = False,
+    override_reason: str = "",
 ) -> Booking:
     changes: dict = {}
     update_fields = ["updated_at"]
     position_changed = False
     schedule_changed = False
 
-    if position_id is not None and position_id != booking.position_id:
+    pending_position = position_id is not None and position_id != booking.position_id
+    pending_eta = eta is not None and eta != booking.eta
+    pending_etd = etd is not None and etd != booking.etd
+    cl_schedule_or_berth = pending_position or pending_eta or pending_etd
+
+    if booking.status == BookingStatus.CL and cl_schedule_or_berth:
+        if not port_operator_override:
+            raise BookingStatusError(
+                "Call CL (LTA) es inamovible: un port-operator o admin debe autorizar "
+                "el cambio de muelle o ETA/ETD (RN-06)."
+            )
+        if not user_may_authorize_exceptions(user):
+            raise BookingStatusError(
+                "Solo port-operator o admin pueden autorizar cambios en un call CL."
+            )
+
+    if pending_position:
         changes["position_id"] = {"from": booking.position_id, "to": position_id}
         booking.position_id = position_id or None
         update_fields.append("position")
         position_changed = True
 
-    if eta is not None and eta != booking.eta:
+    if pending_eta:
         changes["eta"] = {"from": str(booking.eta) if booking.eta else None, "to": str(eta)}
         booking.eta = eta
         update_fields.append("eta")
         schedule_changed = True
 
-    if etd is not None and etd != booking.etd:
+    if pending_etd:
         changes["etd"] = {"from": str(booking.etd) if booking.etd else None, "to": str(etd)}
         booking.etd = etd
         update_fields.append("etd")
@@ -190,7 +225,6 @@ def update_booking_operational(
         update_fields.append("actual_crew")
 
     if position_changed or schedule_changed:
-        # Refresh FK for validation when position was set by id.
         if position_changed:
             if booking.position_id:
                 from apps.catalogs.models import Position
@@ -200,7 +234,17 @@ def update_booking_operational(
                 )
             else:
                 booking.position = None
-        validation = validate_booking_instance(booking)
+
+        if acknowledge_combined_red and not user_may_authorize_exceptions(user):
+            raise BookingStatusError(
+                "Solo port-operator o admin pueden autorizar la zona roja de LOA combinada."
+            )
+        ack = bool(acknowledge_combined_red) and user_may_authorize_exceptions(user)
+
+        validation = validate_booking_instance(
+            booking,
+            acknowledge_combined_red=ack,
+        )
         if not validation["valid"]:
             raise BookingValidationError(
                 "La reserva no cumple las validaciones operativas.",
@@ -209,10 +253,17 @@ def update_booking_operational(
 
     if len(update_fields) > 1:
         booking.save(update_fields=update_fields)
+        summary = "Actualización operativa"
+        if booking.status == BookingStatus.CL and port_operator_override and cl_schedule_or_berth:
+            summary = "Override port-operator en call CL (RN-06)"
+            if override_reason:
+                changes["override_reason"] = override_reason
+        if acknowledge_combined_red:
+            changes["acknowledge_combined_red"] = True
         record_booking_audit(
             booking,
             action="operational_update",
-            summary="Actualización operativa",
+            summary=summary,
             changes=changes,
             user=user,
         )

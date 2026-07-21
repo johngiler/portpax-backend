@@ -22,6 +22,9 @@ def create_booking_batch(
     call_dates: list[date],
     notes: str = "",
     created_by=None,
+    eta=None,
+    etd=None,
+    planned_pax: int | None = None,
 ) -> list[Booking]:
     if not call_dates:
         raise BookingBatchCreateError("Selecciona al menos una fecha.", "call_dates")
@@ -72,6 +75,8 @@ def create_booking_batch(
         port_id=port.id,
         vessel_id=vessel.id,
         call_dates=unique_dates,
+        eta=eta,
+        etd=etd,
     )
     if not validation["valid"]:
         messages = "; ".join(e["message"] for e in validation["errors"])
@@ -117,6 +122,9 @@ def create_booking_batch(
                     booking_code=code,
                     status=BookingStatus.NR,
                     notes=notes,
+                    eta=eta,
+                    etd=etd,
+                    planned_pax=planned_pax,
                     created_by=created_by,
                 )
             )

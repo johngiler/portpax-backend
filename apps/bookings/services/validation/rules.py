@@ -10,7 +10,7 @@ from apps.bookings.constants import (
     MAX_OVERHANG_M,
     OCCUPATION_CONFLICT_STATUSES,
 )
-from apps.bookings.models import Booking
+from apps.bookings.models import Booking, BookingStatus
 from apps.catalogs.models import Port, Position, PositionPairConstraint, Vessel
 
 FULL_DAY_START = time(0, 0)
@@ -191,14 +191,24 @@ def validate_position_availability(
     issues: list[ValidationIssue] = []
     for conflict in qs.select_related("vessel"):
         if times_overlap(eta, etd, conflict.eta, conflict.etd):
-            issues.append(
-                ValidationIssue(
-                    "error",
-                    "position_occupied",
-                    f"La posición ya está asignada a {conflict.vessel.name} "
-                    f"({conflict.booking_code}) en un horario solapado.",
+            if conflict.status == BookingStatus.CL:
+                issues.append(
+                    ValidationIssue(
+                        "error",
+                        "lta_priority_conflict",
+                        f"La posición está ocupada por un call CL (LTA inamovible): "
+                        f"{conflict.vessel.name} ({conflict.booking_code}).",
+                    )
                 )
-            )
+            else:
+                issues.append(
+                    ValidationIssue(
+                        "error",
+                        "position_occupied",
+                        f"La posición ya está asignada a {conflict.vessel.name} "
+                        f"({conflict.booking_code}) en un horario solapado.",
+                    )
+                )
             continue
 
         gap = window_gap(eta, etd, conflict.eta, conflict.etd)
@@ -296,10 +306,10 @@ def validate_combined_loa(
         else:
             issues.append(
                 ValidationIssue(
-                    "warning",
+                    "error",
                     "combined_loa_red",
                     f"LOA combinada ({combined} m) con {other_code} alcanza o supera "
-                    f"el tope duro ({hard_cap} m).",
+                    f"el tope duro ({hard_cap} m). Requiere autorización de port-operator.",
                 )
             )
 
@@ -315,6 +325,7 @@ def validate_booking(
     eta: time | None = None,
     etd: time | None = None,
     exclude_booking_id: int | None = None,
+    acknowledge_combined_red: bool = False,
 ) -> dict:
     issues: list[ValidationIssue] = []
     issues.extend(validate_multi_port_conflict(vessel.id, call_date, port.id, exclude_booking_id))
@@ -331,6 +342,11 @@ def validate_booking(
         issues.extend(validate_physical_fit(vessel, position, port))
         issues.extend(validate_min_eta(position, eta))
         issues.extend(validate_combined_loa(vessel, position, call_date, exclude_booking_id))
+
+    if acknowledge_combined_red:
+        for issue in issues:
+            if issue.code == "combined_loa_red" and issue.level == "error":
+                issue.level = "warning"
 
     errors = [i.as_dict() for i in issues if i.level == "error"]
     warnings = [i.as_dict() for i in issues if i.level == "warning"]

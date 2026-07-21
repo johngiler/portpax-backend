@@ -147,12 +147,23 @@ class BookingUpdateSerializer(serializers.Serializer):
         allow_blank=True,
     )
     cancellation_evidence = serializers.FileField(required=False, allow_null=True)
+    port_operator_override = serializers.BooleanField(required=False, default=False)
+    acknowledge_combined_red = serializers.BooleanField(required=False, default=False)
+    override_reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=255,
+    )
 
     def update(self, instance, validated_data):
         user = self.context.get("request").user if self.context.get("request") else None
         cancellation_evidence = validated_data.pop("cancellation_evidence", None)
         cancellation_reason = validated_data.pop("cancellation_reason", None)
         new_status = validated_data.pop("status", None)
+        port_operator_override = validated_data.pop("port_operator_override", False)
+        acknowledge_combined_red = validated_data.pop("acknowledge_combined_red", False)
+        override_reason = validated_data.pop("override_reason", "")
 
         operational_keys = (
             "position",
@@ -184,6 +195,9 @@ class BookingUpdateSerializer(serializers.Serializer):
                         etd=pre_r.get("etd"),
                         planned_pax=pre_r.get("planned_pax"),
                         actual_crew=pre_r.get("actual_crew"),
+                        port_operator_override=port_operator_override,
+                        acknowledge_combined_red=acknowledge_combined_red,
+                        override_reason=override_reason,
                     )
                 instance = update_booking_status(
                     instance,
@@ -194,6 +208,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                     actual_pax=operational_fields.get("actual_pax"),
                     eta_real=operational_fields.get("eta_real"),
                     etd_real=operational_fields.get("etd_real"),
+                    acknowledge_combined_red=acknowledge_combined_red,
                 )
             else:
                 if operational_fields:
@@ -208,6 +223,9 @@ class BookingUpdateSerializer(serializers.Serializer):
                         planned_pax=operational_fields.get("planned_pax"),
                         actual_pax=operational_fields.get("actual_pax"),
                         actual_crew=operational_fields.get("actual_crew"),
+                        port_operator_override=port_operator_override,
+                        acknowledge_combined_red=acknowledge_combined_red,
+                        override_reason=override_reason,
                     )
                 if new_status:
                     instance = update_booking_status(
@@ -216,12 +234,14 @@ class BookingUpdateSerializer(serializers.Serializer):
                         user=user,
                         cancellation_reason=cancellation_reason,
                         cancellation_evidence=cancellation_evidence,
+                        acknowledge_combined_red=acknowledge_combined_red,
                     )
         except BookingValidationError as exc:
             field = "status" if new_status else "position"
             raise serializers.ValidationError({field: exc.errors}) from exc
         except BookingStatusError as exc:
-            raise serializers.ValidationError({"status": str(exc)}) from exc
+            field = "status" if new_status else "non_field_errors"
+            raise serializers.ValidationError({field: str(exc)}) from exc
 
         return instance
 
@@ -233,6 +253,7 @@ class BookingValidateSerializer(serializers.Serializer):
     position = serializers.IntegerField(required=False, allow_null=True)
     eta = serializers.TimeField(required=False, allow_null=True)
     etd = serializers.TimeField(required=False, allow_null=True)
+    acknowledge_combined_red = serializers.BooleanField(required=False, default=False)
 
     def validate_call_dates(self, value):
         unique = sorted({d for d in value})
@@ -241,6 +262,13 @@ class BookingValidateSerializer(serializers.Serializer):
         return unique
 
     def create(self, validated_data):
+        from apps.bookings.services.booking.status import user_may_authorize_exceptions
+
+        request = self.context.get("request")
+        user = request.user if request else None
+        ack = bool(validated_data.get("acknowledge_combined_red"))
+        if ack and not user_may_authorize_exceptions(user):
+            ack = False
         return validate_booking_params(
             port_id=validated_data["port"],
             vessel_id=validated_data["vessel"],
@@ -248,6 +276,7 @@ class BookingValidateSerializer(serializers.Serializer):
             position_id=validated_data.get("position"),
             eta=validated_data.get("eta"),
             etd=validated_data.get("etd"),
+            acknowledge_combined_red=ack,
         )
 
 
@@ -261,6 +290,9 @@ class BookingBatchCreateSerializer(serializers.Serializer):
         max_length=60,
     )
     notes = serializers.CharField(required=False, allow_blank=True, default="")
+    eta = serializers.TimeField(required=False, allow_null=True)
+    etd = serializers.TimeField(required=False, allow_null=True)
+    planned_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
 
     def validate_call_dates(self, value):
         if not value:

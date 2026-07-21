@@ -18,11 +18,16 @@ HEADER_ALIASES = {
     "CORP": "corp",
     "BRAND": "brand",
     "CAP/REAL": "pax",
+    "REAL PAX": "pax_real_delta",
     "BKNG STATUS": "status_raw",
     "STATUS": "status_raw",
     "BOOKING STATUS": "status_raw",
     "ETA": "eta",
     "ETD": "etd",
+    "ETA2": "eta_real",
+    "ETD2": "etd_real",
+    "ETA (REAL)": "eta_real",
+    "ETD (REAL)": "etd_real",
     "BERTH ASSIG": "berth_assign",
     "BERTH ASSIGN": "berth_assign",
 }
@@ -71,6 +76,19 @@ def _as_pax(value: Any) -> int | None:
         return int(value)
     text = re.sub(r"[^\d]", "", str(value))
     return int(text) if text else None
+
+
+def _as_delta(value: Any) -> int | None:
+    """Parse REAL PAX delta (may be negative)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip().replace(",", "")
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
 
 
 def map_status(raw: str | None, *, c_means_confirmed: bool) -> str | None:
@@ -149,8 +167,11 @@ def parse_workbook(
                 "status": map_status(status_raw, c_means_confirmed=c_means_confirmed),
                 "eta": _as_time(cell("eta")),
                 "etd": _as_time(cell("etd")),
+                "eta_real": _as_time(cell("eta_real")),
+                "etd_real": _as_time(cell("etd_real")),
                 "berth_assign": berth,
                 "pax": _as_pax(cell("pax")),
+                "pax_real_delta": _as_delta(cell("pax_real_delta")),
             }
         )
     return out

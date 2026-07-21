@@ -7,7 +7,11 @@ from apps.catalogs.models import Port, Position, Vessel
 from apps.catalogs.utils.position_code import position_short_code
 
 
-def validate_booking_instance(booking: Booking) -> dict:
+def validate_booking_instance(
+    booking: Booking,
+    *,
+    acknowledge_combined_red: bool = False,
+) -> dict:
     position = booking.position
     if position is None and booking.position_id:
         position = Position.objects.select_related("berth", "port").filter(
@@ -21,6 +25,7 @@ def validate_booking_instance(booking: Booking) -> dict:
         eta=booking.eta,
         etd=booking.etd,
         exclude_booking_id=booking.id,
+        acknowledge_combined_red=acknowledge_combined_red,
     )
 
 
@@ -32,6 +37,7 @@ def validate_booking_params(
     position_id: int | None = None,
     eta=None,
     etd=None,
+    acknowledge_combined_red: bool = False,
 ) -> dict:
     port = Port.objects.get(pk=port_id)
     vessel = Vessel.objects.get(pk=vessel_id)
@@ -53,6 +59,7 @@ def validate_booking_params(
             position=position,
             eta=eta,
             etd=etd,
+            acknowledge_combined_red=acknowledge_combined_red,
         )
         if position is None:
             missing = no_position_available_warning(port, vessel, call_date)

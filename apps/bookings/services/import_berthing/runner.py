@@ -61,6 +61,7 @@ def import_berthing_rows(
     created = 0
     updated = 0
     invalid: list[dict[str, Any]] = []
+    pax_delta_warnings: list[dict[str, Any]] = []
     existing_codes = set(Booking.objects.values_list("booking_code", flat=True))
 
     def process() -> None:
@@ -86,21 +87,41 @@ def import_berthing_rows(
             position = resolve_position(port, row.get("berth_assign"), stats)
             eta = _parse_time(row.get("eta"))
             etd = _parse_time(row.get("etd"))
+            eta_real = _parse_time(row.get("eta_real"))
+            etd_real = _parse_time(row.get("etd_real"))
             pax = row.get("pax")
+            pax_delta = row.get("pax_real_delta")
 
             planned_pax = None
             actual_pax = None
-            if isinstance(pax, int):
-                if status == BookingStatus.R:
+            if status == BookingStatus.R:
+                if isinstance(pax_delta, int):
+                    capacity = vessel.pax_capacity
+                    if capacity is not None:
+                        actual_pax = max(0, int(capacity) + pax_delta)
+                    else:
+                        pax_delta_warnings.append(
+                            {
+                                "ship": ship,
+                                "call_date": call_date,
+                                "reason": "missing_vessel_pax_capacity_for_real_pax_delta",
+                                "delta": pax_delta,
+                            }
+                        )
+                        if isinstance(pax, int):
+                            actual_pax = pax
+                elif isinstance(pax, int):
                     actual_pax = pax
-                else:
-                    planned_pax = pax
+            elif isinstance(pax, int):
+                planned_pax = pax
 
             defaults = {
                 "shipping_line": line,
                 "position": position,
                 "eta": eta,
                 "etd": etd,
+                "eta_real": eta_real,
+                "etd_real": etd_real,
                 "status": status,
                 "planned_pax": planned_pax,
                 "actual_pax": actual_pax,
@@ -176,6 +197,8 @@ def import_berthing_rows(
         "updated": updated,
         "invalid": len(invalid),
         "invalid_rows": invalid[:500],
+        "pax_delta_warnings": len(pax_delta_warnings),
+        "pax_delta_warning_rows": pax_delta_warnings[:200],
         "lines_created": stats.lines_created,
         "vessels_created": stats.vessels_created,
         "positions_null": stats.positions_null,
