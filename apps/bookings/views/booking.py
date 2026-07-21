@@ -39,6 +39,23 @@ from apps.bookings.services.operational_reports import (
     build_booking_totals,
     build_weekly_movements,
 )
+from apps.bookings.services.report_exports import (
+    availability_filename,
+    build_availability_chart_csv,
+    build_availability_chart_xlsx,
+    build_availability_data,
+    build_carrier_panorama,
+    build_carrier_panorama_csv,
+    build_carrier_panorama_xlsx,
+    build_cumplimiento_real,
+    build_cumplimiento_real_csv,
+    build_cumplimiento_real_xlsx,
+    build_week_workbook_xlsx,
+    carrier_panorama_filename,
+    cumplimiento_real_filename,
+    week_workbook_filename,
+)
+from apps.catalogs.models import Port, ShippingLine
 from apps.bookings.services.validation import suggest_positions
 from apps.bookings.utils.list_ordering import apply_booking_list_ordering
 
@@ -469,3 +486,238 @@ class BookingViewSet(
                 allowed_ports=user_port_ids(request.user),
             )
         )
+
+    def _optional_int_param(self, key: str) -> int | None | Response:
+        raw = self.request.query_params.get(key)
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": f"{key} inválido."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["get"], url_path="report-carrier-panorama")
+    def report_carrier_panorama(self, request):
+        date_from, err = self._parse_iso_date_param("date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("date_to")
+        if err:
+            return err
+        line_id = self._optional_int_param("shipping_line")
+        if isinstance(line_id, Response):
+            return line_id
+        if not line_id:
+            return Response(
+                {"detail": "shipping_line es obligatorio."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not ShippingLine.objects.filter(pk=line_id).exists():
+            return Response(
+                {"detail": "Naviera no encontrada."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(
+            build_carrier_panorama(
+                shipping_line_id=line_id,
+                date_from=date_from,
+                date_to=date_to,
+                allowed_ports=user_port_ids(request.user),
+            )
+        )
+
+    @action(detail=False, methods=["get"], url_path="report-availability")
+    def report_availability(self, request):
+        date_from, err = self._parse_iso_date_param("date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("date_to")
+        if err:
+            return err
+        port_id = self._optional_int_param("port")
+        if isinstance(port_id, Response):
+            return port_id
+        if not port_id:
+            return Response(
+                {"detail": "port es obligatorio para Availability Chart."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        self._ensure_port_access(port_id)
+        try:
+            data = build_availability_data(
+                port_id=port_id,
+                date_from=date_from,
+                date_to=date_to,
+                allowed_ports=user_port_ids(request.user),
+                request=request,
+            )
+        except Port.DoesNotExist:
+            return Response(
+                {"detail": "Puerto no encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(data)
+
+    @action(detail=False, methods=["get"], url_path="report-cumplimiento-real")
+    def report_cumplimiento_real(self, request):
+        date_from, err = self._parse_iso_date_param("date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("date_to")
+        if err:
+            return err
+        port_id = self._optional_int_param("port")
+        if isinstance(port_id, Response):
+            return port_id
+        if port_id is not None:
+            self._ensure_port_access(port_id)
+        return Response(
+            build_cumplimiento_real(
+                date_from=date_from,
+                date_to=date_to,
+                port_id=port_id,
+                allowed_ports=user_port_ids(request.user),
+            )
+        )
+
+    @action(detail=False, methods=["get"], url_path="report-export")
+    def report_export(self, request):
+        """Structured operational exports (Availability / WEEK / panorama / REAL)."""
+        report_type = (request.query_params.get("report_type") or "").strip().lower()
+        allowed = {
+            "availability",
+            "week",
+            "carrier_panorama",
+            "cumplimiento_real",
+        }
+        if report_type not in allowed:
+            return Response(
+                {
+                    "detail": (
+                        "report_type debe ser availability, week, "
+                        "carrier_panorama o cumplimiento_real."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        fmt = (request.query_params.get("export_format") or "xlsx").lower()
+        if fmt not in ("xlsx", "csv"):
+            return Response(
+                {"detail": "export_format debe ser xlsx o csv."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if report_type == "week" and fmt == "csv":
+            return Response(
+                {"detail": "El reporte WEEK solo se exporta a Excel (.xlsx)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        date_from, err = self._parse_iso_date_param("date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("date_to")
+        if err:
+            return err
+
+        port_id = self._optional_int_param("port")
+        if isinstance(port_id, Response):
+            return port_id
+        line_id = self._optional_int_param("shipping_line")
+        if isinstance(line_id, Response):
+            return line_id
+        if port_id is not None:
+            self._ensure_port_access(port_id)
+
+        allowed_ports = user_port_ids(request.user)
+        xlsx_type = (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        try:
+            if report_type == "availability":
+                if not port_id:
+                    return Response(
+                        {"detail": "port es obligatorio para Availability Chart."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                builder = (
+                    build_availability_chart_csv
+                    if fmt == "csv"
+                    else build_availability_chart_xlsx
+                )
+                content = builder(
+                    port_id=port_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    allowed_ports=allowed_ports,
+                )
+                port = Port.objects.get(pk=port_id)
+                filename = availability_filename(port.code, date_from, date_to, fmt)
+            elif report_type == "week":
+                content = build_week_workbook_xlsx(
+                    date_from=date_from,
+                    date_to=date_to,
+                    port_id=port_id,
+                    shipping_line_id=line_id,
+                    allowed_ports=allowed_ports,
+                )
+                filename = week_workbook_filename(date_from, date_to)
+            elif report_type == "carrier_panorama":
+                if not line_id:
+                    return Response(
+                        {"detail": "shipping_line es obligatorio para panorama."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                builder = (
+                    build_carrier_panorama_csv
+                    if fmt == "csv"
+                    else build_carrier_panorama_xlsx
+                )
+                content = builder(
+                    shipping_line_id=line_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    allowed_ports=allowed_ports,
+                )
+                line = ShippingLine.objects.get(pk=line_id)
+                filename = carrier_panorama_filename(
+                    line.code or line.name, date_from, date_to, fmt
+                )
+            else:
+                builder = (
+                    build_cumplimiento_real_csv
+                    if fmt == "csv"
+                    else build_cumplimiento_real_xlsx
+                )
+                content = builder(
+                    date_from=date_from,
+                    date_to=date_to,
+                    port_id=port_id,
+                    allowed_ports=allowed_ports,
+                )
+                filename = cumplimiento_real_filename(date_from, date_to, fmt)
+        except Port.DoesNotExist:
+            return Response(
+                {"detail": "Puerto no encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except ShippingLine.DoesNotExist:
+            return Response(
+                {"detail": "Naviera no encontrada."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        content_type = (
+            "text/csv; charset=utf-8" if fmt == "csv" else xlsx_type
+        )
+        response = HttpResponse(content, content_type=content_type)
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
