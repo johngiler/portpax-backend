@@ -89,9 +89,9 @@ if ! command -v psql >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "[restore_db] Target: $POSTGRES_DB @ ${HOST}:${PORT}"
-echo "[restore_db] Source: $DUMP_FILE"
-echo "[restore_db] This will DROP and recreate database «$POSTGRES_DB»."
+echo "[restore_db] Target: ${POSTGRES_DB} @ ${HOST}:${PORT}"
+echo "[restore_db] Source: ${DUMP_FILE}"
+echo "[restore_db] This will DROP and recreate database '${POSTGRES_DB}'."
 
 if [[ "$YES" -ne 1 ]]; then
   read -r -p "Type YES to continue: " confirm
