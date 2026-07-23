@@ -73,6 +73,72 @@ def auto_assign_position(
     return candidates[0][1]
 
 
+def try_preferred_position(
+    port: Port,
+    vessel: Vessel,
+    call_date: date,
+    preferred_position_id: int,
+    *,
+    exclude_booking_id: int | None = None,
+    reserved_position_ids: set[int] | None = None,
+) -> Position | None:
+    """Return preferred pier if free and physically fit; otherwise None."""
+    reserved = reserved_position_ids or set()
+    if preferred_position_id in reserved:
+        return None
+    try:
+        position = Position.objects.select_related("berth").get(
+            pk=preferred_position_id,
+            port_id=port.id,
+            is_active=True,
+        )
+    except Position.DoesNotExist:
+        return None
+
+    physical_issues = validate_physical_fit(vessel, position, port)
+    if any(issue.level == "error" for issue in physical_issues):
+        return None
+
+    occupancy_issues = validate_position_availability(
+        position.id,
+        call_date,
+        exclude_booking_id,
+    )
+    if any(issue.level == "error" for issue in occupancy_issues):
+        return None
+
+    return position
+
+
+def resolve_booking_position(
+    port: Port,
+    vessel: Vessel,
+    call_date: date,
+    *,
+    preferred_position_id: int | None = None,
+    exclude_booking_id: int | None = None,
+    reserved_position_ids: set[int] | None = None,
+) -> Position | None:
+    if preferred_position_id:
+        preferred = try_preferred_position(
+            port,
+            vessel,
+            call_date,
+            preferred_position_id,
+            exclude_booking_id=exclude_booking_id,
+            reserved_position_ids=reserved_position_ids,
+        )
+        if preferred:
+            return preferred
+    return auto_assign_position(
+        port,
+        vessel,
+        call_date,
+        exclude_booking_id=exclude_booking_id,
+        reserved_position_ids=reserved_position_ids,
+    )
+
+
 def no_position_available_warning(
     port: Port,
     vessel: Vessel,

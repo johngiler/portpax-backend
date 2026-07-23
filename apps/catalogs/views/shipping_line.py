@@ -1,6 +1,8 @@
 from django.db.models import Count, Prefetch
-from rest_framework import filters, viewsets
+from django.db.models.deletion import ProtectedError
+from rest_framework import filters, status, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.response import Response
 
 from apps.catalogs.models import ShippingLine, Vessel
 from apps.catalogs.serializers import ShippingLineDetailSerializer, ShippingLineSerializer
@@ -30,3 +32,30 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
         if self.action == "retrieve":
             return base.prefetch_related(Prefetch("vessels", queryset=vessels_qs))
         return base
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            vessel_count = instance.vessels.count()
+            booking_count = instance.bookings.count()
+            parts = []
+            if vessel_count:
+                parts.append(
+                    f"{vessel_count} barco{'s' if vessel_count != 1 else ''}"
+                )
+            if booking_count:
+                parts.append(
+                    f"{booking_count} reserva{'s' if booking_count != 1 else ''}"
+                )
+            linked = " y ".join(parts) if parts else "registros relacionados"
+            return Response(
+                {
+                    "detail": (
+                        f"No se puede eliminar la naviera porque tiene {linked} asociados. "
+                        "Elimina o reasigna esos registros, o desactiva la naviera."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )

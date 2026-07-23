@@ -172,6 +172,7 @@ class BookingViewSet(
                 eta=data.get("eta"),
                 etd=data.get("etd"),
                 planned_pax=data.get("planned_pax"),
+                preferred_position_id=data.get("position"),
             )
         except BookingBatchCreateError as exc:
             payload = {"detail": str(exc)}

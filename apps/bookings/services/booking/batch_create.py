@@ -4,7 +4,7 @@ from django.db import transaction
 
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.booking.code import resolve_unique_booking_code
-from apps.bookings.services.position_assignment import auto_assign_position
+from apps.bookings.services.position_assignment import resolve_booking_position
 from apps.catalogs.models import Port, ShippingLine, Vessel
 
 
@@ -25,6 +25,7 @@ def create_booking_batch(
     eta=None,
     etd=None,
     planned_pax: int | None = None,
+    preferred_position_id: int | None = None,
 ) -> list[Booking]:
     if not call_dates:
         raise BookingBatchCreateError("Selecciona al menos una fecha.", "call_dates")
@@ -95,10 +96,11 @@ def create_booking_batch(
     with transaction.atomic():
         for call_date in unique_dates:
             reserved = reserved_by_date.setdefault(call_date, set())
-            position = auto_assign_position(
+            position = resolve_booking_position(
                 port,
                 vessel,
                 call_date,
+                preferred_position_id=preferred_position_id,
                 reserved_position_ids=reserved,
             )
             if position:

@@ -293,6 +293,7 @@ class BookingBatchCreateSerializer(serializers.Serializer):
     eta = serializers.TimeField(required=False, allow_null=True)
     etd = serializers.TimeField(required=False, allow_null=True)
     planned_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    position = serializers.IntegerField(required=False, allow_null=True)
 
     def validate_call_dates(self, value):
         if not value:
