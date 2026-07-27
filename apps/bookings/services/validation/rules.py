@@ -11,7 +11,7 @@ from apps.bookings.constants import (
     OCCUPATION_CONFLICT_STATUSES,
 )
 from apps.bookings.models import Booking, BookingStatus
-from apps.catalogs.models import Port, Position, PositionPairConstraint, Vessel
+from apps.catalogs.models import Port, Position, PositionNestingRule, PositionPairConstraint, Vessel
 
 FULL_DAY_START = time(0, 0)
 FULL_DAY_END = time(23, 59)
@@ -172,6 +172,31 @@ def validate_multi_port_conflict(
     ]
 
 
+def related_position_ids(position_id: int) -> set[int]:
+    """
+    Positions that physically conflict with this slot.
+
+    Combined E1+E2 conflicts with E1 and E2; a base pier conflicts with
+    any combined slot that includes it.
+    """
+    from apps.catalogs.models import PositionComponent
+
+    ids = {position_id}
+    ids.update(
+        PositionComponent.objects.filter(combined_position_id=position_id).values_list(
+            "source_position_id",
+            flat=True,
+        )
+    )
+    ids.update(
+        PositionComponent.objects.filter(source_position_id=position_id).values_list(
+            "combined_position_id",
+            flat=True,
+        )
+    )
+    return ids
+
+
 def validate_position_availability(
     position_id: int,
     call_date,
@@ -180,8 +205,9 @@ def validate_position_availability(
     eta: time | None = None,
     etd: time | None = None,
 ) -> list[ValidationIssue]:
+    conflict_position_ids = related_position_ids(position_id)
     qs = Booking.objects.filter(
-        position_id=position_id,
+        position_id__in=conflict_position_ids,
         call_date=call_date,
         status__in=OCCUPATION_CONFLICT_STATUSES,
     )
@@ -189,24 +215,39 @@ def validate_position_availability(
         qs = qs.exclude(pk=exclude_booking_id)
 
     issues: list[ValidationIssue] = []
-    for conflict in qs.select_related("vessel"):
+    for conflict in qs.select_related("vessel", "position"):
         if times_overlap(eta, etd, conflict.eta, conflict.etd):
+            other_code = conflict.position.code if conflict.position_id else "?"
             if conflict.status == BookingStatus.CL:
                 issues.append(
                     ValidationIssue(
                         "error",
                         "lta_priority_conflict",
                         f"La posición está ocupada por un call CL (LTA inamovible): "
-                        f"{conflict.vessel.name} ({conflict.booking_code}).",
+                        f"{conflict.vessel.name} ({conflict.booking_code})"
+                        + (
+                            f" en {other_code}."
+                            if conflict.position_id != position_id
+                            else "."
+                        ),
                     )
                 )
             else:
+                msg = (
+                    f"La posición ya está asignada a {conflict.vessel.name} "
+                    f"({conflict.booking_code}) en un horario solapado."
+                )
+                if conflict.position_id != position_id:
+                    msg = (
+                        f"Conflicto con {other_code}: {conflict.vessel.name} "
+                        f"({conflict.booking_code}) en horario solapado "
+                        f"(posición combinada / componente)."
+                    )
                 issues.append(
                     ValidationIssue(
                         "error",
                         "position_occupied",
-                        f"La posición ya está asignada a {conflict.vessel.name} "
-                        f"({conflict.booking_code}) en un horario solapado.",
+                        msg,
                     )
                 )
             continue
@@ -316,6 +357,87 @@ def validate_combined_loa(
     return issues
 
 
+def validate_filo_nesting(
+    position: Position | None,
+    call_date,
+    *,
+    eta: time | None = None,
+    etd: time | None = None,
+    exclude_booking_id: int | None = None,
+) -> list[ValidationIssue]:
+    """
+    First-in / last-out when both nested positions are occupied the same day.
+
+    outer (entrance) must arrive first; inner (fondo) must not arrive earlier.
+    Optionally inner must depart before or with outer (last-out).
+    """
+    if not position:
+        return []
+
+    rules = (
+        PositionNestingRule.objects.filter(port_id=position.port_id, is_active=True)
+        .filter(Q(outer_position_id=position.id) | Q(inner_position_id=position.id))
+        .select_related("outer_position", "inner_position")
+    )
+    if not rules:
+        return []
+
+    issues: list[ValidationIssue] = []
+    for rule in rules:
+        sibling_id = (
+            rule.inner_position_id
+            if position.id == rule.outer_position_id
+            else rule.outer_position_id
+        )
+        sibling = Booking.objects.filter(
+            position_id=sibling_id,
+            call_date=call_date,
+            status__in=OCCUPATION_CONFLICT_STATUSES,
+        ).select_related("vessel", "position")
+        if exclude_booking_id:
+            sibling = sibling.exclude(pk=exclude_booking_id)
+        other = sibling.first()
+        if not other:
+            continue
+
+        if position.id == rule.outer_position_id:
+            outer_eta, outer_etd = eta, etd
+            inner_eta, inner_etd = other.eta, other.etd
+            outer_label = position.code
+            inner_label = other.position.code if other.position_id else rule.inner_position.code
+        else:
+            outer_eta, outer_etd = other.eta, other.etd
+            inner_eta, inner_etd = eta, etd
+            outer_label = other.position.code if other.position_id else rule.outer_position.code
+            inner_label = position.code
+
+        if rule.enforce_eta and outer_eta is not None and inner_eta is not None:
+            if inner_eta < outer_eta:
+                issues.append(
+                    ValidationIssue(
+                        "error",
+                        "filo_eta_violation",
+                        f"First-in / last-out: {inner_label} no puede arribar "
+                        f"({inner_eta.strftime('%H:%M')}) antes que {outer_label} "
+                        f"({outer_eta.strftime('%H:%M')}).",
+                    )
+                )
+
+        if rule.enforce_etd and outer_etd is not None and inner_etd is not None:
+            if inner_etd > outer_etd:
+                issues.append(
+                    ValidationIssue(
+                        "error",
+                        "filo_etd_violation",
+                        f"First-in / last-out: {inner_label} no puede zarpar "
+                        f"({inner_etd.strftime('%H:%M')}) después que {outer_label} "
+                        f"({outer_etd.strftime('%H:%M')}).",
+                    )
+                )
+
+    return issues
+
+
 def validate_booking(
     *,
     port: Port,
@@ -342,6 +464,15 @@ def validate_booking(
         issues.extend(validate_physical_fit(vessel, position, port))
         issues.extend(validate_min_eta(position, eta))
         issues.extend(validate_combined_loa(vessel, position, call_date, exclude_booking_id))
+        issues.extend(
+            validate_filo_nesting(
+                position,
+                call_date,
+                eta=eta,
+                etd=etd,
+                exclude_booking_id=exclude_booking_id,
+            )
+        )
 
     if acknowledge_combined_red:
         for issue in issues:

@@ -9,12 +9,19 @@ from apps.bookings.services.validation.rules import (
     _decimal,
 )
 from apps.catalogs.models import Port, Position, Vessel
+from apps.catalogs.services.position_combination import position_is_combined
 
 
 def _rank_position(vessel: Vessel, position: Position, port: Port) -> tuple:
-    """Lower tuple wins. First-in: sort_order before tighter LOA fit."""
+    """
+    Lower tuple wins.
+
+    Prefer simple pier slots over combined (E1+E2) when both fit, then
+    catalog sort_order, then overhang, then tighter LOA fit.
+    """
     physical = validate_physical_fit(vessel, position, port)
     has_overhang = 1 if any(i.code == "loa_overhang" for i in physical) else 0
+    is_combined = 1 if position_is_combined(position) else 0
 
     loa = _decimal(vessel.loa_m)
     max_loa = _decimal(position.max_loa_m)
@@ -22,7 +29,7 @@ def _rank_position(vessel: Vessel, position: Position, port: Port) -> tuple:
     if loa is not None and max_loa is not None:
         loa_slack = abs(max_loa - loa)
 
-    return (position.sort_order, has_overhang, loa_slack, position.code)
+    return (is_combined, position.sort_order, has_overhang, loa_slack, position.code)
 
 
 def auto_assign_position(
@@ -36,15 +43,20 @@ def auto_assign_position(
     """
     Pick the best pier slot for vessel dimensions on call_date.
 
-    First-in order (sort_order / P1 before P2), then physical fit without errors.
+    Prefers a simple pier that fits LOA/draft over a combined slot.
     Skips occupied slots and slots reserved in the same batch transaction.
     """
     reserved = reserved_position_ids or set()
 
-    positions = Position.objects.filter(
-        port_id=port.id,
-        is_active=True,
-    ).select_related("berth").order_by("sort_order", "code")
+    positions = (
+        Position.objects.filter(
+            port_id=port.id,
+            is_active=True,
+        )
+        .select_related("berth")
+        .prefetch_related("component_links")
+        .order_by("sort_order", "code")
+    )
 
     candidates: list[tuple[tuple, Position]] = []
 
@@ -87,10 +99,14 @@ def try_preferred_position(
     if preferred_position_id in reserved:
         return None
     try:
-        position = Position.objects.select_related("berth").get(
-            pk=preferred_position_id,
-            port_id=port.id,
-            is_active=True,
+        position = (
+            Position.objects.select_related("berth")
+            .prefetch_related("component_links")
+            .get(
+                pk=preferred_position_id,
+                port_id=port.id,
+                is_active=True,
+            )
         )
     except Position.DoesNotExist:
         return None

@@ -9,6 +9,7 @@ from apps.catalogs.views import (
     PortImageViewSet,
     PortViewSet,
     PositionImageViewSet,
+    PositionNestingRuleViewSet,
     PositionViewSet,
     ShippingLineGroupViewSet,
     ShippingLineViewSet,
@@ -19,6 +20,11 @@ router = DefaultRouter()
 router.register("ports", PortViewSet, basename="port")
 router.register("berths", BerthViewSet, basename="berth")
 router.register("positions", PositionViewSet, basename="position")
+router.register(
+    "position-nesting-rules",
+    PositionNestingRuleViewSet,
+    basename="position-nesting-rule",
+)
 router.register("berth-images", BerthImageViewSet, basename="berth-image")
 router.register("port-bollards", PortBollardViewSet, basename="port-bollard")
 router.register("port-fenders", PortFenderViewSet, basename="port-fender")

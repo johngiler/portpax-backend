@@ -11,6 +11,7 @@ from apps.catalogs.models import (
     PortImage,
     Position,
     PositionImage,
+    PositionNestingRule,
     PositionPairConstraint,
     ShippingLine,
     ShippingLineGroup,
@@ -119,6 +120,25 @@ class PositionAdmin(admin.ModelAdmin):
     list_filter = ("port", "position_type", "is_active")
     search_fields = ("code", "port__code")
     inlines = (PositionImageInline,)
+
+
+@admin.register(PositionNestingRule)
+class PositionNestingRuleAdmin(admin.ModelAdmin):
+    list_display = (
+        "port",
+        "outer_position",
+        "inner_position",
+        "enforce_eta",
+        "enforce_etd",
+        "is_active",
+    )
+    list_filter = ("port", "is_active", "enforce_eta", "enforce_etd")
+    search_fields = (
+        "port__code",
+        "outer_position__code",
+        "inner_position__code",
+        "notes",
+    )
 
 
 @admin.register(PositionPairConstraint)
