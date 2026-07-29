@@ -57,6 +57,12 @@ class BookingSerializer(serializers.ModelSerializer):
     )
     cancellation_evidence_url = serializers.SerializerMethodField()
     confirmation_pdf_url = serializers.SerializerMethodField()
+    long_term_agreement = serializers.IntegerField(
+        source="long_term_agreement_id",
+        read_only=True,
+        allow_null=True,
+    )
+    long_term_agreement_code = serializers.SerializerMethodField()
     audit_entries = BookingAuditEntrySerializer(many=True, read_only=True)
 
     class Meta:
@@ -93,6 +99,8 @@ class BookingSerializer(serializers.ModelSerializer):
             "cancellation_reason_display",
             "cancellation_evidence_url",
             "confirmation_pdf_url",
+            "long_term_agreement",
+            "long_term_agreement_code",
             "audit_entries",
             "created_at",
             "updated_at",
@@ -126,6 +134,11 @@ class BookingSerializer(serializers.ModelSerializer):
 
     def get_confirmation_pdf_url(self, obj) -> str | None:
         return self._file_url(obj.confirmation_pdf)
+
+    def get_long_term_agreement_code(self, obj) -> str | None:
+        if not obj.long_term_agreement_id:
+            return None
+        return obj.long_term_agreement.code
 
 
 class BookingUpdateSerializer(serializers.Serializer):

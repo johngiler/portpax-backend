@@ -438,6 +438,100 @@ def validate_filo_nesting(
     return issues
 
 
+def validate_lta(
+    port: Port,
+    vessel: Vessel,
+    call_date,
+    position: Position | None = None,
+) -> list[ValidationIssue]:
+    """
+    LTA horizon + strategic slot ownership (RN-06 prerequisites).
+
+    - Far window (default 18–32 months): only matching LTA holders.
+    - Beyond max horizon: blocked unless a matching LTA allows further.
+    - Foreign LTA owning weekday+position: block other lines.
+    """
+    from datetime import date as date_cls
+
+    from apps.bookings.services.lta.matching import (
+        DEFAULT_ADVANCE_MONTHS_MAX,
+        DEFAULT_ADVANCE_MONTHS_MIN,
+        add_months,
+        find_best_matching_agreement,
+        find_foreign_slot_agreements,
+        system_far_window,
+    )
+
+    issues: list[ValidationIssue] = []
+    today = date_cls.today()
+    shipping_line_id = vessel.shipping_line_id
+
+    foreign = find_foreign_slot_agreements(
+        port_id=port.id,
+        shipping_line_id=shipping_line_id,
+        call_date=call_date,
+        position=position,
+    )
+    if foreign:
+        other = foreign[0]
+        issues.append(
+            ValidationIssue(
+                "error",
+                "lta_slot_reserved",
+                f"La posición está reservada por el LTA {other.code} "
+                f"({other.shipping_line.code}) en este día de la semana.",
+            )
+        )
+
+    own = find_best_matching_agreement(
+        port_id=port.id,
+        shipping_line_id=shipping_line_id,
+        vessel=vessel,
+        call_date=call_date,
+        position=position,
+    )
+
+    far_start, far_end = system_far_window(today)
+    if own:
+        holder_end = add_months(today, own.advance_months_max)
+        holder_start = add_months(today, own.advance_months_min)
+        if call_date > holder_end:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "lta_beyond_horizon",
+                    f"La fecha supera el máximo del LTA {own.code} "
+                    f"({own.advance_months_max} meses).",
+                )
+            )
+        elif call_date >= holder_start:
+            # Holder is within their strategic window — allowed.
+            pass
+        return issues
+
+    # No matching LTA: enforce default open window only (< 18 months).
+    if call_date > far_end:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "lta_beyond_horizon",
+                f"No se puede reservar a más de {DEFAULT_ADVANCE_MONTHS_MAX} meses "
+                "sin un acuerdo LTA vigente.",
+            )
+        )
+    elif call_date >= far_start:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "lta_horizon_denied",
+                f"Entre {DEFAULT_ADVANCE_MONTHS_MIN} y {DEFAULT_ADVANCE_MONTHS_MAX} meses "
+                "solo navieras con LTA vigente pueden reservar esta escala.",
+            )
+        )
+
+    return issues
+
+
 def validate_booking(
     *,
     port: Port,
@@ -451,6 +545,7 @@ def validate_booking(
 ) -> dict:
     issues: list[ValidationIssue] = []
     issues.extend(validate_multi_port_conflict(vessel.id, call_date, port.id, exclude_booking_id))
+    issues.extend(validate_lta(port, vessel, call_date, position))
     if position:
         issues.extend(
             validate_position_availability(

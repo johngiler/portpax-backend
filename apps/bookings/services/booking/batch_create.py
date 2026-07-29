@@ -128,8 +128,20 @@ def create_booking_batch(
                     etd=etd,
                     planned_pax=planned_pax,
                     created_by=created_by,
+                    long_term_agreement=None,
                 )
             )
+        from apps.bookings.services.lta.matching import find_best_matching_agreement
+
+        for booking in bookings:
+            agreement = find_best_matching_agreement(
+                port_id=port.id,
+                shipping_line_id=shipping_line.id,
+                vessel=vessel,
+                call_date=booking.call_date,
+                position=booking.position,
+            )
+            booking.long_term_agreement = agreement
         Booking.objects.bulk_create(bookings)
 
     created = list(

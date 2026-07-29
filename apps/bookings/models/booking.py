@@ -75,6 +75,14 @@ class Booking(models.Model):
         null=True,
         blank=True,
     )
+    long_term_agreement = models.ForeignKey(
+        "bookings.LongTermAgreement",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bookings",
+        help_text="Linked LTA when the call uses the LTA track.",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

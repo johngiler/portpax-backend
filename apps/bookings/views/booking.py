@@ -92,6 +92,7 @@ class BookingViewSet(
             "shipping_line",
             "vessel",
             "position",
+            "long_term_agreement",
         ).prefetch_related("audit_entries")
         allowed_ports = user_port_ids(self.request.user)
         if allowed_ports is not None:

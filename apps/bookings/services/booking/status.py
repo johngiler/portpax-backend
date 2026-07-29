@@ -21,7 +21,7 @@ class BookingValidationError(Exception):
 
 
 ALLOWED_TRANSITIONS: dict[str, set[str]] = {
-    BookingStatus.NR: {BookingStatus.H, BookingStatus.CO, BookingStatus.C},
+    BookingStatus.NR: {BookingStatus.H, BookingStatus.CO, BookingStatus.LTA, BookingStatus.C},
     BookingStatus.H: {BookingStatus.CO, BookingStatus.C},
     BookingStatus.CO: {BookingStatus.R, BookingStatus.C},
     # Historic LTA track: treat as occupied like CO until closed or cancelled.
@@ -103,10 +103,38 @@ def update_booking_status(
                 validation["errors"],
             )
 
+    if new_status in (BookingStatus.LTA, BookingStatus.CL):
+        from apps.bookings.services.lta.matching import find_best_matching_agreement
+
+        agreement = booking.long_term_agreement
+        if agreement is None:
+            agreement = find_best_matching_agreement(
+                port_id=booking.port_id,
+                shipping_line_id=booking.shipping_line_id,
+                vessel=booking.vessel,
+                call_date=booking.call_date,
+                position=booking.position,
+            )
+        if agreement is None:
+            raise BookingStatusError(
+                "No hay un acuerdo LTA vigente que cubra esta reserva "
+                "(puerto, naviera, barco, día y posición)."
+            )
+        booking.long_term_agreement = agreement
+
+        validation = validate_booking_instance(booking)
+        if not validation["valid"]:
+            raise BookingValidationError(
+                "La reserva no cumple las validaciones operativas.",
+                validation["errors"],
+            )
+
     old_status = booking.status
     booking.status = new_status
 
     update_fields = ["status", "updated_at"]
+    if new_status in (BookingStatus.LTA, BookingStatus.CL) and booking.long_term_agreement_id:
+        update_fields.append("long_term_agreement")
     if new_status == BookingStatus.C and cancellation_reason:
         booking.cancellation_reason = cancellation_reason
         update_fields.append("cancellation_reason")
