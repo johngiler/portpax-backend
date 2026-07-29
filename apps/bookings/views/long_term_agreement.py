@@ -1,10 +1,13 @@
-from rest_framework import filters, viewsets
+from rest_framework import filters, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 from apps.accounts.permissions import DenyViewerWrites
 from apps.bookings.models import LongTermAgreement
 from apps.bookings.serializers.long_term_agreement import LongTermAgreementSerializer
+from apps.bookings.services.lta.link_bookings import link_matching_bookings
 from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
 
 
@@ -42,3 +45,10 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
         if active is not None and active != "":
             qs = qs.filter(is_active=active.lower() in ("1", "true", "yes"))
         return qs
+
+    @action(detail=True, methods=["post"], url_path="link-bookings")
+    def link_bookings(self, request, pk=None):
+        """Link existing unmatched bookings that this LTA covers."""
+        agreement = self.get_object()
+        result = link_matching_bookings(agreement, user=request.user)
+        return Response(result, status=status.HTTP_200_OK)
