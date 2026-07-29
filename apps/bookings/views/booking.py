@@ -60,6 +60,9 @@ from apps.bookings.services.validation import suggest_positions
 from apps.bookings.services.import_mass import (
     ItmParseError,
     create_from_resolved_rows,
+    parse_availability_list_tsv,
+    parse_availability_list_workbook,
+    parse_itm_tsv,
     parse_itm_workbook,
     resolve_itm_rows,
 )
@@ -198,25 +201,38 @@ class BookingViewSet(
     @action(detail=False, methods=["post"], url_path="bulk-import/preview")
     def bulk_import_preview(self, request):
         upload = request.FILES.get("file")
+        paste_text = ""
         if not upload:
+            if isinstance(request.data, dict):
+                paste_text = (request.data.get("text") or request.data.get("tsv") or "")
+            paste_text = str(paste_text).strip()
+
+        if not upload and not paste_text:
             return Response(
-                {"detail": "Adjunta un archivo Excel (.xlsx)."},
+                {
+                    "detail": "Adjunta un Excel (.xlsx) o pega las celdas "
+                    "(Ship, Port, Arrival, Departure)."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        name = (upload.name or "").lower()
-        if not name.endswith((".xlsx", ".xlsm")):
-            return Response(
-                {"detail": "El archivo debe ser Excel (.xlsx)."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+
         try:
-            raw_rows = parse_itm_workbook(upload)
+            if upload:
+                name = (upload.name or "").lower()
+                if not name.endswith((".xlsx", ".xlsm")):
+                    return Response(
+                        {"detail": "El archivo debe ser Excel (.xlsx)."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                raw_rows = parse_itm_workbook(upload)
+            else:
+                raw_rows = parse_itm_tsv(paste_text)
             rows = resolve_itm_rows(raw_rows)
         except ItmParseError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception:
             return Response(
-                {"detail": "No se pudo leer el archivo Excel."},
+                {"detail": "No se pudo leer los datos de reservas."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -268,6 +284,46 @@ class BookingViewSet(
             else status.HTTP_400_BAD_REQUEST
         )
         return Response(result, status=status_code)
+
+    @action(detail=False, methods=["post"], url_path="bulk-import/availability-filter")
+    def bulk_import_availability_filter(self, request):
+        """Parse dates from Excel file or pasted text (dates column only)."""
+        upload = request.FILES.get("file")
+        paste_text = ""
+        if not upload:
+            if isinstance(request.data, dict):
+                paste_text = (request.data.get("text") or request.data.get("tsv") or "")
+            else:
+                paste_text = ""
+            paste_text = str(paste_text).strip()
+
+        if not upload and not paste_text:
+            return Response(
+                {
+                    "detail": "Adjunta un Excel (.xlsx) o pega la columna de fechas."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            if upload:
+                name = (upload.name or "").lower()
+                if not name.endswith((".xlsx", ".xlsm")):
+                    return Response(
+                        {"detail": "El archivo debe ser Excel (.xlsx)."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                payload = parse_availability_list_workbook(upload)
+            else:
+                payload = parse_availability_list_tsv(paste_text)
+        except ItmParseError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            return Response(
+                {"detail": "No se pudo leer los datos de disponibilidad."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(payload)
 
     @action(detail=False, methods=["post"], url_path="validate")
     def validate(self, request):
