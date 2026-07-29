@@ -57,6 +57,12 @@ from apps.bookings.services.report_exports import (
 )
 from apps.catalogs.models import Port, ShippingLine
 from apps.bookings.services.validation import suggest_positions
+from apps.bookings.services.import_mass import (
+    ItmParseError,
+    create_from_resolved_rows,
+    parse_itm_workbook,
+    resolve_itm_rows,
+)
 from apps.bookings.utils.list_ordering import apply_booking_list_ordering
 
 _PORT_ACCESS_DENIED = "No tienes acceso a este puerto."
@@ -185,6 +191,80 @@ class BookingViewSet(
             BookingSerializer(bookings, many=True, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=False, methods=["post"], url_path="bulk-import/preview")
+    def bulk_import_preview(self, request):
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response(
+                {"detail": "Adjunta un archivo Excel (.xlsx)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        name = (upload.name or "").lower()
+        if not name.endswith((".xlsx", ".xlsm")):
+            return Response(
+                {"detail": "El archivo debe ser Excel (.xlsx)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            raw_rows = parse_itm_workbook(upload)
+            rows = resolve_itm_rows(raw_rows)
+        except ItmParseError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            return Response(
+                {"detail": "No se pudo leer el archivo Excel."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        allowed = user_port_ids(request.user)
+        if allowed is not None:
+            for row in rows:
+                if row.get("port_id") and row["port_id"] not in allowed:
+                    row["issues"] = [
+                        *row.get("issues", []),
+                        "No tienes acceso a este puerto.",
+                    ]
+                    row["selectable"] = False
+                    row["selected_default"] = False
+
+        selectable_count = sum(1 for row in rows if row.get("selectable"))
+        return Response(
+            {
+                "rows": rows,
+                "total": len(rows),
+                "selectable_count": selectable_count,
+            }
+        )
+
+    @action(detail=False, methods=["post"], url_path="bulk-import/create")
+    def bulk_import_create(self, request):
+        rows = request.data.get("rows")
+        if not isinstance(rows, list) or not rows:
+            return Response(
+                {"detail": "Selecciona al menos una reserva para crear."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        allowed = user_port_ids(request.user)
+        for row in rows:
+            port_id = row.get("port_id")
+            if not port_id:
+                return Response(
+                    {"detail": "Hay filas sin puerto resuelto."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            self._ensure_port_access(port_id)
+            if allowed is not None and int(port_id) not in allowed:
+                raise PermissionDenied(_PORT_ACCESS_DENIED)
+
+        result = create_from_resolved_rows(rows, created_by=request.user)
+        status_code = (
+            status.HTTP_201_CREATED
+            if result["created_count"] > 0
+            else status.HTTP_400_BAD_REQUEST
+        )
+        return Response(result, status=status_code)
 
     @action(detail=False, methods=["post"], url_path="validate")
     def validate(self, request):
