@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import IsFrontendAppUser, user_port_ids, user_role
-from apps.bookings.models import Booking
+from apps.bookings.models import Booking, LongTermAgreement
 from apps.catalogs.models import Port, ShippingLine
 
 User = get_user_model()
@@ -30,9 +30,11 @@ class NavCountsView(APIView):
 
         bookings_qs = Booking.objects.all()
         ports_qs = Port.objects.filter(is_active=True)
+        lta_qs = LongTermAgreement.objects.all()
         if allowed_ports is not None:
             bookings_qs = bookings_qs.filter(port_id__in=allowed_ports)
             ports_qs = ports_qs.filter(id__in=allowed_ports)
+            lta_qs = lta_qs.filter(port_id__in=allowed_ports)
 
         today = timezone.localdate()
         year_bookings = bookings_qs.filter(call_date__year=today.year)
@@ -42,6 +44,7 @@ class NavCountsView(APIView):
             "reports": year_bookings.count(),
             "ports": ports_qs.count(),
             "shipping_lines": ShippingLine.objects.filter(is_active=True).count(),
+            "lta_agreements": lta_qs.count(),
             "users": None,
             "report_modules": REPORT_MODULE_COUNT,
         }

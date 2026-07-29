@@ -112,6 +112,9 @@ class BookingViewSet(
         vessel_id = self.request.query_params.get("vessel")
         if vessel_id:
             qs = qs.filter(vessel_id=vessel_id)
+        lta_id = self.request.query_params.get("long_term_agreement")
+        if lta_id:
+            qs = qs.filter(long_term_agreement_id=lta_id)
         status_param = self.request.query_params.get("status")
         if status_param == "completed":
             qs = qs.filter(
