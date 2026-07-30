@@ -114,6 +114,9 @@ class BookingViewSet(
         port_id = self.request.query_params.get("port")
         if port_id:
             qs = qs.filter(port_id=port_id)
+        position_id = self.request.query_params.get("position")
+        if position_id:
+            qs = qs.filter(position_id=position_id)
         shipping_line_id = self.request.query_params.get("shipping_line")
         if shipping_line_id:
             qs = qs.filter(shipping_line_id=shipping_line_id)
@@ -800,6 +803,15 @@ class BookingViewSet(
                 {"detail": "port es obligatorio para Availability Chart."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        line_id = self._optional_int_param("shipping_line")
+        if isinstance(line_id, Response):
+            return line_id
+        vessel_id = self._optional_int_param("vessel")
+        if isinstance(vessel_id, Response):
+            return vessel_id
+        position_id = self._optional_int_param("position")
+        if isinstance(position_id, Response):
+            return position_id
         self._ensure_port_access(port_id)
         try:
             data = build_availability_data(
@@ -807,6 +819,9 @@ class BookingViewSet(
                 date_from=date_from,
                 date_to=date_to,
                 allowed_ports=user_port_ids(request.user),
+                shipping_line_id=line_id,
+                vessel_id=vessel_id,
+                position_id=position_id,
                 request=request,
             )
         except Port.DoesNotExist:
@@ -886,6 +901,12 @@ class BookingViewSet(
         line_id = self._optional_int_param("shipping_line")
         if isinstance(line_id, Response):
             return line_id
+        vessel_id = self._optional_int_param("vessel")
+        if isinstance(vessel_id, Response):
+            return vessel_id
+        position_id = self._optional_int_param("position")
+        if isinstance(position_id, Response):
+            return position_id
         if port_id is not None:
             self._ensure_port_access(port_id)
 
@@ -911,6 +932,9 @@ class BookingViewSet(
                     date_from=date_from,
                     date_to=date_to,
                     allowed_ports=allowed_ports,
+                    shipping_line_id=line_id,
+                    vessel_id=vessel_id,
+                    position_id=position_id,
                 )
                 port = Port.objects.get(pk=port_id)
                 filename = availability_filename(port.code, date_from, date_to, fmt)

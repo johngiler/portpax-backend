@@ -87,6 +87,7 @@ def _search_vessels(q: str) -> list[dict]:
         {
             "id": vessel.id,
             "name": vessel.name,
+            "shipping_line_id": vessel.shipping_line_id,
             "shipping_line_name": vessel.shipping_line.name,
             "shipping_line_code": vessel.shipping_line.code,
         }

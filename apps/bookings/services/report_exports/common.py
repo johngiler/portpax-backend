@@ -23,6 +23,8 @@ def scheduled_bookings_qs(
     date_to: date,
     port_id: int | None = None,
     shipping_line_id: int | None = None,
+    vessel_id: int | None = None,
+    position_id: int | None = None,
     allowed_ports: set[int] | None = None,
 ):
     """Bookings that count toward occupancy / PAX reports (excludes cancelled)."""
@@ -37,6 +39,10 @@ def scheduled_bookings_qs(
         qs = qs.filter(port_id=port_id)
     if shipping_line_id:
         qs = qs.filter(shipping_line_id=shipping_line_id)
+    if vessel_id:
+        qs = qs.filter(vessel_id=vessel_id)
+    if position_id:
+        qs = qs.filter(position_id=position_id)
     return qs
 
 

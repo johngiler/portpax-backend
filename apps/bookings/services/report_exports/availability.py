@@ -23,15 +23,19 @@ def _availability_matrix(
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None = None,
+    shipping_line_id: int | None = None,
+    vessel_id: int | None = None,
+    position_id: int | None = None,
 ) -> tuple[list[str], list[list[str]]]:
     if allowed_ports is not None and port_id not in allowed_ports:
         raise ValueError("Puerto no permitido.")
 
     Port.objects.get(pk=port_id)
+    positions_qs = Position.objects.filter(port_id=port_id, is_active=True)
+    if position_id:
+        positions_qs = positions_qs.filter(pk=position_id)
     positions = list(
-        Position.objects.filter(port_id=port_id, is_active=True)
-        .select_related("berth")
-        .order_by("sort_order", "code")
+        positions_qs.select_related("berth").order_by("sort_order", "code")
     )
     pos_codes = [p.code for p in positions]
     pos_by_id = {p.id: p.code for p in positions}
@@ -42,6 +46,9 @@ def _availability_matrix(
         date_to=date_to,
         port_id=port_id,
         allowed_ports=allowed_ports,
+        shipping_line_id=shipping_line_id,
+        vessel_id=vessel_id,
+        position_id=position_id,
     )
     for b in qs.iterator(chunk_size=500):
         code = pos_by_id.get(b.position_id) if b.position_id else "TBD"
@@ -74,16 +81,20 @@ def build_availability_data(
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None = None,
+    shipping_line_id: int | None = None,
+    vessel_id: int | None = None,
+    position_id: int | None = None,
     request: Any = None,
 ) -> dict:
     """JSON payload for the on-screen Availability Chart (day × position)."""
     if allowed_ports is not None and port_id not in allowed_ports:
         raise ValueError("Puerto no permitido.")
     port = Port.objects.get(pk=port_id)
+    positions_qs = Position.objects.filter(port_id=port_id, is_active=True)
+    if position_id:
+        positions_qs = positions_qs.filter(pk=position_id)
     positions = list(
-        Position.objects.filter(port_id=port_id, is_active=True)
-        .select_related("berth")
-        .order_by("sort_order", "code")
+        positions_qs.select_related("berth").order_by("sort_order", "code")
     )
     position_index = {position.id: index for index, position in enumerate(positions)}
     columns = [
@@ -108,6 +119,9 @@ def build_availability_data(
             date_to=date_to,
             port_id=port_id,
             allowed_ports=allowed_ports,
+            shipping_line_id=shipping_line_id,
+            vessel_id=vessel_id,
+            position_id=position_id,
         )
     )
     has_unassigned = any(booking.position_id not in position_index for booking in bookings)
@@ -181,12 +195,18 @@ def build_availability_chart_xlsx(
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None = None,
+    shipping_line_id: int | None = None,
+    vessel_id: int | None = None,
+    position_id: int | None = None,
 ) -> bytes:
     header, rows = _availability_matrix(
         port_id=port_id,
         date_from=date_from,
         date_to=date_to,
         allowed_ports=allowed_ports,
+        shipping_line_id=shipping_line_id,
+        vessel_id=vessel_id,
+        position_id=position_id,
     )
     wb = Workbook()
     ws = wb.active
@@ -212,12 +232,18 @@ def build_availability_chart_csv(
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None = None,
+    shipping_line_id: int | None = None,
+    vessel_id: int | None = None,
+    position_id: int | None = None,
 ) -> bytes:
     header, rows = _availability_matrix(
         port_id=port_id,
         date_from=date_from,
         date_to=date_to,
         allowed_ports=allowed_ports,
+        shipping_line_id=shipping_line_id,
+        vessel_id=vessel_id,
+        position_id=position_id,
     )
     buf = StringIO()
     writer = csv.writer(buf)
