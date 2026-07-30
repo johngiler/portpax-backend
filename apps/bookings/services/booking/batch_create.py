@@ -26,6 +26,7 @@ def create_booking_batch(
     etd=None,
     planned_pax: int | None = None,
     preferred_position_id: int | None = None,
+    audit_changes: dict | None = None,
 ) -> list[Booking]:
     if not call_dates:
         raise BookingBatchCreateError("Selecciona al menos una fecha.", "call_dates")
@@ -162,6 +163,7 @@ def create_booking_batch(
             booking,
             action="created",
             summary=summary,
+            changes=audit_changes,
             user=created_by,
         )
 

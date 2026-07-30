@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.bookings.models import Booking, LongTermAgreement
+from apps.bookings.models import Booking, BookingImportBatch, LongTermAgreement
 
 
 @admin.register(Booking)
@@ -20,6 +20,34 @@ class BookingAdmin(admin.ModelAdmin):
     readonly_fields = ["booking_code", "created_at", "updated_at"]
     ordering = ["-call_date"]
     raw_id_fields = ["long_term_agreement"]
+
+
+@admin.register(BookingImportBatch)
+class BookingImportBatchAdmin(admin.ModelAdmin):
+    list_display = [
+        "id",
+        "label",
+        "source",
+        "created_count",
+        "failed_count",
+        "requested_count",
+        "created_by",
+        "created_at",
+        "status",
+    ]
+    list_filter = ["source", "status"]
+    search_fields = ["label"]
+    readonly_fields = [
+        "created_at",
+        "finished_at",
+        "created_booking_ids",
+        "failures",
+        "retry_rows",
+        "requested_count",
+        "created_count",
+        "failed_count",
+    ]
+    ordering = ["-created_at"]
 
 
 @admin.register(LongTermAgreement)

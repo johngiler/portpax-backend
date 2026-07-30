@@ -16,7 +16,7 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import DenyViewerWrites, user_can_access_port, user_port_ids
 from apps.bookings.constants import ACTIVE_BOOKING_STATUSES
-from apps.bookings.models import Booking, BookingStatus
+from apps.bookings.models import Booking, BookingImportBatch, BookingStatus
 from apps.bookings.serializers import (
     BookingBatchCreateSerializer,
     BookingSerializer,
@@ -28,6 +28,10 @@ from apps.bookings.services.booking import (
     BookingDeleteError,
     create_booking_batch,
     delete_cancelled_booking,
+)
+from apps.bookings.services.booking_activity import (
+    build_booking_activity,
+    build_import_batch_detail,
 )
 from apps.bookings.services.booking_export import build_bookings_csv, build_bookings_xlsx
 from apps.bookings.services.calendar_export import (
@@ -66,6 +70,7 @@ from apps.bookings.services.import_mass import (
     parse_itm_workbook,
     resolve_itm_rows,
 )
+from apps.bookings.services.import_mass.export_rows import build_import_rows_xlsx
 from apps.bookings.utils.list_ordering import apply_booking_list_ordering
 
 _PORT_ACCESS_DENIED = "No tienes acceso a este puerto."
@@ -277,13 +282,122 @@ class BookingViewSet(
             if allowed is not None and int(port_id) not in allowed:
                 raise PermissionDenied(_PORT_ACCESS_DENIED)
 
-        result = create_from_resolved_rows(rows, created_by=request.user)
-        status_code = (
-            status.HTTP_201_CREATED
-            if result["created_count"] > 0
-            else status.HTTP_400_BAD_REQUEST
+        source = request.data.get("source") or "file"
+        label = request.data.get("label") or request.data.get("file_name") or ""
+        deferred = request.data.get("deferred_rows") or []
+        if not isinstance(deferred, list):
+            deferred = []
+        result = create_from_resolved_rows(
+            rows,
+            created_by=request.user,
+            source=str(source),
+            label=str(label),
+            deferred_rows=deferred,
         )
-        return Response(result, status=status_code)
+        # Batch is always persisted; include total-failure runs so the client can open detail.
+        return Response(result, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["get"], url_path="activity")
+    def activity(self, request):
+        try:
+            page = int(request.query_params.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get("page_size") or 20)
+        except (TypeError, ValueError):
+            page_size = 20
+
+        data = build_booking_activity(
+            user=request.user,
+            allowed_ports=user_port_ids(request.user),
+            kind=request.query_params.get("kind") or "all",
+            date_from=request.query_params.get("date_from"),
+            date_to=request.query_params.get("date_to"),
+            page=page,
+            page_size=page_size,
+        )
+        return Response(data)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"import-batches/(?P<batch_id>[0-9]+)",
+    )
+    def import_batch_detail(self, request, batch_id=None):
+        allowed = user_port_ids(request.user)
+        try:
+            batch = BookingImportBatch.objects.select_related("created_by").get(
+                pk=batch_id
+            )
+        except BookingImportBatch.DoesNotExist:
+            return Response(
+                {"detail": "No encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if allowed is not None and batch.created_by_id != request.user.id:
+            return Response(
+                {"detail": "No encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(
+            build_import_batch_detail(batch, allowed_ports=allowed),
+        )
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"import-batches/(?P<batch_id>[0-9]+)/export",
+    )
+    def import_batch_export(self, request, batch_id=None):
+        allowed = user_port_ids(request.user)
+        try:
+            batch = BookingImportBatch.objects.get(pk=batch_id)
+        except BookingImportBatch.DoesNotExist:
+            return Response(
+                {"detail": "No encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if allowed is not None and batch.created_by_id != request.user.id:
+            return Response(
+                {"detail": "No encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        rows = batch.retry_rows or []
+        if not rows:
+            return Response(
+                {"detail": "No hay filas pendientes para exportar."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        payload = build_import_rows_xlsx(rows)
+        filename = f"import-pendientes-{batch.id}.xlsx"
+        response = HttpResponse(
+            payload,
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+    @action(detail=False, methods=["post"], url_path="bulk-import/export-rows")
+    def bulk_import_export_rows(self, request):
+        rows = request.data.get("rows")
+        if not isinstance(rows, list) or not rows:
+            return Response(
+                {"detail": "No hay filas para exportar."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        payload = build_import_rows_xlsx(rows)
+        filename = "import-pendientes.xlsx"
+        response = HttpResponse(
+            payload,
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
 
     @action(detail=False, methods=["post"], url_path="bulk-import/availability-filter")
     def bulk_import_availability_filter(self, request):
