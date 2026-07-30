@@ -148,6 +148,8 @@ def build_availability_data(
                     if booking.vessel.loa_m is not None
                     else None
                 ),
+                "eta": booking.eta.isoformat() if booking.eta else None,
+                "etd": booking.etd.isoformat() if booking.etd else None,
             }
         )
 
