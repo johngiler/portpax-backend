@@ -1,4 +1,10 @@
-from apps.audit.models import BookingAuditEntry, LtaAuditEntry, UserAuditEntry
+from apps.audit.models import (
+    BookingAuditEntry,
+    LtaAuditEntry,
+    PortAuditEntry,
+    ShippingLineAuditEntry,
+    UserAuditEntry,
+)
 from apps.audit.services.context import with_audit_context
 
 
@@ -125,6 +131,75 @@ def record_lta_audit(
         port_id=port_id,
         port_code=port_code or "",
         shipping_line_code=shipping_line_code or "",
+        action=action,
+        summary=summary,
+        changes=with_audit_context(changes, request, entity=entity_payload),
+        actor=actor,
+    )
+
+
+def record_port_audit(
+    *,
+    action: str,
+    summary: str,
+    port=None,
+    port_code: str = "",
+    port_name: str = "",
+    subject_port_id: int | None = None,
+    changes: dict | None = None,
+    actor=None,
+    request=None,
+    entity: dict | None = None,
+) -> PortAuditEntry:
+    code = port_code or (getattr(port, "code", "") if port is not None else "")
+    name = port_name or (getattr(port, "name", "") if port is not None else "")
+    if subject_port_id is None and port is not None:
+        subject_port_id = port.pk
+    entity_payload = entity or {"code": code, "name": name}
+    return PortAuditEntry.objects.create(
+        port=port,
+        subject_port_id=subject_port_id,
+        port_code=code or "",
+        port_name=name or "",
+        action=action,
+        summary=summary,
+        changes=with_audit_context(changes, request, entity=entity_payload),
+        actor=actor,
+    )
+
+
+def record_shipping_line_audit(
+    *,
+    action: str,
+    summary: str,
+    shipping_line=None,
+    shipping_line_code: str = "",
+    shipping_line_name: str = "",
+    group_name: str = "",
+    changes: dict | None = None,
+    actor=None,
+    request=None,
+    entity: dict | None = None,
+) -> ShippingLineAuditEntry:
+    code = shipping_line_code or (
+        getattr(shipping_line, "code", "") if shipping_line is not None else ""
+    )
+    name = shipping_line_name or (
+        getattr(shipping_line, "name", "") if shipping_line is not None else ""
+    )
+    if not group_name and shipping_line is not None:
+        group = getattr(shipping_line, "group", None)
+        group_name = getattr(group, "name", "") or ""
+    entity_payload = entity or {
+        "code": code,
+        "name": name,
+        "group_name": group_name,
+    }
+    return ShippingLineAuditEntry.objects.create(
+        shipping_line=shipping_line,
+        shipping_line_code=code or "",
+        shipping_line_name=name or "",
+        group_name=group_name or "",
         action=action,
         summary=summary,
         changes=with_audit_context(changes, request, entity=entity_payload),

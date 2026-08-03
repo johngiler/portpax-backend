@@ -1,6 +1,12 @@
 from django.contrib import admin
 
-from apps.audit.models import BookingAuditEntry, LtaAuditEntry, UserAuditEntry
+from apps.audit.models import (
+    BookingAuditEntry,
+    LtaAuditEntry,
+    PortAuditEntry,
+    ShippingLineAuditEntry,
+    UserAuditEntry,
+)
 from apps.audit.services.deletion import allow_audit_deletion
 
 
@@ -70,3 +76,37 @@ class LtaAuditEntryAdmin(ImmutableAuditAdminMixin, admin.ModelAdmin):
     )
     list_filter = ("action",)
     search_fields = ("agreement_code", "agreement_name", "summary", "port_code")
+
+
+@admin.register(PortAuditEntry)
+class PortAuditEntryAdmin(ImmutableAuditAdminMixin, admin.ModelAdmin):
+    list_display = (
+        "port_code",
+        "port_name",
+        "action",
+        "summary",
+        "actor",
+        "created_at",
+    )
+    list_filter = ("action",)
+    search_fields = ("port_code", "port_name", "summary")
+
+
+@admin.register(ShippingLineAuditEntry)
+class ShippingLineAuditEntryAdmin(ImmutableAuditAdminMixin, admin.ModelAdmin):
+    list_display = (
+        "shipping_line_code",
+        "shipping_line_name",
+        "action",
+        "summary",
+        "actor",
+        "group_name",
+        "created_at",
+    )
+    list_filter = ("action",)
+    search_fields = (
+        "shipping_line_code",
+        "shipping_line_name",
+        "summary",
+        "group_name",
+    )
