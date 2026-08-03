@@ -1,5 +1,6 @@
 from django.contrib import admin
 
+from apps.audit.admin import ImmutableAuditAdminMixin
 from apps.bookings.models import Booking, BookingImportBatch, LongTermAgreement
 
 
@@ -23,7 +24,7 @@ class BookingAdmin(admin.ModelAdmin):
 
 
 @admin.register(BookingImportBatch)
-class BookingImportBatchAdmin(admin.ModelAdmin):
+class BookingImportBatchAdmin(ImmutableAuditAdminMixin, admin.ModelAdmin):
     list_display = [
         "id",
         "label",
@@ -37,16 +38,6 @@ class BookingImportBatchAdmin(admin.ModelAdmin):
     ]
     list_filter = ["source", "status"]
     search_fields = ["label"]
-    readonly_fields = [
-        "created_at",
-        "finished_at",
-        "created_booking_ids",
-        "failures",
-        "retry_rows",
-        "requested_count",
-        "created_count",
-        "failed_count",
-    ]
     ordering = ["-created_at"]
 
 

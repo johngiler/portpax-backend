@@ -11,7 +11,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from apps.audit.models import BookingAuditEntry
 from apps.bookings.models import Booking, BookingImportBatch
 
-SINGLE_ACTIONS = ("created", "operational_update", "status_change")
+SINGLE_ACTIONS = ("created", "operational_update", "status_change", "lta_linked")
 
 
 def _user_display(user) -> str | None:
@@ -39,6 +39,11 @@ def _parse_bound(value: str | None, *, end_of_day: bool = False):
 
 
 def _single_item(entry: BookingAuditEntry) -> dict[str, Any]:
+    code = entry.booking_code or None
+    if not code and entry.booking_id and entry.booking is not None:
+        code = entry.booking.booking_code
+    changes = entry.changes or {}
+    entity = changes.get("entity") if isinstance(changes, dict) else None
     return {
         "kind": "single",
         "action": entry.action,
@@ -46,11 +51,13 @@ def _single_item(entry: BookingAuditEntry) -> dict[str, Any]:
         "user_display": _user_display(entry.user),
         "summary": entry.summary,
         "booking_id": entry.booking_id,
-        "booking_code": entry.booking.booking_code if entry.booking_id else None,
+        "booking_code": code,
         "batch_id": None,
         "created_count": None,
         "failed_count": None,
         "not_created_count": None,
+        "changes": changes,
+        "entity": entity if isinstance(entity, dict) else None,
     }
 
 
@@ -84,7 +91,11 @@ def _audit_queryset(*, allowed_ports: list[int] | None, date_from, date_to):
         .exclude(changes__has_key="import_batch_id")
     )
     if allowed_ports is not None:
-        qs = qs.filter(booking__port_id__in=allowed_ports)
+        from django.db.models import Q
+
+        qs = qs.filter(
+            Q(port_id__in=allowed_ports) | Q(booking__port_id__in=allowed_ports)
+        )
     if date_from is not None:
         qs = qs.filter(created_at__gte=date_from)
     if date_to is not None:

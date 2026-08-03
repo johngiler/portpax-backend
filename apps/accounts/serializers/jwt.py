@@ -9,6 +9,8 @@ from apps.accounts.services.frontend_access import (
     frontend_access_denial_message,
     user_may_use_frontend,
 )
+from apps.accounts.services.user_audit import snapshot_user
+from apps.audit.services.record import record_user_audit
 
 
 def _ensure_frontend_user(user) -> None:
@@ -25,6 +27,19 @@ class FrontendTokenObtainPairSerializer(TokenObtainPairSerializer):
         _ensure_frontend_user(self.user)
         self.user.last_login = timezone.now()
         self.user.save(update_fields=["last_login"])
+        snap = snapshot_user(self.user)
+        request = self.context.get("request")
+        record_user_audit(
+            action="login",
+            summary="Inició sesión",
+            subject=self.user,
+            subject_username=snap["username"],
+            subject_display=snap["display"],
+            subject_role=snap["role"],
+            subject_is_active=snap["is_active"],
+            actor=self.user,
+            request=request,
+        )
         return data
 
 

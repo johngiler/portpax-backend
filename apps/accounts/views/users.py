@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from rest_framework import filters, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -12,6 +13,12 @@ from apps.accounts.serializers.users import (
     ManagedUserWriteSerializer,
     MeProfileSerializer,
 )
+from apps.accounts.services.user_activity import build_user_activity
+from apps.accounts.services.user_audit import (
+    diff_user_snapshots,
+    snapshot_user,
+)
+from apps.audit.services.record import record_user_audit
 
 User = get_user_model()
 
@@ -41,6 +48,19 @@ class ManagedUserViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        snap = snapshot_user(user)
+        record_user_audit(
+            action="created",
+            summary=f"Creó a {snap['username']}",
+            subject=user,
+            subject_username=snap["username"],
+            subject_display=snap["display"],
+            subject_role=snap["role"],
+            subject_is_active=snap["is_active"],
+            changes={"created": snap},
+            actor=request.user,
+            request=request,
+        )
         return Response(
             ManagedUserSerializer(user, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
@@ -48,9 +68,28 @@ class ManagedUserViewSet(viewsets.ModelViewSet):
 
     def partial_update(self, request, *args, **kwargs):
         user = self.get_object()
+        before = snapshot_user(user)
+        password_changed = bool(request.data.get("password"))
         serializer = self.get_serializer(user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        after = snapshot_user(user)
+        changes = diff_user_snapshots(
+            before, after, password_changed=password_changed
+        )
+        if changes:
+            record_user_audit(
+                action="updated",
+                summary=f"Modificó a {after['username']}",
+                subject=user,
+                subject_username=after["username"],
+                subject_display=after["display"],
+                subject_role=after["role"],
+                subject_is_active=after["is_active"],
+                changes=changes,
+                actor=request.user,
+                request=request,
+            )
         return Response(
             ManagedUserSerializer(user, context={"request": request}).data
         )
@@ -62,8 +101,43 @@ class ManagedUserViewSet(viewsets.ModelViewSet):
                 {"detail": "No puedes eliminar tu propio usuario."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        snap = snapshot_user(user)
+        record_user_audit(
+            action="deleted",
+            summary=f"Eliminó a {snap['username']}",
+            subject=None,
+            subject_username=snap["username"],
+            subject_display=snap["display"],
+            subject_role=snap["role"],
+            subject_is_active=snap["is_active"],
+            changes={"deleted": snap},
+            actor=request.user,
+            request=request,
+        )
         user.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=["get"], url_path="activity")
+    def activity(self, request):
+        try:
+            page = int(request.query_params.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get("page_size") or 20)
+        except (TypeError, ValueError):
+            page_size = 20
+
+        data = build_user_activity(
+            kind=request.query_params.get("kind") or "all",
+            role=request.query_params.get("role") or None,
+            is_active=request.query_params.get("is_active"),
+            date_from=request.query_params.get("date_from"),
+            date_to=request.query_params.get("date_to"),
+            page=page,
+            page_size=page_size,
+        )
+        return Response(data)
 
 
 class MeProfileView(APIView):

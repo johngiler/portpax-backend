@@ -2,8 +2,10 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from apps.audit.services.deletion import ImmutableAuditModel
 
-class BookingImportBatch(models.Model):
+
+class BookingImportBatch(ImmutableAuditModel):
     """One mass-import run (Excel file or paste) with created/failed row outcomes."""
 
     class Source(models.TextChoices):

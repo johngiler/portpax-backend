@@ -4,10 +4,16 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.accounts.permissions import DenyViewerWrites
+from apps.accounts.permissions import DenyViewerWrites, user_port_ids
+from apps.audit.services.record import record_lta_audit
 from apps.bookings.models import LongTermAgreement
 from apps.bookings.serializers.long_term_agreement import LongTermAgreementSerializer
 from apps.bookings.services.lta.link_bookings import link_matching_bookings
+from apps.bookings.services.lta.lta_activity import build_lta_activity
+from apps.bookings.services.lta.lta_audit import (
+    diff_lta_snapshots,
+    snapshot_lta,
+)
 from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
 
 
@@ -46,9 +52,106 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
             qs = qs.filter(is_active=active.lower() in ("1", "true", "yes"))
         return qs
 
+    def perform_create(self, serializer):
+        agreement = serializer.save()
+        agreement = (
+            LongTermAgreement.objects.select_related("port", "shipping_line")
+            .prefetch_related("vessels", "positions")
+            .get(pk=agreement.pk)
+        )
+        snap = snapshot_lta(agreement)
+        record_lta_audit(
+            action="created",
+            summary=f"Creó el acuerdo {snap['code']}",
+            agreement=agreement,
+            changes={"created": snap},
+            actor=self.request.user,
+            request=self.request,
+            entity=snap,
+        )
+
+    def perform_update(self, serializer):
+        before = snapshot_lta(serializer.instance)
+        agreement = serializer.save()
+        agreement = (
+            LongTermAgreement.objects.select_related("port", "shipping_line")
+            .prefetch_related("vessels", "positions")
+            .get(pk=agreement.pk)
+        )
+        after = snapshot_lta(agreement)
+        changes = diff_lta_snapshots(before, after)
+        if changes:
+            record_lta_audit(
+                action="updated",
+                summary=f"Modificó el acuerdo {after['code']}",
+                agreement=agreement,
+                changes=changes,
+                actor=self.request.user,
+                request=self.request,
+                entity=after,
+            )
+
+    def perform_destroy(self, instance):
+        snap = snapshot_lta(instance)
+        record_lta_audit(
+            action="deleted",
+            summary=f"Eliminó el acuerdo {snap['code']}",
+            agreement=None,
+            agreement_code=snap["code"],
+            agreement_name=snap["name"],
+            port_id=snap.get("port_id"),
+            port_code=snap.get("port_code") or "",
+            shipping_line_code=snap.get("shipping_line_code") or "",
+            changes={"deleted": snap},
+            actor=self.request.user,
+            request=self.request,
+            entity=snap,
+        )
+        instance.delete()
+
+    @action(detail=False, methods=["get"], url_path="activity")
+    def activity(self, request):
+        try:
+            page = int(request.query_params.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get("page_size") or 20)
+        except (TypeError, ValueError):
+            page_size = 20
+
+        allowed = user_port_ids(request.user)
+        data = build_lta_activity(
+            allowed_ports=None if allowed is None else list(allowed),
+            kind=request.query_params.get("kind") or "all",
+            date_from=request.query_params.get("date_from"),
+            date_to=request.query_params.get("date_to"),
+            page=page,
+            page_size=page_size,
+        )
+        return Response(data)
+
     @action(detail=True, methods=["post"], url_path="link-bookings")
     def link_bookings(self, request, pk=None):
         """Link existing unmatched bookings that this LTA covers."""
         agreement = self.get_object()
         result = link_matching_bookings(agreement, user=request.user)
+        linked = int(result.get("linked") or 0)
+        skipped = int(result.get("skipped") or 0)
+        record_lta_audit(
+            action="link_bookings",
+            summary=(
+                f"Vinculó reservas al acuerdo {agreement.code}: "
+                f"{linked} vinculadas, {skipped} omitidas"
+            ),
+            agreement=agreement,
+            changes={
+                "linked": linked,
+                "skipped": skipped,
+                "agreement_code": result.get("agreement_code") or agreement.code,
+            },
+            actor=request.user,
+            request=request,
+            entity=snapshot_lta(agreement),
+        )
         return Response(result, status=status.HTTP_200_OK)
