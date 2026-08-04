@@ -274,6 +274,30 @@ def build_dashboard_stats(
     ]
     next_agg = next_qs.aggregate(calls=Count("id"), planned_pax=Sum("planned_pax"))
 
+    # --- Current calendar week (Mon–Sun) confirmed by port ---
+    week_from = today - timedelta(days=today.weekday())
+    week_to = week_from + timedelta(days=6)
+    week_qs = forward_base.filter(
+        call_date__gte=week_from,
+        call_date__lte=week_to,
+        status__in=CONFIRMED_FORWARD_STATUSES,
+    )
+    week_by_port = [
+        {
+            "port_id": row["port_id"],
+            "name": _port_display(row),
+            "code": row["port__code"],
+            "calls": row["calls"],
+            "planned_pax": row["planned_pax"] or 0,
+        }
+        for row in (
+            week_qs.values("port_id", "port__name", "port__code", "port__commercial_name")
+            .annotate(calls=Count("id"), planned_pax=Sum("planned_pax"))
+            .order_by("-calls")
+        )
+    ]
+    week_agg = week_qs.aggregate(calls=Count("id"), planned_pax=Sum("planned_pax"))
+
     # --- Spec 7.7: YoY vs same calendar window prior year ---
     prior_from = _shift_year(date_from, -1)
     prior_to = _shift_year(date_to, -1)
@@ -352,6 +376,13 @@ def build_dashboard_stats(
             "total_confirmed": next_agg["calls"] or 0,
             "planned_pax": next_agg["planned_pax"] or 0,
             "by_port": next_by_port,
+        },
+        "current_week": {
+            "date_from": week_from.isoformat(),
+            "date_to": week_to.isoformat(),
+            "total_confirmed": week_agg["calls"] or 0,
+            "planned_pax": week_agg["planned_pax"] or 0,
+            "by_port": week_by_port,
         },
         "yoy": {
             "prior_date_from": prior_from.isoformat(),

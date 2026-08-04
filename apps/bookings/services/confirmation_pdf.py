@@ -139,11 +139,6 @@ def build_confirmation_pdf(booking: Booking) -> bytes:
         berth_label = "Por asignar"
     eta = booking.eta.strftime("%H:%M") if booking.eta else "—"
     etd = booking.etd.strftime("%H:%M") if booking.etd else "—"
-    planned_pax = (
-        f"{booking.planned_pax:,}".replace(",", ".")
-        if booking.planned_pax is not None
-        else "—"
-    )
 
     row1_y = y - card_h + 0.35 * cm
     draw_metric_card(pdf, margin, row1_y, card_w, card_h, "Puerto", port_label)
@@ -168,18 +163,6 @@ def build_confirmation_pdf(booking: Booking) -> bytes:
         card_h,
         "ETD",
         etd,
-    )
-    y -= card_h + 0.35 * cm
-
-    row3_y = y - card_h + 0.35 * cm
-    draw_metric_card(
-        pdf,
-        margin,
-        row3_y,
-        card_w,
-        card_h,
-        "PAX proyectados",
-        planned_pax,
     )
 
     draw_footer(pdf, width, margin)
