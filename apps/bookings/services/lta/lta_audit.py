@@ -24,6 +24,10 @@ def snapshot_lta(agreement) -> dict[str, Any]:
         "vessel_ids": vessel_ids,
         "position_ids": position_ids,
         "weekdays": list(agreement.weekdays or []),
+        "interval_days": agreement.interval_days,
+        "cadence_anchor": (
+            str(agreement.cadence_anchor) if agreement.cadence_anchor else None
+        ),
         "min_packs": agreement.min_packs,
         "advance_months_min": agreement.advance_months_min,
         "advance_months_max": agreement.advance_months_max,
@@ -57,6 +61,8 @@ def diff_lta_snapshots(
         "vessel_ids",
         "position_ids",
         "weekdays",
+        "interval_days",
+        "cadence_anchor",
         "min_packs",
         "advance_months_min",
         "advance_months_max",

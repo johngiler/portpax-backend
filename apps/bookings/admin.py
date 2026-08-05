@@ -66,6 +66,8 @@ class LongTermAgreementAdmin(admin.ModelAdmin):
         "vessels",
         "positions",
         "weekdays",
+        "interval_days",
+        "cadence_anchor",
         "min_packs",
         "advance_months_min",
         "advance_months_max",

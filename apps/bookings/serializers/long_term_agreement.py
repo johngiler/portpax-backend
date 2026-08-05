@@ -61,6 +61,8 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             "position_ids",
             "position_codes",
             "weekdays",
+            "interval_days",
+            "cadence_anchor",
             "min_packs",
             "advance_months_min",
             "advance_months_max",
@@ -199,6 +201,26 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
         if valid_from and valid_until and valid_from > valid_until:
             raise serializers.ValidationError(
                 {"valid_until": "Debe ser posterior o igual a la fecha de inicio."}
+            )
+
+        interval_days = attrs.get(
+            "interval_days",
+            getattr(self.instance, "interval_days", None),
+        )
+        cadence_anchor = attrs.get(
+            "cadence_anchor",
+            getattr(self.instance, "cadence_anchor", None),
+        )
+        if (interval_days is None) ^ (cadence_anchor is None):
+            raise serializers.ValidationError(
+                {
+                    "interval_days": "Cadencia y fecha ancla van juntas.",
+                    "cadence_anchor": "Cadencia y fecha ancla van juntas.",
+                }
+            )
+        if interval_days is not None and interval_days < 1:
+            raise serializers.ValidationError(
+                {"interval_days": "Debe ser al menos 1."}
             )
         return attrs
 

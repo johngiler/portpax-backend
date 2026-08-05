@@ -45,6 +45,16 @@ class LongTermAgreement(models.Model):
         blank=True,
         help_text="ISO weekdays Mon=0 … Sun=6. Empty = every day.",
     )
+    interval_days = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Cadence in days (e.g. 15). Null = no cadence filter.",
+    )
+    cadence_anchor = models.DateField(
+        null=True,
+        blank=True,
+        help_text="First expected call date for interval_days matching.",
+    )
     min_packs = models.PositiveIntegerField(
         null=True,
         blank=True,
@@ -52,11 +62,11 @@ class LongTermAgreement(models.Model):
     )
     advance_months_min = models.PositiveSmallIntegerField(
         default=18,
-        help_text="Far horizon starts (months ahead). Non-LTA blocked in this window.",
+        help_text="Legacy far-horizon hint (seasonal windows are authoritative).",
     )
     advance_months_max = models.PositiveSmallIntegerField(
         default=32,
-        help_text="Maximum months ahead this LTA may book.",
+        help_text="Legacy max months ahead hint (seasonal windows are authoritative).",
     )
     valid_from = models.DateField(null=True, blank=True)
     valid_until = models.DateField(null=True, blank=True)
@@ -86,6 +96,15 @@ class LongTermAgreement(models.Model):
             raise ValidationError(
                 {"valid_until": "Must be on or after valid_from."}
             )
+        if (self.interval_days is None) ^ (self.cadence_anchor is None):
+            raise ValidationError(
+                {
+                    "interval_days": "interval_days and cadence_anchor must be set together.",
+                    "cadence_anchor": "interval_days and cadence_anchor must be set together.",
+                }
+            )
+        if self.interval_days is not None and self.interval_days < 1:
+            raise ValidationError({"interval_days": "Must be at least 1."})
         weekdays = self.weekdays or []
         if not isinstance(weekdays, list):
             raise ValidationError({"weekdays": "Must be a list of integers 0–6."})

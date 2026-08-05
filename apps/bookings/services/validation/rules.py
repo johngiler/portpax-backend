@@ -445,26 +445,34 @@ def validate_lta(
     position: Position | None = None,
 ) -> list[ValidationIssue]:
     """
-    LTA horizon + strategic slot ownership (RN-06 prerequisites).
+    LTA seasonal windows + strategic slot ownership.
 
-    - Far window (default 18–32 months): only matching LTA holders.
-    - Beyond max horizon: blocked unless a matching LTA allows further.
-    - Foreign LTA owning weekday+position: block other lines.
+    Windows (Especificaciones LTA — Winter/Summer):
+    - Current + general: open market (any carrier).
+    - LTA covered: only matching LTA holders.
+    - Beyond LTA covered: blocked.
+
+    Also: foreign LTA owning weekday+position blocks other lines.
+    Cadence (interval_days) is enforced via agreement matching.
     """
     from datetime import date as date_cls
 
     from apps.bookings.services.lta.matching import (
-        DEFAULT_ADVANCE_MONTHS_MAX,
-        DEFAULT_ADVANCE_MONTHS_MIN,
-        add_months,
         find_best_matching_agreement,
         find_foreign_slot_agreements,
-        system_far_window,
+    )
+    from apps.bookings.services.lta.windows import (
+        BookingWindowZone,
+        compute_seasonal_windows,
+        lta_holder_allows,
+        open_market_allows,
     )
 
     issues: list[ValidationIssue] = []
     today = date_cls.today()
     shipping_line_id = vessel.shipping_line_id
+    windows = compute_seasonal_windows(today)
+    zone = windows.zone_for(call_date)
 
     foreign = find_foreign_slot_agreements(
         port_id=port.id,
@@ -491,40 +499,36 @@ def validate_lta(
         position=position,
     )
 
-    far_start, far_end = system_far_window(today)
     if own:
-        holder_end = add_months(today, own.advance_months_max)
-        holder_start = add_months(today, own.advance_months_min)
-        if call_date > holder_end:
+        if not lta_holder_allows(call_date, today):
             issues.append(
                 ValidationIssue(
                     "error",
                     "lta_beyond_horizon",
-                    f"La fecha supera el máximo del LTA {own.code} "
-                    f"({own.advance_months_max} meses).",
+                    f"La fecha supera la ventana LTA cubierta "
+                    f"({windows.lta_to.isoformat()}) para el acuerdo {own.code}.",
                 )
             )
-        elif call_date >= holder_start:
-            # Holder is within their strategic window — allowed.
-            pass
         return issues
 
-    # No matching LTA: enforce default open window only (< 18 months).
-    if call_date > far_end:
+    # No matching LTA: open market only (current + general).
+    if zone == BookingWindowZone.BEYOND:
         issues.append(
             ValidationIssue(
                 "error",
                 "lta_beyond_horizon",
-                f"No se puede reservar a más de {DEFAULT_ADVANCE_MONTHS_MAX} meses "
+                f"No se puede reservar después de {windows.lta_to.isoformat()} "
                 "sin un acuerdo LTA vigente.",
             )
         )
-    elif call_date >= far_start:
+    elif zone == BookingWindowZone.LTA_COVERED or not open_market_allows(
+        call_date, today
+    ):
         issues.append(
             ValidationIssue(
                 "error",
                 "lta_horizon_denied",
-                f"Entre {DEFAULT_ADVANCE_MONTHS_MIN} y {DEFAULT_ADVANCE_MONTHS_MAX} meses "
+                f"Entre {windows.lta_from.isoformat()} y {windows.lta_to.isoformat()} "
                 "solo navieras con LTA vigente pueden reservar esta escala.",
             )
         )

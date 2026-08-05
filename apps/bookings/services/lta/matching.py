@@ -44,6 +44,18 @@ def agreement_covers_weekday(agreement: LongTermAgreement, call_date: date) -> b
     return call_date.weekday() in weekdays
 
 
+def agreement_covers_cadence(agreement: LongTermAgreement, call_date: date) -> bool:
+    """When interval_days + cadence_anchor are set, call_date must land on the grid."""
+    interval = agreement.interval_days
+    anchor = agreement.cadence_anchor
+    if not interval or anchor is None:
+        return True
+    delta = (call_date - anchor).days
+    if delta < 0:
+        return False
+    return delta % interval == 0
+
+
 def agreement_covers_vessel(agreement: LongTermAgreement, vessel: Vessel) -> bool:
     if agreement.all_vessels:
         return vessel.shipping_line_id == agreement.shipping_line_id
@@ -82,6 +94,8 @@ def find_matching_agreements(
         if not agreement_covers_validity(agreement, call_date):
             continue
         if not agreement_covers_weekday(agreement, call_date):
+            continue
+        if not agreement_covers_cadence(agreement, call_date):
             continue
         if not agreement_covers_vessel(agreement, vessel):
             continue
