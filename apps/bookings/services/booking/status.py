@@ -43,6 +43,7 @@ def update_booking_status(
     new_status: str,
     *,
     user=None,
+    request=None,
     cancellation_reason: str | None = None,
     cancellation_evidence=None,
     actual_pax=None,
@@ -161,6 +162,7 @@ def update_booking_status(
         summary=f"Estado: {dict(BookingStatus.choices).get(new_status, new_status)}",
         changes={"status": {"from": old_status, "to": new_status}},
         user=user,
+        request=request,
     )
 
     return booking
@@ -170,6 +172,7 @@ def update_booking_operational(
     booking: Booking,
     *,
     user=None,
+    request=None,
     position_id=None,
     eta=None,
     etd=None,
@@ -204,7 +207,18 @@ def update_booking_operational(
             )
 
     if pending_position:
-        changes["position_id"] = {"from": booking.position_id, "to": position_id}
+        old_position_id = booking.position_id
+        old_position_code = None
+        if booking.position_id:
+            old_pos = getattr(booking, "position", None)
+            if old_pos is not None:
+                old_position_code = getattr(old_pos, "code", None)
+        changes["position_id"] = {
+            "from": old_position_id,
+            "to": position_id,
+            "from_code": old_position_code,
+            "to_code": None,
+        }
         booking.position_id = position_id or None
         update_fields.append("position")
         position_changed = True
@@ -262,6 +276,10 @@ def update_booking_operational(
                 )
             else:
                 booking.position = None
+            if "position_id" in changes and isinstance(changes["position_id"], dict):
+                changes["position_id"]["to_code"] = (
+                    booking.position.code if booking.position is not None else None
+                )
 
         if acknowledge_combined_red and not user_may_authorize_exceptions(user):
             raise BookingStatusError(
@@ -282,6 +300,10 @@ def update_booking_operational(
     if len(update_fields) > 1:
         booking.save(update_fields=update_fields)
         summary = "Actualización operativa"
+        if position_changed and not schedule_changed:
+            summary = "Reasignación de posición"
+        elif schedule_changed and not position_changed:
+            summary = "Cambio de horario"
         if booking.status == BookingStatus.CL and port_operator_override and cl_schedule_or_berth:
             summary = "Override port-operator en call CL (RN-06)"
             if override_reason:
@@ -294,6 +316,7 @@ def update_booking_operational(
             summary=summary,
             changes=changes,
             user=user,
+            request=request,
         )
 
     return booking

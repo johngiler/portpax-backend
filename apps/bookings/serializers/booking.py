@@ -170,7 +170,8 @@ class BookingUpdateSerializer(serializers.Serializer):
     )
 
     def update(self, instance, validated_data):
-        user = self.context.get("request").user if self.context.get("request") else None
+        request = self.context.get("request")
+        user = request.user if request else None
         cancellation_evidence = validated_data.pop("cancellation_evidence", None)
         cancellation_reason = validated_data.pop("cancellation_reason", None)
         new_status = validated_data.pop("status", None)
@@ -203,6 +204,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                     instance = update_booking_operational(
                         instance,
                         user=user,
+                        request=request,
                         position_id=pre_r.get("position"),
                         eta=pre_r.get("eta"),
                         etd=pre_r.get("etd"),
@@ -216,6 +218,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                     instance,
                     new_status,
                     user=user,
+                    request=request,
                     cancellation_reason=cancellation_reason,
                     cancellation_evidence=cancellation_evidence,
                     actual_pax=operational_fields.get("actual_pax"),
@@ -228,6 +231,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                     instance = update_booking_operational(
                         instance,
                         user=user,
+                        request=request,
                         position_id=operational_fields.get("position"),
                         eta=operational_fields.get("eta"),
                         etd=operational_fields.get("etd"),
@@ -245,6 +249,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                         instance,
                         new_status,
                         user=user,
+                        request=request,
                         cancellation_reason=cancellation_reason,
                         cancellation_evidence=cancellation_evidence,
                         acknowledge_combined_red=acknowledge_combined_red,
