@@ -17,6 +17,7 @@ HEADER_ALIASES = {
     "SHIP": "ship",
     "CORP": "corp",
     "BRAND": "brand",
+    "LOA": "loa_m",
     "CAP/REAL": "pax",
     "REAL PAX": "pax_real_delta",
     "BKNG STATUS": "status_raw",
@@ -89,6 +90,19 @@ def _as_delta(value: Any) -> int | None:
         return int(float(text))
     except ValueError:
         return None
+
+
+def _as_loa(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if value > 0 else None
+    text = str(value).strip().replace(",", "")
+    try:
+        num = float(text)
+    except ValueError:
+        return None
+    return num if num > 0 else None
 
 
 def map_status(raw: str | None, *, c_means_confirmed: bool) -> str | None:
@@ -170,6 +184,7 @@ def parse_workbook(
                 "eta_real": _as_time(cell("eta_real")),
                 "etd_real": _as_time(cell("etd_real")),
                 "berth_assign": berth,
+                "loa_m": _as_loa(cell("loa_m")),
                 "pax": _as_pax(cell("pax")),
                 "pax_real_delta": _as_delta(cell("pax_real_delta")),
             }

@@ -83,7 +83,7 @@ def import_berthing_rows(
 
             port = resolve_port(row["port_key"])
             line = resolve_shipping_line(row.get("brand"), row.get("corp"), stats)
-            vessel = resolve_vessel(ship, line, stats)
+            vessel = resolve_vessel(ship, line, stats, loa_m=row.get("loa_m"))
             position = resolve_position(port, row.get("berth_assign"), stats)
             eta = _parse_time(row.get("eta"))
             etd = _parse_time(row.get("etd"))
@@ -202,8 +202,10 @@ def import_berthing_rows(
         "lines_created": stats.lines_created,
         "vessels_created": stats.vessels_created,
         "positions_null": stats.positions_null,
+        "positions_created": stats.positions_created,
         "created_lines": stats.created_lines[:200],
         "created_vessels": stats.created_vessels[:200],
+        "created_positions": stats.created_positions[:200],
         "deleted_before": delete_data,
         "confirmations": confirmation_report,
     }

@@ -31,7 +31,7 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         vessels_qs = Vessel.objects.order_by("name")
         base = ShippingLine.objects.select_related("group").annotate(
-            vessel_count=Count("vessels"),
+            vessel_count=Count("vessels", distinct=True),
         )
         group_id = self.request.query_params.get("group")
         if group_id:

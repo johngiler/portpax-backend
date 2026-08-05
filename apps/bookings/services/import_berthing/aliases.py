@@ -12,6 +12,17 @@ PORT_BY_KEY: dict[str, str] = {
     "mel": "melilla",
 }
 
+# BERTHING PAPERS «BERTH ASSIG» → Position short suffix (catalog uses {port}-{suffix}).
+# Papers use legacy P1/P2/P3 labels; PortPax layouts use port-specific codes (E1/N1/…).
+BERTH_ALIAS_BY_PORT_CODE: dict[str, dict[str, str]] = {
+    "puerto_plata": {"P1": "E1", "P2": "E2", "P3": "W3"},
+    "cabo_rojo": {"P1": "N1", "P2": "S2"},
+    "samana": {"P1": "S1", "P2": "N2"},
+    "melilla": {"N3": "NE3", "P1": "NE2"},
+    "la_paz": {"P1": "P1", "P2": "P2"},
+    "roatan": {"P1": "P1", "P2": "P2", "A1": "A1", "A2": "A2"},
+}
+
 # (filename substring upper, sheet name, port_key, c_means_confirmed)
 FILE_SPECS: list[tuple[str, str, str, bool]] = [
     ("BERTHING POP", "TB BOOKING", "pop", False),

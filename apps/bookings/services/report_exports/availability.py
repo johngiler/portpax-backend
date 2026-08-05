@@ -151,12 +151,19 @@ def build_availability_data(
         logo = default_storage.url(logo_name) if logo_name else None
         if logo and request is not None:
             logo = request.build_absolute_uri(logo)
+        vessel_logo_name = booking.vessel.logo.name if booking.vessel.logo else None
+        vessel_logo = (
+            default_storage.url(vessel_logo_name) if vessel_logo_name else None
+        )
+        if vessel_logo and request is not None:
+            vessel_logo = request.build_absolute_uri(vessel_logo)
         day_cells[cell_index].append(
             {
                 "booking_code": booking.booking_code,
                 "shipping_line_name": booking.shipping_line.name,
                 "shipping_line_logo": logo,
                 "vessel_name": booking.vessel.name,
+                "vessel_logo": vessel_logo,
                 "loa_m": (
                     str(booking.vessel.loa_m)
                     if booking.vessel.loa_m is not None
