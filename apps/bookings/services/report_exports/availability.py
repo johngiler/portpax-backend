@@ -125,7 +125,10 @@ def build_availability_data(
             shipping_line_id=shipping_line_id,
             vessel_id=vessel_id,
             position_id=position_id,
-            status=status,
+            # Cancelled are outside the occupancy set; load them only when filtered.
+            # Other status filters keep the full occupancy set so free/busy stays correct;
+            # the UI narrows which booking cards are shown.
+            status="c" if status == "c" else None,
         )
     )
     has_unassigned = any(booking.position_id not in position_index for booking in bookings)
@@ -164,6 +167,7 @@ def build_availability_data(
         day_cells[cell_index].append(
             {
                 "booking_code": booking.booking_code,
+                "status": booking.status,
                 "shipping_line_name": booking.shipping_line.name,
                 "shipping_line_logo": logo,
                 "vessel_name": booking.vessel.name,
