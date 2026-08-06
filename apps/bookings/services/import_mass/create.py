@@ -7,7 +7,7 @@ from typing import Any
 
 from django.utils import timezone
 
-from apps.bookings.models import BookingImportBatch
+from apps.bookings.models import BookingImportBatch, BookingStatus
 from apps.bookings.services.booking.batch_create import (
     BookingBatchCreateError,
     create_booking_batch,
@@ -99,6 +99,7 @@ def _normalize_retry_row(
         "vessel_name": row.get("vessel_name") or row.get("ship"),
         "shipping_line_id": shipping_line_id,
         "shipping_line_name": row.get("shipping_line_name"),
+        "suggested_status": str(row.get("suggested_status") or "h").lower(),
         "issues": issues,
         "warnings": _as_str_list(row.get("warnings")),
         "selectable": selectable,
@@ -177,6 +178,13 @@ def create_from_resolved_rows(
             if eta is None or etd is None:
                 raise BookingBatchCreateError("ETA/ETD inválidos.", "eta")
 
+            from apps.bookings.services.booking.batch_create import BULK_CREATE_STATUSES
+
+            status_raw = str(row.get("suggested_status") or BookingStatus.H).lower()
+            initial_status = (
+                status_raw if status_raw in BULK_CREATE_STATUSES else BookingStatus.H
+            )
+
             bookings = create_booking_batch(
                 port_id=port_id,
                 shipping_line_id=shipping_line_id,
@@ -187,6 +195,7 @@ def create_from_resolved_rows(
                 eta=eta,
                 etd=etd,
                 audit_changes=audit_changes,
+                status=initial_status,
             )
             booking = bookings[0]
             created_booking_ids.append(booking.id)

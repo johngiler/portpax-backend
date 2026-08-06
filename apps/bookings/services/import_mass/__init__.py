@@ -8,7 +8,10 @@ from apps.bookings.services.import_mass.parse_itm import (
     parse_itm_tsv,
     parse_itm_workbook,
 )
-from apps.bookings.services.import_mass.resolve import resolve_itm_rows
+from apps.bookings.services.import_mass.resolve import (
+    resolve_itm_rows,
+    resolve_preview_row_edit,
+)
 
 __all__ = [
     "ItmParseError",
@@ -17,5 +20,6 @@ __all__ = [
     "parse_availability_list_workbook",
     "parse_availability_list_tsv",
     "resolve_itm_rows",
+    "resolve_preview_row_edit",
     "create_from_resolved_rows",
 ]

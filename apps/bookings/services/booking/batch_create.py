@@ -7,6 +7,17 @@ from apps.bookings.services.booking.code import resolve_unique_booking_code
 from apps.bookings.services.position_assignment import resolve_booking_position
 from apps.catalogs.models import Port, ShippingLine, Vessel
 
+# Mass-import initial statuses (NR retired from this flow; C/R not created here).
+BULK_CREATE_STATUSES = frozenset(
+    {
+        BookingStatus.H,
+        BookingStatus.CO,
+        BookingStatus.CL,
+        BookingStatus.LTA,
+        BookingStatus.LTD,
+    }
+)
+
 
 class BookingBatchCreateError(Exception):
     def __init__(self, message: str, field: str | None = None):
@@ -27,9 +38,13 @@ def create_booking_batch(
     planned_pax: int | None = None,
     preferred_position_id: int | None = None,
     audit_changes: dict | None = None,
+    status: str = BookingStatus.H,
 ) -> list[Booking]:
     if not call_dates:
         raise BookingBatchCreateError("Selecciona al menos una fecha.", "call_dates")
+
+    if status not in BULK_CREATE_STATUSES:
+        raise BookingBatchCreateError("Estado inicial no válido para creación masiva.", "status")
 
     unique_dates = sorted({d for d in call_dates})
     if len(unique_dates) != len(call_dates):
@@ -71,6 +86,8 @@ def create_booking_batch(
             "call_dates",
         )
 
+    from apps.bookings.services.import_mass.resolve import LTA_SOFT_FAIL_CODES
+    from apps.bookings.services.lta.matching import find_best_matching_agreement
     from apps.bookings.services.validation import validate_booking_params
 
     validation = validate_booking_params(
@@ -80,9 +97,28 @@ def create_booking_batch(
         eta=eta,
         etd=etd,
     )
-    if not validation["valid"]:
-        messages = "; ".join(e["message"] for e in validation["errors"])
+    errors = list(validation.get("errors") or [])
+    if status == BookingStatus.H:
+        errors = [e for e in errors if e.get("code") not in LTA_SOFT_FAIL_CODES]
+    if errors:
+        messages = "; ".join(e["message"] for e in errors)
         raise BookingBatchCreateError(messages, "call_dates")
+
+    if status in {BookingStatus.LTA, BookingStatus.CL}:
+        for call_date in unique_dates:
+            agreement = find_best_matching_agreement(
+                port_id=port.id,
+                shipping_line_id=shipping_line.id,
+                vessel=vessel,
+                call_date=call_date,
+                position=None,
+            )
+            if agreement is None:
+                raise BookingBatchCreateError(
+                    "No hay un acuerdo LTA vigente que cubra esta reserva "
+                    "(puerto, naviera, barco y día).",
+                    "status",
+                )
 
     existing_codes = set(
         Booking.objects.filter(booking_code__startswith=port.code.upper()).values_list(
@@ -123,7 +159,7 @@ def create_booking_batch(
                     position=position,
                     call_date=call_date,
                     booking_code=code,
-                    status=BookingStatus.NR,
+                    status=status,
                     notes=notes,
                     eta=eta,
                     etd=etd,
@@ -132,7 +168,6 @@ def create_booking_batch(
                     long_term_agreement=None,
                 )
             )
-        from apps.bookings.services.lta.matching import find_best_matching_agreement
 
         for booking in bookings:
             agreement = find_best_matching_agreement(
@@ -154,11 +189,20 @@ def create_booking_batch(
     )
 
     from apps.audit.services.record import record_booking_audit
+    from apps.bookings.services.confirmation_pdf import (
+        CONFIRMATION_PDF_STATUSES,
+        save_confirmation_pdf,
+    )
 
     for booking in created:
-        summary = "Reserva creada"
+        summary = f"Reserva creada ({booking.get_status_display()})"
         if booking.position_id:
-            summary = f"Reserva creada — posición {booking.position.code} asignada automáticamente"
+            summary = (
+                f"{summary} — posición {booking.position.code} asignada automáticamente"
+            )
+        if booking.status in CONFIRMATION_PDF_STATUSES:
+            save_confirmation_pdf(booking)
+            booking.save(update_fields=["confirmation_pdf", "updated_at"])
         record_booking_audit(
             booking,
             action="created",

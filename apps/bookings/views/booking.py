@@ -69,6 +69,7 @@ from apps.bookings.services.import_mass import (
     parse_itm_tsv,
     parse_itm_workbook,
     resolve_itm_rows,
+    resolve_preview_row_edit,
 )
 from apps.bookings.services.import_mass.export_rows import build_import_rows_xlsx
 from apps.bookings.utils.list_ordering import apply_booking_list_ordering
@@ -263,6 +264,30 @@ class BookingViewSet(
                 "selectable_count": selectable_count,
             }
         )
+
+    @action(detail=False, methods=["post"], url_path="bulk-import/revalidate")
+    def bulk_import_revalidate(self, request):
+        """Re-validate one edited preview row (manual catalog / time / status tweaks)."""
+        if not isinstance(request.data, dict):
+            return Response(
+                {"detail": "Envía una fila de preview a revalidar."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            row = resolve_preview_row_edit(request.data)
+        except Exception:
+            return Response(
+                {"detail": "No se pudo revalidar la fila."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        allowed = user_port_ids(request.user)
+        if allowed is not None and row.get("port_id") and row["port_id"] not in allowed:
+            row["issues"] = [*row.get("issues", []), "No tienes acceso a este puerto."]
+            row["selectable"] = False
+            row["selected_default"] = False
+
+        return Response(row)
 
     @action(detail=False, methods=["post"], url_path="bulk-import/create")
     def bulk_import_create(self, request):

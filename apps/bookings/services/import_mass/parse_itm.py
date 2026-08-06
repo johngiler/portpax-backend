@@ -115,7 +115,7 @@ def parse_itm_workbook(file_obj) -> list[dict[str, Any]]:
 
 
 def parse_itm_tsv(text: str) -> list[dict[str, Any]]:
-    """Parse clipboard paste from Excel/Sheets as ITM columns (TSV)."""
+    """Parse clipboard paste from Excel/Sheets/email as ITM columns."""
     raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not raw:
         raise ItmParseError(
@@ -127,6 +127,12 @@ def parse_itm_tsv(text: str) -> list[dict[str, Any]]:
         raise ItmParseError(
             "Pega al menos una fila con Ship, Port, Arrival y Departure."
         )
+
+    vertical = _reshape_vertical_itm_lines(lines)
+    if vertical is not None:
+        headers, body_rows = vertical
+        body = [(i, row) for i, row in enumerate(body_rows, start=2)]
+        return _parse_itm_table(headers, body)
 
     def split_line(line: str) -> list[str]:
         if "\t" in line:
@@ -143,3 +149,56 @@ def parse_itm_tsv(text: str) -> list[dict[str, Any]]:
             "y al menos una fila de datos."
         )
     return _parse_itm_table(headers, body)
+
+
+_VERTICAL_ITM_HEADERS = (
+    "Ship",
+    "Port",
+    "Arrival",
+    "Departure",
+    "Vendor Name",
+    "Call Type",
+)
+_VERTICAL_ITM_KEYS = {h.lower(): h for h in _VERTICAL_ITM_HEADERS}
+
+
+def _reshape_vertical_itm_lines(
+    lines: list[str],
+) -> tuple[list[str], list[list[str]]] | None:
+    """
+    Outlook/email often copies ITM tables as one field per line:
+    headers, then repeating value blocks of the same width.
+    """
+    trimmed = [_cell_str(ln) for ln in lines if _cell_str(ln)]
+    if len(trimmed) < 8:
+        return None
+
+    mostly_single = (
+        sum(1 for ln in trimmed if "\t" not in ln and ";" not in ln)
+        >= len(trimmed) * 0.85
+    )
+    if not mostly_single:
+        return None
+
+    headers: list[str] = []
+    for line in trimmed:
+        key = line.lower()
+        if key not in _VERTICAL_ITM_KEYS:
+            break
+        headers.append(_VERTICAL_ITM_KEYS[key])
+
+    if len(headers) < 4:
+        return None
+    header_keys = {h.lower() for h in headers}
+    for required in REQUIRED_HEADERS:
+        if required.lower() not in header_keys:
+            return None
+
+    width = len(headers)
+    data = trimmed[len(headers) :]
+    if len(data) < width or len(data) % width != 0:
+        return None
+
+    body = [data[i : i + width] for i in range(0, len(data), width)]
+    return headers, body
+
