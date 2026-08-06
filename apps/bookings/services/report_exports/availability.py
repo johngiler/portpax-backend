@@ -26,6 +26,7 @@ def _availability_matrix(
     shipping_line_id: int | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
+    status: str | None = None,
 ) -> tuple[list[str], list[list[str]]]:
     if allowed_ports is not None and port_id not in allowed_ports:
         raise ValueError("Puerto no permitido.")
@@ -49,6 +50,7 @@ def _availability_matrix(
         shipping_line_id=shipping_line_id,
         vessel_id=vessel_id,
         position_id=position_id,
+        status=status,
     )
     for b in qs.iterator(chunk_size=500):
         code = pos_by_id.get(b.position_id) if b.position_id else "TBD"
@@ -84,6 +86,7 @@ def build_availability_data(
     shipping_line_id: int | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
+    status: str | None = None,
     request: Any = None,
 ) -> dict:
     """JSON payload for the on-screen Availability Chart (day × position)."""
@@ -122,6 +125,7 @@ def build_availability_data(
             shipping_line_id=shipping_line_id,
             vessel_id=vessel_id,
             position_id=position_id,
+            status=status,
         )
     )
     has_unassigned = any(booking.position_id not in position_index for booking in bookings)
@@ -205,6 +209,7 @@ def build_availability_chart_xlsx(
     shipping_line_id: int | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
+    status: str | None = None,
 ) -> bytes:
     header, rows = _availability_matrix(
         port_id=port_id,
@@ -214,6 +219,7 @@ def build_availability_chart_xlsx(
         shipping_line_id=shipping_line_id,
         vessel_id=vessel_id,
         position_id=position_id,
+        status=status,
     )
     wb = Workbook()
     ws = wb.active
@@ -242,6 +248,7 @@ def build_availability_chart_csv(
     shipping_line_id: int | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
+    status: str | None = None,
 ) -> bytes:
     header, rows = _availability_matrix(
         port_id=port_id,
@@ -251,6 +258,7 @@ def build_availability_chart_csv(
         shipping_line_id=shipping_line_id,
         vessel_id=vessel_id,
         position_id=position_id,
+        status=status,
     )
     buf = StringIO()
     writer = csv.writer(buf)

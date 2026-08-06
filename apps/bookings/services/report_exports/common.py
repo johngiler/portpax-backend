@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from datetime import date
 
-from apps.bookings.constants import OCCUPATION_CONFLICT_STATUSES
-from apps.bookings.models import Booking
+from django.db.models import Q
+from django.utils import timezone
+
+from apps.bookings.constants import (
+    ACTIVE_BOOKING_STATUSES,
+    OCCUPATION_CONFLICT_STATUSES,
+)
+from apps.bookings.models import Booking, BookingStatus
 
 
 def booking_pax(booking: Booking) -> int:
@@ -26,13 +32,34 @@ def scheduled_bookings_qs(
     vessel_id: int | None = None,
     position_id: int | None = None,
     allowed_ports: set[int] | None = None,
+    status: str | None = None,
 ):
-    """Bookings that count toward occupancy / PAX reports (excludes cancelled)."""
+    """Bookings for occupancy / availability reports.
+
+    Default (no status): occupancy set (excludes cancelled).
+    Optional status mirrors list filters: real codes, completed, action.
+    """
     qs = Booking.objects.filter(
         call_date__gte=date_from,
         call_date__lte=date_to,
-        status__in=OCCUPATION_CONFLICT_STATUSES,
     ).select_related("port", "shipping_line", "vessel", "position")  # vessel needed for LOA/PAX
+    if status == "completed":
+        qs = qs.filter(
+            Q(
+                call_date__lt=timezone.localdate(),
+                status__in=ACTIVE_BOOKING_STATUSES,
+            )
+            | Q(status=BookingStatus.R)
+        )
+    elif status == "action":
+        qs = qs.filter(
+            status__in=[BookingStatus.NR, BookingStatus.H],
+            call_date__gte=timezone.localdate(),
+        )
+    elif status:
+        qs = qs.filter(status=status)
+    else:
+        qs = qs.filter(status__in=OCCUPATION_CONFLICT_STATUSES)
     if allowed_ports is not None:
         qs = qs.filter(port_id__in=allowed_ports)
     if port_id:
