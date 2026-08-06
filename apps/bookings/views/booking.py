@@ -15,8 +15,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import DenyViewerWrites, user_can_access_port, user_port_ids
-from apps.bookings.constants import ACTIVE_BOOKING_STATUSES
-from apps.bookings.models import Booking, BookingImportBatch, BookingStatus
+from apps.bookings.models import Booking, BookingImportBatch
+from apps.bookings.utils.status_query import (
+    apply_booking_status_filters,
+    parse_status_query_params,
+)
 from apps.bookings.serializers import (
     BookingBatchCreateSerializer,
     BookingSerializer,
@@ -127,23 +130,8 @@ class BookingViewSet(
         lta_id = self.request.query_params.get("long_term_agreement")
         if lta_id:
             qs = qs.filter(long_term_agreement_id=lta_id)
-        status_param = self.request.query_params.get("status")
-        if status_param == "completed":
-            qs = qs.filter(
-                Q(
-                    call_date__lt=timezone.localdate(),
-                    status__in=ACTIVE_BOOKING_STATUSES,
-                )
-                | Q(status=BookingStatus.R)
-            )
-        elif status_param == "action":
-            # Dashboard “Requieren acción”: Hold + NR with call_date from today.
-            qs = qs.filter(
-                status__in=[BookingStatus.NR, BookingStatus.H],
-                call_date__gte=timezone.localdate(),
-            )
-        elif status_param:
-            qs = qs.filter(status=status_param)
+        status_values = parse_status_query_params(self.request.query_params)
+        qs = apply_booking_status_filters(qs, status_values)
         call_date_from = self.request.query_params.get("call_date_from")
         if call_date_from:
             qs = qs.filter(call_date__gte=call_date_from)
@@ -670,9 +658,8 @@ class BookingViewSet(
         shipping_line_id = request.query_params.get("shipping_line")
         if shipping_line_id:
             qs = qs.filter(shipping_line_id=shipping_line_id)
-        status_param = request.query_params.get("status")
-        if status_param:
-            qs = qs.filter(status=status_param)
+        status_values = parse_status_query_params(request.query_params)
+        qs = apply_booking_status_filters(qs, status_values)
 
         bookings = list(qs)
         if not bookings:
@@ -837,7 +824,7 @@ class BookingViewSet(
         position_id = self._optional_int_param("position")
         if isinstance(position_id, Response):
             return position_id
-        status_param = (request.query_params.get("status") or "").strip() or None
+        status_values = parse_status_query_params(request.query_params)
         self._ensure_port_access(port_id)
         try:
             data = build_availability_data(
@@ -848,7 +835,7 @@ class BookingViewSet(
                 shipping_line_id=line_id,
                 vessel_id=vessel_id,
                 position_id=position_id,
-                status=status_param,
+                statuses=status_values,
                 request=request,
             )
         except Port.DoesNotExist:
@@ -934,7 +921,7 @@ class BookingViewSet(
         position_id = self._optional_int_param("position")
         if isinstance(position_id, Response):
             return position_id
-        status_param = (request.query_params.get("status") or "").strip() or None
+        status_values = parse_status_query_params(request.query_params)
         if port_id is not None:
             self._ensure_port_access(port_id)
 
@@ -963,7 +950,7 @@ class BookingViewSet(
                     shipping_line_id=line_id,
                     vessel_id=vessel_id,
                     position_id=position_id,
-                    status=status_param,
+                    statuses=status_values,
                 )
                 port = Port.objects.get(pk=port_id)
                 filename = availability_filename(port.code, date_from, date_to, fmt)

@@ -27,6 +27,7 @@ def _availability_matrix(
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
+    statuses: list[str] | None = None,
 ) -> tuple[list[str], list[list[str]]]:
     if allowed_ports is not None and port_id not in allowed_ports:
         raise ValueError("Puerto no permitido.")
@@ -41,6 +42,10 @@ def _availability_matrix(
     pos_codes = [p.code for p in positions]
     pos_by_id = {p.id: p.code for p in positions}
 
+    status_filters = list(statuses or [])
+    if status and status not in status_filters:
+        status_filters.append(status)
+
     cells: dict[tuple[date, str], list[str]] = defaultdict(list)
     qs = scheduled_bookings_qs(
         date_from=date_from,
@@ -50,8 +55,31 @@ def _availability_matrix(
         shipping_line_id=shipping_line_id,
         vessel_id=vessel_id,
         position_id=position_id,
-        status=status,
+        status=None,
     )
+    if "c" in status_filters:
+        # Include cancelled alongside occupancy set when requested.
+        from apps.bookings.models import Booking
+        from apps.bookings.utils.status_query import apply_booking_status_filters
+
+        base = Booking.objects.filter(
+            call_date__gte=date_from,
+            call_date__lte=date_to,
+            port_id=port_id,
+        ).select_related("port", "shipping_line", "vessel", "position")
+        if allowed_ports is not None:
+            base = base.filter(port_id__in=allowed_ports)
+        if shipping_line_id:
+            base = base.filter(shipping_line_id=shipping_line_id)
+        if vessel_id:
+            base = base.filter(vessel_id=vessel_id)
+        if position_id:
+            base = base.filter(position_id=position_id)
+        qs = apply_booking_status_filters(base, status_filters)
+    elif status_filters:
+        from apps.bookings.utils.status_query import apply_booking_status_filters
+
+        qs = apply_booking_status_filters(qs, status_filters)
     for b in qs.iterator(chunk_size=500):
         code = pos_by_id.get(b.position_id) if b.position_id else "TBD"
         line = (b.shipping_line.code or b.shipping_line.name or "").strip() or "?"
@@ -87,6 +115,7 @@ def build_availability_data(
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
+    statuses: list[str] | None = None,
     request: Any = None,
 ) -> dict:
     """JSON payload for the on-screen Availability Chart (day × position)."""
@@ -116,21 +145,25 @@ def build_availability_data(
         }
         for position in positions
     ]
-    bookings = list(
-        scheduled_bookings_qs(
-            date_from=date_from,
-            date_to=date_to,
-            port_id=port_id,
-            allowed_ports=allowed_ports,
-            shipping_line_id=shipping_line_id,
-            vessel_id=vessel_id,
-            position_id=position_id,
-            # Cancelled are outside the occupancy set; load them only when filtered.
-            # Other status filters keep the full occupancy set so free/busy stays correct;
-            # the UI narrows which booking cards are shown.
-            status="c" if status == "c" else None,
-        )
+    status_filters = list(statuses or [])
+    if status and status not in status_filters:
+        status_filters.append(status)
+    qs_kwargs = dict(
+        date_from=date_from,
+        date_to=date_to,
+        port_id=port_id,
+        allowed_ports=allowed_ports,
+        shipping_line_id=shipping_line_id,
+        vessel_id=vessel_id,
+        position_id=position_id,
     )
+    # Always load the occupancy set so neighbors stay visible with any status filter.
+    bookings = list(scheduled_bookings_qs(**qs_kwargs, status=None))
+    if "c" in status_filters:
+        seen = {b.id for b in bookings}
+        for booking in scheduled_bookings_qs(**qs_kwargs, status="c"):
+            if booking.id not in seen:
+                bookings.append(booking)
     has_unassigned = any(booking.position_id not in position_index for booking in bookings)
     unassigned_index = len(positions) if has_unassigned else None
     if has_unassigned:
@@ -214,6 +247,7 @@ def build_availability_chart_xlsx(
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
+    statuses: list[str] | None = None,
 ) -> bytes:
     header, rows = _availability_matrix(
         port_id=port_id,
@@ -224,6 +258,7 @@ def build_availability_chart_xlsx(
         vessel_id=vessel_id,
         position_id=position_id,
         status=status,
+        statuses=statuses,
     )
     wb = Workbook()
     ws = wb.active
@@ -253,6 +288,7 @@ def build_availability_chart_csv(
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
+    statuses: list[str] | None = None,
 ) -> bytes:
     header, rows = _availability_matrix(
         port_id=port_id,
@@ -263,6 +299,7 @@ def build_availability_chart_csv(
         vessel_id=vessel_id,
         position_id=position_id,
         status=status,
+        statuses=statuses,
     )
     buf = StringIO()
     writer = csv.writer(buf)
