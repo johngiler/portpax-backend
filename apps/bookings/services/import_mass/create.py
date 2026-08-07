@@ -248,6 +248,9 @@ def _claim_lta_space_booking(
             booking,
             BookingStatus.CL,
             user=created_by,
+            # Placeholder LTA rows may have no LongTermAgreement catalog match;
+            # claiming the reserved slot must still move LTA → CL.
+            require_lta_agreement=False,
         )
     except BookingStatusError as exc:
         raise BookingBatchCreateError(str(exc), "claim_lta_space") from exc

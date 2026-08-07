@@ -226,7 +226,7 @@ def _validate_import_booking(
                 issues.append(
                     f"Hay un espacio LTA de esta naviera ({existing.booking_code}"
                     f"{pos_label}). Marca «Reclamar espacio LTA» para actualizarlo "
-                    "a Confirmada LTA (barco real si cambió)."
+                    "a Confirmada LTA."
                 )
         else:
             issues.append("Ya existe una reserva para este barco/puerto/fecha.")
@@ -237,8 +237,7 @@ def _validate_import_booking(
         issues.append(
             f"Hay un espacio LTA de {line_name} esperándote en {pos_label} "
             f"({candidate.get('booking_code')}). "
-            "Marca «Reclamar espacio LTA» para actualizarlo a Confirmada LTA "
-            "(el barco del LTA no tiene que coincidir)."
+            "Marca «Reclamar espacio LTA» para actualizarlo a Confirmada LTA."
         )
 
     lta_count = int(pos.get("lta_space_count") or 0)
@@ -280,6 +279,9 @@ def _validate_import_booking(
                 if code in skip_codes:
                     continue
                 if code in LTA_SOFT_FAIL_CODES:
+                    # Claiming LTA space → Confirmada LTA: horizon soft-fail is noise.
+                    if claiming:
+                        continue
                     soft_msg = f"{msg} Se puede crear en evaluación (Hold)."
                     if soft_msg not in warnings:
                         warnings.append(soft_msg)
@@ -291,6 +293,9 @@ def _validate_import_booking(
                 msg = warn.get("message") if isinstance(warn, dict) else str(warn)
                 if msg and msg not in warnings:
                     warnings.append(msg)
+
+    if claiming:
+        suggested_status = BookingStatus.CL
 
     pos["claim_lta_space"] = claiming
     return suggested_status, pos
@@ -414,7 +419,7 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Re-validate one preview row after manual edits.
     Prefers port_id / vessel_id when set; otherwise fuzzy-matches ship / port_raw.
-    Preserves suggested_status from client unless LTA soft-fail forces Hold.
+    Claim LTA space forces Confirmada LTA (CL); otherwise LTA soft-fail may force Hold.
     """
     row_number = payload.get("row_number") or 0
     try:

@@ -8,6 +8,7 @@ from typing import Any
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.validation import suggest_positions
 from apps.catalogs.utils.position_code import position_short_code
+from apps.catalogs.utils.vessel import vessel_is_provisional
 
 
 def serialize_lta_space_candidate(booking: Booking) -> dict[str, Any]:
@@ -16,11 +17,13 @@ def serialize_lta_space_candidate(booking: Booking) -> dict[str, Any]:
     code = None
     if position is not None and port is not None:
         code = position_short_code(port.code, position.code)
+    vessel = booking.vessel if booking.vessel_id else None
     return {
         "id": booking.id,
         "booking_code": booking.booking_code,
         "status": booking.status,
-        "vessel_name": booking.vessel.name if booking.vessel_id else "",
+        "vessel_name": vessel.name if vessel is not None else "",
+        "vessel_is_provisional": vessel_is_provisional(vessel),
         "shipping_line_name": (
             booking.shipping_line.name if booking.shipping_line_id else ""
         ),
@@ -71,15 +74,21 @@ def pick_suggested_position(
     *,
     preferred_id: int | None,
     claimable_position_id: int | None = None,
+    lock_claimable: bool = False,
 ) -> dict[str, Any] | None:
-    # Prefer the LTA-held pier when claiming / pre-assigning reserved space.
-    if claimable_position_id is not None:
+    # Claiming LTA space: the reserved pier is the slot being claimed.
+    if lock_claimable and claimable_position_id is not None:
         for item in suggestions:
             if item.get("id") == claimable_position_id:
                 return item
     if preferred_id is not None:
         for item in suggestions:
             if item.get("id") == preferred_id:
+                return item
+    # No user pick yet: hint the LTA pier if present.
+    if claimable_position_id is not None:
+        for item in suggestions:
+            if item.get("id") == claimable_position_id:
                 return item
     recommended = next((p for p in suggestions if p.get("recommended")), None)
     if recommended and not recommended.get("occupied"):
@@ -103,6 +112,7 @@ def resolve_position_and_lta(
 ) -> dict[str, Any]:
     """
     Suggest a pier position and detect a claimable LTA slot for this line.
+    When claim_lta_space is set, lock position to the LTA pier.
     """
     candidate = find_claimable_lta_booking(
         port_id=port_id,
@@ -115,24 +125,19 @@ def resolve_position_and_lta(
     claimable_position_id = (
         candidate.position_id if candidate is not None else None
     )
+    locking = bool(claim_lta_space and claimable_position_id)
 
     suggestions = suggest_positions(port_id, vessel_id, call_date)
-    # When claiming, lock onto the LTA pier; otherwise still prefer it as hint.
-    prefer_lta_pier = claimable_position_id if candidate else None
-    if claim_lta_space and claimable_position_id:
-        preferred_for_pick = claimable_position_id
-    else:
-        preferred_for_pick = preferred_position_id
-
     picked = pick_suggested_position(
         suggestions,
-        preferred_id=preferred_for_pick,
-        claimable_position_id=prefer_lta_pier,
+        preferred_id=preferred_position_id,
+        claimable_position_id=claimable_position_id,
+        lock_claimable=locking,
     )
     position_id = int(picked["id"]) if picked else None
     position_code = str(picked["code"]) if picked else None
 
-    if claim_lta_space and candidate is not None and candidate.position_id:
+    if locking and candidate is not None and candidate.position_id:
         position_id = candidate.position_id
         position_code = (
             candidate_payload["position_code"] if candidate_payload else position_code
@@ -150,4 +155,5 @@ def resolve_position_and_lta(
         "claim_lta_space": bool(claim_lta_space and candidate_payload is not None),
         "lta_space_candidate": candidate_payload,
         "lta_space_count": extra_lta_count,
+        "position_locked_to_lta": locking,
     }

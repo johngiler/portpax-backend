@@ -50,6 +50,7 @@ def update_booking_status(
     eta_real=None,
     etd_real=None,
     acknowledge_combined_red: bool = False,
+    require_lta_agreement: bool = True,
 ) -> Booking:
     allowed = ALLOWED_TRANSITIONS.get(booking.status, set())
     if new_status not in allowed:
@@ -116,18 +117,28 @@ def update_booking_status(
                 call_date=booking.call_date,
                 position=booking.position,
             )
-        if agreement is None:
+        if agreement is None and require_lta_agreement:
             raise BookingStatusError(
                 "No hay un acuerdo LTA vigente que cubra esta reserva "
                 "(puerto, naviera, barco, día y posición)."
             )
-        booking.long_term_agreement = agreement
+        if agreement is not None:
+            booking.long_term_agreement = agreement
 
         validation = validate_booking_instance(booking)
-        if not validation["valid"]:
+        errors = list(validation.get("errors") or [])
+        if not require_lta_agreement:
+            from apps.bookings.constants import LTA_SOFT_FAIL_CODES
+
+            errors = [
+                e
+                for e in errors
+                if not (isinstance(e, dict) and e.get("code") in LTA_SOFT_FAIL_CODES)
+            ]
+        if errors:
             raise BookingValidationError(
                 "La reserva no cumple las validaciones operativas.",
-                validation["errors"],
+                errors,
             )
 
     old_status = booking.status
