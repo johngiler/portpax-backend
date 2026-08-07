@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+from django.db import transaction
 from django.utils import timezone
 
 from apps.bookings.models import BookingImportBatch, BookingStatus
@@ -57,6 +58,7 @@ def _normalize_retry_row(
     port_id = row.get("port_id")
     vessel_id = row.get("vessel_id")
     shipping_line_id = row.get("shipping_line_id")
+    position_id = row.get("position_id")
     try:
         port_id = int(port_id) if port_id is not None and port_id != "" else None
     except (TypeError, ValueError):
@@ -73,6 +75,12 @@ def _normalize_retry_row(
         )
     except (TypeError, ValueError):
         shipping_line_id = None
+    try:
+        position_id = (
+            int(position_id) if position_id is not None and position_id != "" else None
+        )
+    except (TypeError, ValueError):
+        position_id = None
 
     selectable = bool(row.get("selectable"))
     if issues:
@@ -100,6 +108,10 @@ def _normalize_retry_row(
         "shipping_line_id": shipping_line_id,
         "shipping_line_name": row.get("shipping_line_name"),
         "suggested_status": str(row.get("suggested_status") or "h").lower(),
+        "position_id": position_id,
+        "position_code": row.get("position_code"),
+        "replace_lta": bool(row.get("replace_lta")),
+        "lta_replace_candidate": row.get("lta_replace_candidate"),
         "issues": issues,
         "warnings": _as_str_list(row.get("warnings")),
         "selectable": selectable,
@@ -122,6 +134,47 @@ def _failure_payload(row: dict[str, Any], row_id: Any, detail: str) -> dict[str,
     if call_date:
         payload["call_date"] = str(call_date)
     return payload
+
+
+def _cancel_replaceable_lta(
+    *,
+    candidate_id: int | None,
+    vessel_id: int,
+    created_by=None,
+) -> None:
+    """Cancel LTA booking; delete if same vessel (unique port/vessel/date)."""
+    if not candidate_id:
+        return
+    from apps.bookings.models import Booking, BookingStatus, CancellationReason
+    from apps.bookings.services.booking.delete import delete_cancelled_booking
+    from apps.bookings.services.booking.status import (
+        BookingStatusError,
+        update_booking_status,
+    )
+
+    booking = (
+        Booking.objects.select_related("vessel")
+        .filter(pk=candidate_id, status=BookingStatus.LTA)
+        .first()
+    )
+    if booking is None:
+        raise BookingBatchCreateError(
+            "La reserva LTA a reemplazar ya no está disponible.",
+            "replace_lta",
+        )
+    try:
+        update_booking_status(
+            booking,
+            BookingStatus.C,
+            user=created_by,
+            cancellation_reason=CancellationReason.ITM_DECISION,
+        )
+    except BookingStatusError as exc:
+        raise BookingBatchCreateError(str(exc), "replace_lta") from exc
+
+    if booking.vessel_id == vessel_id:
+        booking.refresh_from_db()
+        delete_cancelled_booking(booking)
 
 
 def create_from_resolved_rows(
@@ -185,18 +238,40 @@ def create_from_resolved_rows(
                 status_raw if status_raw in BULK_CREATE_STATUSES else BookingStatus.H
             )
 
-            bookings = create_booking_batch(
-                port_id=port_id,
-                shipping_line_id=shipping_line_id,
-                vessel_id=vessel_id,
-                call_dates=[call_date],
-                notes="",
-                created_by=created_by,
-                eta=eta,
-                etd=etd,
-                audit_changes=audit_changes,
-                status=initial_status,
-            )
+            preferred_position_id = None
+            raw_pos = row.get("position_id")
+            if raw_pos is not None and raw_pos != "":
+                preferred_position_id = int(raw_pos)
+
+            candidate = row.get("lta_replace_candidate") or {}
+            candidate_id = None
+            if isinstance(candidate, dict) and candidate.get("id") is not None:
+                candidate_id = int(candidate["id"])
+            with transaction.atomic():
+                if row.get("replace_lta") and candidate_id:
+                    _cancel_replaceable_lta(
+                        candidate_id=candidate_id,
+                        vessel_id=vessel_id,
+                        created_by=created_by,
+                    )
+                    audit_changes = {
+                        **audit_changes,
+                        "replaced_lta_booking_id": candidate_id,
+                    }
+
+                bookings = create_booking_batch(
+                    port_id=port_id,
+                    shipping_line_id=shipping_line_id,
+                    vessel_id=vessel_id,
+                    call_dates=[call_date],
+                    notes="",
+                    created_by=created_by,
+                    eta=eta,
+                    etd=etd,
+                    preferred_position_id=preferred_position_id,
+                    audit_changes=audit_changes,
+                    status=initial_status,
+                )
             booking = bookings[0]
             created_booking_ids.append(booking.id)
             created.append(

@@ -128,8 +128,128 @@ def _catalog_blockers(issues: list[str]) -> bool:
         or "no encontrado" in msg
         or msg.startswith("Ya existe")
         or msg.startswith("Duplicada en este archivo")
+        or "Reemplazar LTA" in msg
         for msg in issues
     )
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _validate_import_booking(
+    *,
+    port: Port,
+    vessel: Vessel,
+    call_date: str,
+    eta: str | None,
+    etd: str | None,
+    preferred_position_id: int | None,
+    replace_lta: bool,
+    issues: list[str],
+    warnings: list[str],
+    suggested_status: str,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Position suggestion, LTA-replace detection, and booking validation.
+    Returns (suggested_status, position/lta fields).
+    """
+    from apps.bookings.services.import_mass.position_lta import resolve_position_and_lta
+
+    call_d = date.fromisoformat(call_date)
+    pos = resolve_position_and_lta(
+        port_id=port.id,
+        vessel_id=vessel.id,
+        call_date=call_d,
+        preferred_position_id=preferred_position_id,
+        replace_lta=replace_lta,
+    )
+    candidate = pos.get("lta_replace_candidate")
+    replacing = bool(replace_lta and candidate)
+
+    existing = (
+        Booking.objects.filter(
+            port_id=port.id,
+            vessel_id=vessel.id,
+            call_date=call_d,
+        )
+        .select_related("vessel", "position", "port")
+        .first()
+    )
+    if existing is not None:
+        if existing.status == BookingStatus.LTA:
+            if not candidate:
+                from apps.bookings.services.import_mass.position_lta import (
+                    serialize_lta_candidate,
+                )
+
+                candidate = serialize_lta_candidate(existing)
+                pos["lta_replace_candidate"] = candidate
+            if replacing:
+                pass
+            else:
+                issues.append(
+                    f"Ya existe una reserva LTA ({existing.booking_code}"
+                    f"{f', {candidate.get('position_code')}' if candidate and candidate.get('position_code') else ''}"
+                    "). Marca «Reemplazar LTA» para sustituirla."
+                )
+        else:
+            issues.append("Ya existe una reserva para este barco/puerto/fecha.")
+
+    if candidate and not replacing and existing is None:
+        label = candidate.get("position_code") or "posición"
+        vessel_name = candidate.get("vessel_name") or "otro barco"
+        issues.append(
+            f"La {label} tiene reserva LTA de {vessel_name} "
+            f"({candidate.get('booking_code')}). "
+            "Marca «Reemplazar LTA» para sustituirla."
+        )
+
+    if not _catalog_blockers(issues):
+        try:
+            validation = validate_booking_params(
+                port_id=port.id,
+                vessel_id=vessel.id,
+                call_dates=[call_d],
+                position_id=pos.get("position_id"),
+                eta=_parse_time(eta),
+                etd=_parse_time(etd),
+            )
+        except Exception:
+            issues.append("No se pudo validar la reserva.")
+        else:
+            skip_codes = set()
+            if replacing:
+                skip_codes.add("position_occupied")
+            for err in validation.get("errors") or []:
+                if not isinstance(err, dict):
+                    issues.append(str(err))
+                    continue
+                msg = err.get("message") or ""
+                code = err.get("code") or ""
+                if not msg:
+                    continue
+                if code in skip_codes:
+                    continue
+                if code in LTA_SOFT_FAIL_CODES:
+                    warnings.append(
+                        f"{msg} Se puede crear en evaluación (Hold)."
+                    )
+                    suggested_status = BookingStatus.H
+                else:
+                    issues.append(msg)
+            for warn in validation.get("warnings") or []:
+                msg = warn.get("message") if isinstance(warn, dict) else str(warn)
+                if msg and msg not in warnings:
+                    warnings.append(msg)
+
+    pos["replace_lta"] = replacing
+    return suggested_status, pos
 
 
 def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -147,6 +267,12 @@ def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         issues: list[str] = []
         warnings: list[str] = []
         suggested_status = BookingStatus.H
+        position_fields: dict[str, Any] = {
+            "position_id": None,
+            "position_code": None,
+            "replace_lta": False,
+            "lta_replace_candidate": None,
+        }
 
         if not ship:
             issues.append("Falta el barco (Ship).")
@@ -178,47 +304,25 @@ def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             else:
                 seen_keys.add(key)
 
-            already_exists = Booking.objects.filter(
-                port_id=port.id,
-                vessel_id=vessel.id,
-                call_date=call_date,
-            ).exists()
-            if already_exists:
-                issues.append("Ya existe una reserva para este barco/puerto/fecha.")
-
-            if not _catalog_blockers(issues):
-                eta_t = _parse_time(eta)
-                etd_t = _parse_time(etd)
-                try:
-                    validation = validate_booking_params(
-                        port_id=port.id,
-                        vessel_id=vessel.id,
-                        call_dates=[date.fromisoformat(call_date)],
-                        eta=eta_t,
-                        etd=etd_t,
-                    )
-                except Exception:
-                    issues.append("No se pudo validar la reserva.")
-                else:
-                    for err in validation.get("errors") or []:
-                        if not isinstance(err, dict):
-                            issues.append(str(err))
-                            continue
-                        msg = err.get("message") or ""
-                        code = err.get("code") or ""
-                        if not msg:
-                            continue
-                        if code in LTA_SOFT_FAIL_CODES:
-                            warnings.append(
-                                f"{msg} Se puede crear en evaluación (Hold)."
-                            )
-                            suggested_status = BookingStatus.H
-                        else:
-                            issues.append(msg)
-                    for warn in validation.get("warnings") or []:
-                        msg = warn.get("message") if isinstance(warn, dict) else str(warn)
-                        if msg:
-                            warnings.append(msg)
+            if not any(
+                msg.startswith("Duplicada")
+                or msg.startswith("Falta")
+                or "inválida" in msg
+                or "no encontrado" in msg
+                for msg in issues
+            ):
+                suggested_status, position_fields = _validate_import_booking(
+                    port=port,
+                    vessel=vessel,
+                    call_date=call_date,
+                    eta=eta,
+                    etd=etd,
+                    preferred_position_id=_parse_optional_int(raw.get("position_id")),
+                    replace_lta=bool(raw.get("replace_lta")),
+                    issues=issues,
+                    warnings=warnings,
+                    suggested_status=suggested_status,
+                )
 
         selectable = (
             port is not None
@@ -248,6 +352,10 @@ def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "shipping_line_id": vessel.shipping_line_id if vessel else None,
                 "shipping_line_name": vessel.shipping_line.name if vessel else None,
                 "suggested_status": _normalize_bulk_status(suggested_status),
+                "position_id": position_fields.get("position_id"),
+                "position_code": position_fields.get("position_code"),
+                "replace_lta": bool(position_fields.get("replace_lta")),
+                "lta_replace_candidate": position_fields.get("lta_replace_candidate"),
                 "issues": issues,
                 "warnings": warnings,
                 "selectable": selectable,
@@ -375,46 +483,33 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
         if not etd:
             issues.append("ETD inválida.")
 
-        if port and vessel and call_date and not _catalog_blockers(issues):
-            already_exists = Booking.objects.filter(
-                port_id=port.id,
-                vessel_id=vessel.id,
+        if port and vessel and call_date and not any(
+            msg.startswith("Falta")
+            or "inválida" in msg
+            or "no válido" in msg
+            or "no encontrada" in msg
+            or "no pertenece" in msg
+            for msg in issues
+        ):
+            suggested_status, position_fields = _validate_import_booking(
+                port=port,
+                vessel=vessel,
                 call_date=call_date,
-            ).exists()
-            if already_exists:
-                issues.append("Ya existe una reserva para este barco/puerto/fecha.")
-            else:
-                try:
-                    validation = validate_booking_params(
-                        port_id=port.id,
-                        vessel_id=vessel.id,
-                        call_dates=[date.fromisoformat(call_date)],
-                        eta=_parse_time(eta),
-                        etd=_parse_time(etd),
-                    )
-                except Exception:
-                    issues.append("No se pudo validar la reserva.")
-                else:
-                    for err in validation.get("errors") or []:
-                        if not isinstance(err, dict):
-                            issues.append(str(err))
-                            continue
-                        msg = err.get("message") or ""
-                        code = err.get("code") or ""
-                        if not msg:
-                            continue
-                        if code in LTA_SOFT_FAIL_CODES:
-                            warnings.append(
-                                f"{msg} Se puede crear en evaluación (Hold)."
-                            )
-                            if not payload.get("suggested_status"):
-                                suggested_status = BookingStatus.H
-                        else:
-                            issues.append(msg)
-                    for warn in validation.get("warnings") or []:
-                        msg = warn.get("message") if isinstance(warn, dict) else str(warn)
-                        if msg and msg not in warnings:
-                            warnings.append(msg)
+                eta=eta,
+                etd=etd,
+                preferred_position_id=_parse_optional_int(payload.get("position_id")),
+                replace_lta=bool(payload.get("replace_lta")),
+                issues=issues,
+                warnings=warnings,
+                suggested_status=suggested_status,
+            )
+        else:
+            position_fields = {
+                "position_id": _parse_optional_int(payload.get("position_id")),
+                "position_code": payload.get("position_code"),
+                "replace_lta": bool(payload.get("replace_lta")),
+                "lta_replace_candidate": payload.get("lta_replace_candidate"),
+            }
 
         selectable = (
             port is not None
@@ -443,6 +538,10 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
             "shipping_line_id": shipping_line.id if shipping_line else None,
             "shipping_line_name": shipping_line.name if shipping_line else None,
             "suggested_status": _normalize_bulk_status(suggested_status),
+            "position_id": position_fields.get("position_id"),
+            "position_code": position_fields.get("position_code"),
+            "replace_lta": bool(position_fields.get("replace_lta")),
+            "lta_replace_candidate": position_fields.get("lta_replace_candidate"),
             "issues": issues,
             "warnings": warnings,
             "selectable": selectable,
@@ -453,5 +552,12 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
             payload.get("suggested_status") or resolved.get("suggested_status")
         )
         resolved["id"] = str(payload.get("id") or resolved["id"])
+        resolved["position_id"] = _parse_optional_int(payload.get("position_id")) or resolved.get(
+            "position_id"
+        )
+        resolved["position_code"] = payload.get("position_code") or resolved.get("position_code")
+        resolved["replace_lta"] = bool(payload.get("replace_lta"))
+        if "lta_replace_candidate" in payload:
+            resolved["lta_replace_candidate"] = payload.get("lta_replace_candidate")
 
     return resolved
