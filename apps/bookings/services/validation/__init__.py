@@ -84,6 +84,7 @@ def validate_booking_params(
 
 def suggest_positions(port_id: int, vessel_id: int, call_date: date) -> list[dict]:
     """Pier positions that fit LOA/draft; ordered by first-in (sort_order)."""
+    from apps.bookings.constants import LTA_SOFT_FAIL_CODES
     from apps.bookings.services.position_assignment import auto_assign_position
 
     vessel = Vessel.objects.get(pk=vessel_id)
@@ -103,7 +104,16 @@ def suggest_positions(port_id: int, vessel_id: int, call_date: date) -> list[dic
             call_date=call_date,
             position=position,
         )
-        if not any(i["level"] == "error" for i in result["errors"]):
+        # LTA soft-fail still allows Hold + position choice (same as batch create).
+        hard_errors = [
+            i
+            for i in result["errors"]
+            if i.get("code") not in LTA_SOFT_FAIL_CODES
+        ]
+        soft_lta = [
+            i for i in result["errors"] if i.get("code") in LTA_SOFT_FAIL_CODES
+        ]
+        if not hard_errors:
             occupied = Booking.objects.filter(
                 position=position,
                 call_date=call_date,
@@ -117,7 +127,7 @@ def suggest_positions(port_id: int, vessel_id: int, call_date: date) -> list[dic
                     "max_loa_m": str(position.max_loa_m) if position.max_loa_m else None,
                     "occupied": occupied,
                     "recommended": recommended is not None and position.id == recommended.id,
-                    "warnings": result["warnings"],
+                    "warnings": [*result["warnings"], *soft_lta],
                 }
             )
 

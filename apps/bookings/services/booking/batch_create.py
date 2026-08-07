@@ -86,7 +86,7 @@ def create_booking_batch(
             "call_dates",
         )
 
-    from apps.bookings.services.import_mass.resolve import LTA_SOFT_FAIL_CODES
+    from apps.bookings.constants import LTA_SOFT_FAIL_CODES
     from apps.bookings.services.lta.matching import find_best_matching_agreement
     from apps.bookings.services.validation import validate_booking_params
 

@@ -9,12 +9,10 @@ from typing import Any
 
 from django.db.models import Q
 
+from apps.bookings.constants import LTA_SOFT_FAIL_CODES
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.validation import validate_booking_params
 from apps.catalogs.models import Port, Vessel
-
-# Horizon / open-market LTA denials → Hold in mass import (still createable).
-LTA_SOFT_FAIL_CODES = frozenset({"lta_beyond_horizon", "lta_horizon_denied"})
 
 BULK_IMPORT_STATUSES = frozenset(
     {
