@@ -841,6 +841,15 @@ class BookingViewSet(
         if isinstance(position_id, Response):
             return position_id
         status_values = parse_status_query_params(request.query_params)
+        ships_per_day = self._optional_int_param("ships_per_day")
+        if isinstance(ships_per_day, Response):
+            return ships_per_day
+        page = self._optional_int_param("page")
+        if isinstance(page, Response):
+            return page
+        page_size = self._optional_int_param("page_size")
+        if isinstance(page_size, Response):
+            return page_size
         self._ensure_port_access(port_id)
         try:
             data = build_availability_data(
@@ -852,6 +861,9 @@ class BookingViewSet(
                 vessel_id=vessel_id,
                 position_id=position_id,
                 statuses=status_values,
+                ships_per_day=ships_per_day,
+                page=page if ships_per_day else None,
+                page_size=page_size or 30,
                 request=request,
             )
         except Port.DoesNotExist:

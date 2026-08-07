@@ -16,6 +16,20 @@ from openpyxl.utils import get_column_letter
 from apps.bookings.services.report_exports.common import scheduled_bookings_qs
 from apps.catalogs.models import Port, Position
 
+# Occupancy density filter (Barcos por día) — exact distinct ships on that day.
+SHIPS_PER_DAY_MIN = 1
+SHIPS_PER_DAY_MAX = 4
+
+
+def _day_ship_count(cells: list[list[dict]]) -> int:
+    codes: set[str] = set()
+    for cell in cells:
+        for call in cell:
+            code = call.get("booking_code")
+            if code:
+                codes.add(str(code))
+    return len(codes)
+
 
 def _availability_matrix(
     *,
@@ -116,11 +130,25 @@ def build_availability_data(
     position_id: int | None = None,
     status: str | None = None,
     statuses: list[str] | None = None,
+    ships_per_day: int | None = None,
+    page: int | None = None,
+    page_size: int = 30,
     request: Any = None,
 ) -> dict:
     """JSON payload for the on-screen Availability Chart (day × position)."""
     if allowed_ports is not None and port_id not in allowed_ports:
         raise ValueError("Puerto no permitido.")
+    if ships_per_day is not None and (
+        ships_per_day < SHIPS_PER_DAY_MIN or ships_per_day > SHIPS_PER_DAY_MAX
+    ):
+        raise ValueError(
+            f"ships_per_day debe estar entre {SHIPS_PER_DAY_MIN} y {SHIPS_PER_DAY_MAX}."
+        )
+    if page is not None and page < 1:
+        raise ValueError("page debe ser >= 1.")
+    if page_size < 1 or page_size > 100:
+        raise ValueError("page_size debe estar entre 1 y 100.")
+
     port = Port.objects.get(pk=port_id)
     positions_qs = Position.objects.filter(port_id=port_id, is_active=True)
     if position_id:
@@ -214,6 +242,39 @@ def build_availability_data(
                 "etd": booking.etd.isoformat() if booking.etd else None,
             }
         )
+
+    if ships_per_day is not None:
+        matching_days = sorted(
+            day
+            for day, cells in bookings_by_day.items()
+            if date_from <= day <= date_to and _day_ship_count(cells) == ships_per_day
+        )
+        matched_total = len(matching_days)
+        use_page = page if page is not None else 1
+        start = (use_page - 1) * page_size
+        end = start + page_size
+        page_days = matching_days[start:end]
+        rows = [
+            {
+                "date": day.isoformat(),
+                "cells": bookings_by_day.get(day, [[] for _ in range(cell_count)]),
+            }
+            for day in page_days
+        ]
+        return {
+            "port_id": port.id,
+            "port_code": port.code,
+            "port_name": port.name,
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "columns": columns,
+            "rows": rows,
+            "ships_per_day": ships_per_day,
+            "matched_days": matched_total,
+            "page": use_page,
+            "page_size": page_size,
+            "has_more": end < matched_total,
+        }
 
     rows = []
     day = date_from
