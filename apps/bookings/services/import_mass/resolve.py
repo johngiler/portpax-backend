@@ -128,7 +128,7 @@ def _catalog_blockers(issues: list[str]) -> bool:
         or "no encontrado" in msg
         or msg.startswith("Ya existe")
         or msg.startswith("Duplicada en este archivo")
-        or "Reemplazar LTA" in msg
+        or "Reclamar espacio LTA" in msg
         for msg in issues
     )
 
@@ -142,6 +142,21 @@ def _parse_optional_int(value: Any) -> int | None:
         return None
 
 
+def _claim_lta_space_flag(data: dict[str, Any] | None) -> bool:
+    if not data:
+        return False
+    # Legacy import retry batches used replace_lta.
+    return bool(data.get("claim_lta_space") or data.get("replace_lta"))
+
+
+def _lta_space_candidate_payload(data: dict[str, Any] | None) -> Any:
+    if not data:
+        return None
+    if "lta_space_candidate" in data:
+        return data.get("lta_space_candidate")
+    return data.get("lta_replace_candidate")
+
+
 def _validate_import_booking(
     *,
     port: Port,
@@ -150,27 +165,39 @@ def _validate_import_booking(
     eta: str | None,
     etd: str | None,
     preferred_position_id: int | None,
-    replace_lta: bool,
+    claim_lta_space: bool,
     issues: list[str],
     warnings: list[str],
     suggested_status: str,
 ) -> tuple[str, dict[str, Any]]:
     """
-    Position suggestion, LTA-replace detection, and booking validation.
+    Position suggestion, claimable LTA space detection, and booking validation.
     Returns (suggested_status, position/lta fields).
     """
     from apps.bookings.services.import_mass.position_lta import resolve_position_and_lta
+
+    shipping_line_id = vessel.shipping_line_id
+    if not shipping_line_id:
+        issues.append("El barco no tiene naviera asignada.")
+        return suggested_status, {
+            "position_id": preferred_position_id,
+            "position_code": None,
+            "claim_lta_space": False,
+            "lta_space_candidate": None,
+            "lta_space_count": 0,
+        }
 
     call_d = date.fromisoformat(call_date)
     pos = resolve_position_and_lta(
         port_id=port.id,
         vessel_id=vessel.id,
+        shipping_line_id=shipping_line_id,
         call_date=call_d,
         preferred_position_id=preferred_position_id,
-        replace_lta=replace_lta,
+        claim_lta_space=claim_lta_space,
     )
-    candidate = pos.get("lta_replace_candidate")
-    replacing = bool(replace_lta and candidate)
+    candidate = pos.get("lta_space_candidate")
+    claiming = bool(claim_lta_space and candidate)
 
     existing = (
         Booking.objects.filter(
@@ -178,37 +205,53 @@ def _validate_import_booking(
             vessel_id=vessel.id,
             call_date=call_d,
         )
-        .select_related("vessel", "position", "port")
+        .select_related("vessel", "position", "port", "shipping_line")
         .first()
     )
     if existing is not None:
         if existing.status == BookingStatus.LTA:
             if not candidate:
                 from apps.bookings.services.import_mass.position_lta import (
-                    serialize_lta_candidate,
+                    serialize_lta_space_candidate,
                 )
 
-                candidate = serialize_lta_candidate(existing)
-                pos["lta_replace_candidate"] = candidate
-            if replacing:
+                candidate = serialize_lta_space_candidate(existing)
+                pos["lta_space_candidate"] = candidate
+            if claiming:
                 pass
             else:
+                pos_label = ""
+                if candidate and candidate.get("position_code"):
+                    pos_label = f" en {candidate['position_code']}"
                 issues.append(
-                    f"Ya existe una reserva LTA ({existing.booking_code}"
-                    f"{f', {candidate.get('position_code')}' if candidate and candidate.get('position_code') else ''}"
-                    "). Marca «Reemplazar LTA» para sustituirla."
+                    f"Hay un espacio LTA de esta naviera ({existing.booking_code}"
+                    f"{pos_label}). Marca «Reclamar espacio LTA» para actualizarlo "
+                    "a Confirmada LTA (barco real si cambió)."
                 )
         else:
             issues.append("Ya existe una reserva para este barco/puerto/fecha.")
 
-    if candidate and not replacing and existing is None:
-        label = candidate.get("position_code") or "posición"
-        vessel_name = candidate.get("vessel_name") or "otro barco"
+    if candidate and not claiming and existing is None:
+        line_name = candidate.get("shipping_line_name") or "esta naviera"
+        pos_label = candidate.get("position_code") or "posición"
         issues.append(
-            f"La {label} tiene reserva LTA de {vessel_name} "
+            f"Hay un espacio LTA de {line_name} esperándote en {pos_label} "
             f"({candidate.get('booking_code')}). "
-            "Marca «Reemplazar LTA» para sustituirla."
+            "Marca «Reclamar espacio LTA» para actualizarlo a Confirmada LTA "
+            "(el barco del LTA no tiene que coincidir)."
         )
+
+    lta_count = int(pos.get("lta_space_count") or 0)
+    if claiming and lta_count > 1:
+        warn = (
+            f"Hay {lta_count} reservas LTA de esta naviera en esta fecha; "
+            "se reclamará la más antigua."
+        )
+        if warn not in warnings:
+            warnings.append(warn)
+
+    if claiming:
+        suggested_status = BookingStatus.CL
 
     if not _catalog_blockers(issues):
         try:
@@ -224,7 +267,7 @@ def _validate_import_booking(
             issues.append("No se pudo validar la reserva.")
         else:
             skip_codes = set()
-            if replacing:
+            if claiming:
                 skip_codes.add("position_occupied")
             for err in validation.get("errors") or []:
                 if not isinstance(err, dict):
@@ -237,18 +280,19 @@ def _validate_import_booking(
                 if code in skip_codes:
                     continue
                 if code in LTA_SOFT_FAIL_CODES:
-                    warnings.append(
-                        f"{msg} Se puede crear en evaluación (Hold)."
-                    )
+                    soft_msg = f"{msg} Se puede crear en evaluación (Hold)."
+                    if soft_msg not in warnings:
+                        warnings.append(soft_msg)
                     suggested_status = BookingStatus.H
                 else:
-                    issues.append(msg)
+                    if msg not in issues:
+                        issues.append(msg)
             for warn in validation.get("warnings") or []:
                 msg = warn.get("message") if isinstance(warn, dict) else str(warn)
                 if msg and msg not in warnings:
                     warnings.append(msg)
 
-    pos["replace_lta"] = replacing
+    pos["claim_lta_space"] = claiming
     return suggested_status, pos
 
 
@@ -270,8 +314,8 @@ def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         position_fields: dict[str, Any] = {
             "position_id": None,
             "position_code": None,
-            "replace_lta": False,
-            "lta_replace_candidate": None,
+            "claim_lta_space": False,
+            "lta_space_candidate": None,
         }
 
         if not ship:
@@ -318,7 +362,7 @@ def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     eta=eta,
                     etd=etd,
                     preferred_position_id=_parse_optional_int(raw.get("position_id")),
-                    replace_lta=bool(raw.get("replace_lta")),
+                    claim_lta_space=_claim_lta_space_flag(raw),
                     issues=issues,
                     warnings=warnings,
                     suggested_status=suggested_status,
@@ -354,8 +398,8 @@ def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "suggested_status": _normalize_bulk_status(suggested_status),
                 "position_id": position_fields.get("position_id"),
                 "position_code": position_fields.get("position_code"),
-                "replace_lta": bool(position_fields.get("replace_lta")),
-                "lta_replace_candidate": position_fields.get("lta_replace_candidate"),
+                "claim_lta_space": bool(position_fields.get("claim_lta_space")),
+                "lta_space_candidate": position_fields.get("lta_space_candidate"),
                 "issues": issues,
                 "warnings": warnings,
                 "selectable": selectable,
@@ -427,7 +471,9 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
     vessel_id = payload.get("vessel_id")
     if port_id or vessel_id or payload.get("shipping_line_id"):
         issues: list[str] = []
-        warnings: list[str] = list(resolved.get("warnings") or [])
+        # Fresh list — resolve_itm_rows above already ran validation; do not keep
+        # those warnings or LTA soft-fails appear twice after revalidate.
+        warnings: list[str] = []
         suggested_status = _normalize_bulk_status(
             payload.get("suggested_status") or BookingStatus.H
         )
@@ -498,7 +544,7 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
                 eta=eta,
                 etd=etd,
                 preferred_position_id=_parse_optional_int(payload.get("position_id")),
-                replace_lta=bool(payload.get("replace_lta")),
+                claim_lta_space=_claim_lta_space_flag(payload),
                 issues=issues,
                 warnings=warnings,
                 suggested_status=suggested_status,
@@ -507,8 +553,8 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
             position_fields = {
                 "position_id": _parse_optional_int(payload.get("position_id")),
                 "position_code": payload.get("position_code"),
-                "replace_lta": bool(payload.get("replace_lta")),
-                "lta_replace_candidate": payload.get("lta_replace_candidate"),
+                "claim_lta_space": _claim_lta_space_flag(payload),
+                "lta_space_candidate": _lta_space_candidate_payload(payload),
             }
 
         selectable = (
@@ -540,8 +586,8 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
             "suggested_status": _normalize_bulk_status(suggested_status),
             "position_id": position_fields.get("position_id"),
             "position_code": position_fields.get("position_code"),
-            "replace_lta": bool(position_fields.get("replace_lta")),
-            "lta_replace_candidate": position_fields.get("lta_replace_candidate"),
+            "claim_lta_space": bool(position_fields.get("claim_lta_space")),
+            "lta_space_candidate": position_fields.get("lta_space_candidate"),
             "issues": issues,
             "warnings": warnings,
             "selectable": selectable,
@@ -556,8 +602,9 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
             "position_id"
         )
         resolved["position_code"] = payload.get("position_code") or resolved.get("position_code")
-        resolved["replace_lta"] = bool(payload.get("replace_lta"))
-        if "lta_replace_candidate" in payload:
-            resolved["lta_replace_candidate"] = payload.get("lta_replace_candidate")
+        resolved["claim_lta_space"] = _claim_lta_space_flag(payload)
+        candidate = _lta_space_candidate_payload(payload)
+        if candidate is not None or "lta_space_candidate" in payload or "lta_replace_candidate" in payload:
+            resolved["lta_space_candidate"] = candidate
 
     return resolved

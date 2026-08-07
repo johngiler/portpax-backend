@@ -1,4 +1,4 @@
-"""Position suggestion + replaceable LTA detection for mass import preview."""
+"""Position suggestion + claimable LTA space for mass import preview."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from apps.bookings.services.validation import suggest_positions
 from apps.catalogs.utils.position_code import position_short_code
 
 
-def serialize_lta_candidate(booking: Booking) -> dict[str, Any]:
+def serialize_lta_space_candidate(booking: Booking) -> dict[str, Any]:
     position = booking.position
     port = booking.port
     code = None
@@ -19,48 +19,64 @@ def serialize_lta_candidate(booking: Booking) -> dict[str, Any]:
     return {
         "id": booking.id,
         "booking_code": booking.booking_code,
+        "status": booking.status,
         "vessel_name": booking.vessel.name if booking.vessel_id else "",
+        "shipping_line_name": (
+            booking.shipping_line.name if booking.shipping_line_id else ""
+        ),
         "position_id": position.id if position else None,
         "position_code": code,
     }
 
 
-def find_replaceable_lta_booking(
+def find_claimable_lta_booking(
     *,
     port_id: int,
     call_date: date,
-    vessel_id: int,
-    position_id: int | None,
+    shipping_line_id: int,
 ) -> Booking | None:
     """
-    LTA-only (not CL): same vessel on that day, or another vessel on the
-    chosen/suggested pier position.
+    LTA-only placeholder for the same shipping line / port / date.
+    Vessel name does not matter — the slot is reserved capacity for that line.
     """
-    base = (
+    return (
         Booking.objects.filter(
             port_id=port_id,
             call_date=call_date,
+            shipping_line_id=shipping_line_id,
             status=BookingStatus.LTA,
         )
         .select_related("vessel", "position", "port", "shipping_line")
         .order_by("id")
+        .first()
     )
 
-    same_vessel = base.filter(vessel_id=vessel_id).first()
-    if same_vessel:
-        return same_vessel
 
-    if position_id is not None:
-        return base.filter(position_id=position_id).exclude(vessel_id=vessel_id).first()
-
-    return None
+def count_claimable_lta_bookings(
+    *,
+    port_id: int,
+    call_date: date,
+    shipping_line_id: int,
+) -> int:
+    return Booking.objects.filter(
+        port_id=port_id,
+        call_date=call_date,
+        shipping_line_id=shipping_line_id,
+        status=BookingStatus.LTA,
+    ).count()
 
 
 def pick_suggested_position(
     suggestions: list[dict[str, Any]],
     *,
     preferred_id: int | None,
+    claimable_position_id: int | None = None,
 ) -> dict[str, Any] | None:
+    # Prefer the LTA-held pier when claiming / pre-assigning reserved space.
+    if claimable_position_id is not None:
+        for item in suggestions:
+            if item.get("id") == claimable_position_id:
+                return item
     if preferred_id is not None:
         for item in suggestions:
             if item.get("id") == preferred_id:
@@ -80,39 +96,58 @@ def resolve_position_and_lta(
     *,
     port_id: int,
     vessel_id: int,
+    shipping_line_id: int,
     call_date: date,
     preferred_position_id: int | None,
-    replace_lta: bool,
+    claim_lta_space: bool,
 ) -> dict[str, Any]:
     """
-    Suggest a pier position and detect a replaceable LTA booking on that slot.
+    Suggest a pier position and detect a claimable LTA slot for this line.
     """
+    candidate = find_claimable_lta_booking(
+        port_id=port_id,
+        call_date=call_date,
+        shipping_line_id=shipping_line_id,
+    )
+    candidate_payload = (
+        serialize_lta_space_candidate(candidate) if candidate else None
+    )
+    claimable_position_id = (
+        candidate.position_id if candidate is not None else None
+    )
+
     suggestions = suggest_positions(port_id, vessel_id, call_date)
+    # When claiming, lock onto the LTA pier; otherwise still prefer it as hint.
+    prefer_lta_pier = claimable_position_id if candidate else None
+    if claim_lta_space and claimable_position_id:
+        preferred_for_pick = claimable_position_id
+    else:
+        preferred_for_pick = preferred_position_id
+
     picked = pick_suggested_position(
         suggestions,
-        preferred_id=preferred_position_id,
+        preferred_id=preferred_for_pick,
+        claimable_position_id=prefer_lta_pier,
     )
     position_id = int(picked["id"]) if picked else None
     position_code = str(picked["code"]) if picked else None
 
-    candidate = find_replaceable_lta_booking(
-        port_id=port_id,
-        call_date=call_date,
-        vessel_id=vessel_id,
-        position_id=position_id,
-    )
-    candidate_payload = serialize_lta_candidate(candidate) if candidate else None
-
-    # If replacing and candidate has a pier, prefer that pier for the new row.
-    if replace_lta and candidate is not None and candidate.position_id:
+    if claim_lta_space and candidate is not None and candidate.position_id:
         position_id = candidate.position_id
         position_code = (
             candidate_payload["position_code"] if candidate_payload else position_code
         )
 
+    extra_lta_count = count_claimable_lta_bookings(
+        port_id=port_id,
+        call_date=call_date,
+        shipping_line_id=shipping_line_id,
+    )
+
     return {
         "position_id": position_id,
         "position_code": position_code,
-        "replace_lta": bool(replace_lta and candidate_payload is not None),
-        "lta_replace_candidate": candidate_payload,
+        "claim_lta_space": bool(claim_lta_space and candidate_payload is not None),
+        "lta_space_candidate": candidate_payload,
+        "lta_space_count": extra_lta_count,
     }

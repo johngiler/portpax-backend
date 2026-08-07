@@ -82,14 +82,28 @@ def validate_booking_params(
     }
 
 
-def suggest_positions(port_id: int, vessel_id: int, call_date: date) -> list[dict]:
+def suggest_positions(
+    port_id: int,
+    vessel_id: int,
+    call_date: date,
+    *,
+    exclude_booking_id: int | None = None,
+) -> list[dict]:
     """Pier positions that fit LOA/draft; ordered by first-in (sort_order)."""
     from apps.bookings.constants import LTA_SOFT_FAIL_CODES
     from apps.bookings.services.position_assignment import auto_assign_position
 
+    # Still list these so the UI can offer replace / show occupied slots.
+    suggest_allow_codes = LTA_SOFT_FAIL_CODES | {"position_occupied"}
+
     vessel = Vessel.objects.get(pk=vessel_id)
     port = Port.objects.get(pk=port_id)
-    recommended = auto_assign_position(port, vessel, call_date)
+    recommended = auto_assign_position(
+        port,
+        vessel,
+        call_date,
+        exclude_booking_id=exclude_booking_id,
+    )
 
     positions = Position.objects.filter(
         port_id=port_id,
@@ -103,22 +117,56 @@ def suggest_positions(port_id: int, vessel_id: int, call_date: date) -> list[dic
             vessel=vessel,
             call_date=call_date,
             position=position,
+            exclude_booking_id=exclude_booking_id,
         )
-        # LTA soft-fail still allows Hold + position choice (same as batch create).
         hard_errors = [
             i
             for i in result["errors"]
-            if i.get("code") not in LTA_SOFT_FAIL_CODES
+            if i.get("code") not in suggest_allow_codes
         ]
-        soft_lta = [
-            i for i in result["errors"] if i.get("code") in LTA_SOFT_FAIL_CODES
+        soft_notes = [
+            i for i in result["errors"] if i.get("code") in suggest_allow_codes
         ]
         if not hard_errors:
-            occupied = Booking.objects.filter(
+            occupant_qs = Booking.objects.filter(
                 position=position,
                 call_date=call_date,
                 status__in=OCCUPATION_CONFLICT_STATUSES,
-            ).exists()
+            ).select_related("vessel", "shipping_line")
+            if exclude_booking_id is not None:
+                occupant_qs = occupant_qs.exclude(pk=exclude_booking_id)
+            occupant_booking = occupant_qs.order_by("id").first()
+            occupied = occupant_booking is not None
+            occupant = None
+            if occupant_booking is not None:
+                short_code = position_short_code(port.code, position.code)
+                occupant = {
+                    "booking_id": occupant_booking.id,
+                    "booking_code": occupant_booking.booking_code,
+                    "status": occupant_booking.status,
+                    "vessel_name": (
+                        occupant_booking.vessel.name
+                        if occupant_booking.vessel_id
+                        else ""
+                    ),
+                    "shipping_line_name": (
+                        occupant_booking.shipping_line.name
+                        if occupant_booking.shipping_line_id
+                        else ""
+                    ),
+                    "position_code": short_code,
+                    "call_date": call_date.isoformat(),
+                    "eta": (
+                        occupant_booking.eta.isoformat()
+                        if occupant_booking.eta
+                        else None
+                    ),
+                    "etd": (
+                        occupant_booking.etd.isoformat()
+                        if occupant_booking.etd
+                        else None
+                    ),
+                }
             suggestions.append(
                 {
                     "id": position.id,
@@ -126,8 +174,9 @@ def suggest_positions(port_id: int, vessel_id: int, call_date: date) -> list[dic
                     "position_type": position.position_type,
                     "max_loa_m": str(position.max_loa_m) if position.max_loa_m else None,
                     "occupied": occupied,
+                    "occupant": occupant,
                     "recommended": recommended is not None and position.id == recommended.id,
-                    "warnings": [*result["warnings"], *soft_lta],
+                    "warnings": [*result["warnings"], *soft_notes],
                 }
             )
 

@@ -484,7 +484,23 @@ class BookingViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        suggestions = suggest_positions(int(port_id), int(vessel_id), parsed_date)
+        exclude_id = None
+        raw_exclude = request.query_params.get("exclude_booking")
+        if raw_exclude:
+            try:
+                exclude_id = int(raw_exclude)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "exclude_booking debe ser un id numérico."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        suggestions = suggest_positions(
+            int(port_id),
+            int(vessel_id),
+            parsed_date,
+            exclude_booking_id=exclude_id,
+        )
         return Response({"positions": suggestions})
 
     @action(detail=False, methods=["get"], url_path="export")

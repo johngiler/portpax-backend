@@ -110,8 +110,14 @@ def _normalize_retry_row(
         "suggested_status": str(row.get("suggested_status") or "h").lower(),
         "position_id": position_id,
         "position_code": row.get("position_code"),
-        "replace_lta": bool(row.get("replace_lta")),
-        "lta_replace_candidate": row.get("lta_replace_candidate"),
+        "claim_lta_space": bool(
+            row.get("claim_lta_space") or row.get("replace_lta")
+        ),
+        "lta_space_candidate": (
+            row.get("lta_space_candidate")
+            if "lta_space_candidate" in row
+            else row.get("lta_replace_candidate")
+        ),
         "issues": issues,
         "warnings": _as_str_list(row.get("warnings")),
         "selectable": selectable,
@@ -136,45 +142,132 @@ def _failure_payload(row: dict[str, Any], row_id: Any, detail: str) -> dict[str,
     return payload
 
 
-def _cancel_replaceable_lta(
+def _claim_lta_space_booking(
     *,
-    candidate_id: int | None,
+    candidate_id: int,
     vessel_id: int,
+    shipping_line_id: int,
+    eta,
+    etd,
+    preferred_position_id: int | None,
     created_by=None,
-) -> None:
-    """Cancel LTA booking; delete if same vessel (unique port/vessel/date)."""
-    if not candidate_id:
-        return
-    from apps.bookings.models import Booking, BookingStatus, CancellationReason
-    from apps.bookings.services.booking.delete import delete_cancelled_booking
+):
+    """
+    Claim reserved LTA capacity in place: update vessel/ETA/ETD/position and
+    move status LTA → CL (Confirmed LTA). Does not cancel or create a new row.
+    """
+    from apps.bookings.models import Booking, BookingStatus
     from apps.bookings.services.booking.status import (
         BookingStatusError,
+        BookingValidationError,
+        update_booking_operational,
         update_booking_status,
     )
+    from apps.audit.services.record import record_booking_audit
+    from apps.catalogs.models import Vessel
 
     booking = (
-        Booking.objects.select_related("vessel")
+        Booking.objects.select_related("vessel", "position", "port", "shipping_line")
         .filter(pk=candidate_id, status=BookingStatus.LTA)
         .first()
     )
     if booking is None:
         raise BookingBatchCreateError(
-            "La reserva LTA a reemplazar ya no está disponible.",
-            "replace_lta",
+            "El espacio LTA a reclamar ya no está disponible.",
+            "claim_lta_space",
         )
+    if booking.shipping_line_id != shipping_line_id:
+        raise BookingBatchCreateError(
+            "El espacio LTA pertenece a otra naviera.",
+            "claim_lta_space",
+        )
+
+    vessel = Vessel.objects.filter(pk=vessel_id, is_active=True).first()
+    if vessel is None:
+        raise BookingBatchCreateError("Barco no válido.", "vessel_id")
+    if vessel.shipping_line_id != shipping_line_id:
+        raise BookingBatchCreateError(
+            "El barco no pertenece a la naviera del espacio LTA.",
+            "vessel_id",
+        )
+
+    # Unique port/vessel/date — another live booking for the new vessel blocks claim.
+    clash = (
+        Booking.objects.filter(
+            port_id=booking.port_id,
+            vessel_id=vessel_id,
+            call_date=booking.call_date,
+        )
+        .exclude(pk=booking.pk)
+        .exclude(status=BookingStatus.C)
+        .first()
+    )
+    if clash is not None:
+        raise BookingBatchCreateError(
+            "Ya existe una reserva para este barco/puerto/fecha; "
+            "no se puede reclamar el LTA con ese barco.",
+            "vessel_id",
+        )
+
+    changes: dict[str, Any] = {"claimed_lta_space": True}
+    vessel_update_fields = ["updated_at"]
+    if booking.vessel_id != vessel_id:
+        changes["vessel_id"] = {
+            "from": booking.vessel_id,
+            "to": vessel_id,
+            "from_name": booking.vessel.name if booking.vessel_id else None,
+            "to_name": vessel.name,
+        }
+        booking.vessel = vessel
+        vessel_update_fields.append("vessel")
+
+    if len(vessel_update_fields) > 1:
+        booking.save(update_fields=vessel_update_fields)
+        record_booking_audit(
+            booking,
+            action="operational_update",
+            summary="Reclamo de espacio LTA: actualización de barco",
+            changes={k: v for k, v in changes.items() if k != "claimed_lta_space"},
+            user=created_by,
+        )
+
+    position_id = preferred_position_id
+    if position_id is None:
+        position_id = booking.position_id
+
     try:
+        update_booking_operational(
+            booking,
+            user=created_by,
+            position_id=position_id,
+            eta=eta,
+            etd=etd,
+        )
+        booking.refresh_from_db()
         update_booking_status(
             booking,
-            BookingStatus.C,
+            BookingStatus.CL,
             user=created_by,
-            cancellation_reason=CancellationReason.ITM_DECISION,
         )
     except BookingStatusError as exc:
-        raise BookingBatchCreateError(str(exc), "replace_lta") from exc
+        raise BookingBatchCreateError(str(exc), "claim_lta_space") from exc
+    except BookingValidationError as exc:
+        msgs = [
+            (e.get("message") if isinstance(e, dict) else str(e))
+            for e in (exc.errors or [])
+        ]
+        detail = "; ".join(m for m in msgs if m) or str(exc)
+        raise BookingBatchCreateError(detail, "claim_lta_space") from exc
 
-    if booking.vessel_id == vessel_id:
-        booking.refresh_from_db()
-        delete_cancelled_booking(booking)
+    booking.refresh_from_db()
+    record_booking_audit(
+        booking,
+        action="operational_update",
+        summary="Espacio LTA reclamado (Confirmada LTA)",
+        changes=changes,
+        user=created_by,
+    )
+    return booking
 
 
 def create_from_resolved_rows(
@@ -187,6 +280,7 @@ def create_from_resolved_rows(
 ) -> dict[str, Any]:
     """
     Create one booking per selected resolved row.
+    When claim_lta_space is set, updates the existing LTA in place to CL.
     Persists a BookingImportBatch with successes, failures, and retry_rows
     (failed creates + deferred/not-selectable/not-selected preview rows).
     """
@@ -243,36 +337,43 @@ def create_from_resolved_rows(
             if raw_pos is not None and raw_pos != "":
                 preferred_position_id = int(raw_pos)
 
-            candidate = row.get("lta_replace_candidate") or {}
+            candidate = (
+                row.get("lta_space_candidate")
+                or row.get("lta_replace_candidate")
+                or {}
+            )
             candidate_id = None
             if isinstance(candidate, dict) and candidate.get("id") is not None:
                 candidate_id = int(candidate["id"])
+            claim = bool(row.get("claim_lta_space") or row.get("replace_lta"))
+
             with transaction.atomic():
-                if row.get("replace_lta") and candidate_id:
-                    _cancel_replaceable_lta(
+                if claim and candidate_id:
+                    booking = _claim_lta_space_booking(
                         candidate_id=candidate_id,
                         vessel_id=vessel_id,
+                        shipping_line_id=shipping_line_id,
+                        eta=eta,
+                        etd=etd,
+                        preferred_position_id=preferred_position_id,
                         created_by=created_by,
                     )
-                    audit_changes = {
-                        **audit_changes,
-                        "replaced_lta_booking_id": candidate_id,
-                    }
+                else:
+                    bookings = create_booking_batch(
+                        port_id=port_id,
+                        shipping_line_id=shipping_line_id,
+                        vessel_id=vessel_id,
+                        call_dates=[call_date],
+                        notes="",
+                        created_by=created_by,
+                        eta=eta,
+                        etd=etd,
+                        preferred_position_id=preferred_position_id,
+                        audit_changes=audit_changes,
+                        status=initial_status,
+                    )
+                    booking = bookings[0]
 
-                bookings = create_booking_batch(
-                    port_id=port_id,
-                    shipping_line_id=shipping_line_id,
-                    vessel_id=vessel_id,
-                    call_dates=[call_date],
-                    notes="",
-                    created_by=created_by,
-                    eta=eta,
-                    etd=etd,
-                    preferred_position_id=preferred_position_id,
-                    audit_changes=audit_changes,
-                    status=initial_status,
-                )
-            booking = bookings[0]
             created_booking_ids.append(booking.id)
             created.append(
                 {

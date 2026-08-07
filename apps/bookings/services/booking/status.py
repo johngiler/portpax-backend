@@ -287,14 +287,23 @@ def update_booking_operational(
             )
         ack = bool(acknowledge_combined_red) and user_may_authorize_exceptions(user)
 
+        from apps.bookings.constants import LTA_SOFT_FAIL_CODES
+
         validation = validate_booking_instance(
             booking,
             acknowledge_combined_red=ack,
         )
-        if not validation["valid"]:
+        # Existing bookings may sit in the LTA window as Hold; do not block
+        # position/ETA edits with the same soft codes used at create.
+        hard_errors = [
+            e
+            for e in (validation.get("errors") or [])
+            if e.get("code") not in LTA_SOFT_FAIL_CODES
+        ]
+        if hard_errors:
             raise BookingValidationError(
                 "La reserva no cumple las validaciones operativas.",
-                validation["errors"],
+                hard_errors,
             )
 
     if len(update_fields) > 1:
