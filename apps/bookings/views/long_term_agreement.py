@@ -94,6 +94,24 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
                 entity=after,
             )
 
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        linked = instance.bookings.count()
+        if linked > 0:
+            noun = "reserva" if linked == 1 else "reservas"
+            adj = "vinculada" if linked == 1 else "vinculadas"
+            return Response(
+                {
+                    "detail": (
+                        f"No se puede eliminar el acuerdo porque tiene "
+                        f"{linked} {noun} {adj}. "
+                        "Desactiva el acuerdo o desvincula esas reservas primero."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        return super().destroy(request, *args, **kwargs)
+
     def perform_destroy(self, instance):
         snap = snapshot_lta(instance)
         record_lta_audit(
