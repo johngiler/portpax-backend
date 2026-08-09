@@ -35,6 +35,7 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
     )
     vessel_names = serializers.SerializerMethodField()
     position_codes = serializers.SerializerMethodField()
+    linked_bookings_count = serializers.IntegerField(read_only=True, default=0)
     contract_file = serializers.FileField(
         required=False,
         allow_null=True,
@@ -70,13 +71,20 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             "valid_until",
             "is_active",
             "notes",
+            "linked_bookings_count",
             "contract_file",
             "contract_file_url",
             "contract_file_name",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["created_at", "updated_at", "contract_file_url", "contract_file_name"]
+        read_only_fields = [
+            "created_at",
+            "updated_at",
+            "contract_file_url",
+            "contract_file_name",
+            "linked_bookings_count",
+        ]
         extra_kwargs = {
             "contract_file": {"write_only": True},
         }

@@ -1,3 +1,4 @@
+from django.db.models import Count
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -31,7 +32,7 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
         "shipping_line__code",
         "shipping_line__name",
     ]
-    ordering_fields = ["code", "name", "created_at", "valid_from"]
+    ordering_fields = ["code", "name", "created_at", "valid_from", "linked_bookings_count"]
     ordering = ["port__name", "shipping_line__name", "code"]
 
     queryset = LongTermAgreement.objects.select_related(
@@ -40,7 +41,9 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
     ).prefetch_related("vessels", "positions")
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().annotate(
+            linked_bookings_count=Count("bookings", distinct=True),
+        )
         port_id = self.request.query_params.get("port")
         if port_id:
             qs = qs.filter(port_id=port_id)
