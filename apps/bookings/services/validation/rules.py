@@ -66,6 +66,32 @@ def window_gap(
     return datetime.combine(day.date(), start_a) - datetime.combine(day.date(), end_b)
 
 
+def vessel_meets_combined_min(vessel: Vessel, min_loa_m) -> bool:
+    """Mega-ship when vessel LOA >= combined min_loa (e.g. 365 m)."""
+    loa = _decimal(vessel.loa_m)
+    min_loa = _decimal(min_loa_m)
+    return loa is not None and min_loa is not None and loa >= min_loa
+
+
+def mega_combined_positions(*, port_id: int, vessel: Vessel) -> list[Position]:
+    """Active combined slots this vessel must use (LOA >= each slot's min_loa)."""
+    from apps.catalogs.models import PositionComponent
+
+    combined_ids = (
+        PositionComponent.objects.filter(
+            combined_position__port_id=port_id,
+            combined_position__is_active=True,
+        )
+        .values_list("combined_position_id", flat=True)
+        .distinct()
+    )
+    matches: list[Position] = []
+    for slot in Position.objects.filter(id__in=combined_ids, is_active=True):
+        if vessel_meets_combined_min(vessel, slot.min_loa_m):
+            matches.append(slot)
+    return matches
+
+
 def validate_physical_fit(
     vessel: Vessel,
     position: Position | None,
@@ -76,6 +102,37 @@ def validate_physical_fit(
         return issues
 
     loa = _decimal(vessel.loa_m)
+    from apps.catalogs.services.position_combination import position_is_combined
+
+    # Mega-ship: vessel LOA >= combined.min_loa_m → must use that combined slot.
+    mega_slots = mega_combined_positions(port_id=port.id, vessel=vessel)
+    if mega_slots:
+        mega_ids = {slot.id for slot in mega_slots}
+        if position.id not in mega_ids:
+            codes = ", ".join(
+                slot.code.split("-", 1)[-1] if "-" in slot.code else slot.code
+                for slot in mega_slots
+            )
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "loa_requires_combined",
+                    f"Mega-barco (LOA {loa} m ≥ eslora mínima): "
+                    f"debe ocupar {codes}.",
+                )
+            )
+    elif position_is_combined(position) and position.min_loa_m is not None:
+        min_loa = _decimal(position.min_loa_m)
+        if loa is not None and min_loa is not None and loa < min_loa:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "loa_below_combined_min",
+                    f"LOA del barco ({loa} m) no alcanza la eslora mínima de "
+                    f"{position.code} ({min_loa} m) para ocupar el slot combinado.",
+                )
+            )
+
     max_loa = _decimal(position.max_loa_m)
     if loa is not None and max_loa is not None:
         if loa > max_loa:
@@ -195,6 +252,22 @@ def related_position_ids(position_id: int) -> set[int]:
         )
     )
     return ids
+
+
+def find_occupying_booking(
+    position_id: int,
+    call_date,
+    exclude_booking_id: int | None = None,
+):
+    """Live booking that occupies this slot or a combined/component sibling."""
+    qs = Booking.objects.filter(
+        position_id__in=related_position_ids(position_id),
+        call_date=call_date,
+        status__in=OCCUPATION_CONFLICT_STATUSES,
+    ).select_related("vessel", "shipping_line", "position", "position__port")
+    if exclude_booking_id:
+        qs = qs.exclude(pk=exclude_booking_id)
+    return qs.order_by("id").first()
 
 
 def validate_position_availability(
@@ -565,6 +638,18 @@ def validate_booking(
         issues.extend(validate_combined_loa(vessel, position, call_date, exclude_booking_id))
         issues.extend(
             validate_filo_nesting(
+                position,
+                call_date,
+                eta=eta,
+                etd=etd,
+                exclude_booking_id=exclude_booking_id,
+            )
+        )
+        from apps.bookings.services.validation.loa_recalc import validate_loa_recalc
+
+        issues.extend(
+            validate_loa_recalc(
+                vessel,
                 position,
                 call_date,
                 eta=eta,

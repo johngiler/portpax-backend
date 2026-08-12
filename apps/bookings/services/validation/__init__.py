@@ -1,8 +1,10 @@
 from datetime import date
 
-from apps.bookings.constants import OCCUPATION_CONFLICT_STATUSES
 from apps.bookings.models import Booking
-from apps.bookings.services.validation.rules import validate_booking
+from apps.bookings.services.validation.rules import (
+    find_occupying_booking,
+    validate_booking,
+)
 from apps.catalogs.models import Port, Position, Vessel
 from apps.catalogs.utils.position_code import position_short_code
 
@@ -92,6 +94,7 @@ def suggest_positions(
     """Pier positions that fit LOA/draft; ordered by first-in (sort_order)."""
     from apps.bookings.constants import LTA_SOFT_FAIL_CODES
     from apps.bookings.services.position_assignment import auto_assign_position
+    from apps.bookings.services.validation.loa_recalc import effective_max_loa_m
 
     # Still list these so the UI can offer replace / show occupied slots.
     suggest_allow_codes = LTA_SOFT_FAIL_CODES | {"position_occupied"}
@@ -128,18 +131,20 @@ def suggest_positions(
             i for i in result["errors"] if i.get("code") in suggest_allow_codes
         ]
         if not hard_errors:
-            occupant_qs = Booking.objects.filter(
-                position=position,
-                call_date=call_date,
-                status__in=OCCUPATION_CONFLICT_STATUSES,
-            ).select_related("vessel", "shipping_line")
-            if exclude_booking_id is not None:
-                occupant_qs = occupant_qs.exclude(pk=exclude_booking_id)
-            occupant_booking = occupant_qs.order_by("id").first()
+            occupant_booking = find_occupying_booking(
+                position.id,
+                call_date,
+                exclude_booking_id,
+            )
             occupied = occupant_booking is not None
             occupant = None
             if occupant_booking is not None:
-                short_code = position_short_code(port.code, position.code)
+                occupant_position = occupant_booking.position
+                occupant_code = (
+                    position_short_code(port.code, occupant_position.code)
+                    if occupant_position is not None
+                    else position_short_code(port.code, position.code)
+                )
                 occupant = {
                     "booking_id": occupant_booking.id,
                     "booking_code": occupant_booking.booking_code,
@@ -154,7 +159,7 @@ def suggest_positions(
                         if occupant_booking.shipping_line_id
                         else ""
                     ),
-                    "position_code": short_code,
+                    "position_code": occupant_code,
                     "call_date": call_date.isoformat(),
                     "eta": (
                         occupant_booking.eta.isoformat()
@@ -167,12 +172,17 @@ def suggest_positions(
                         else None
                     ),
                 }
+            remaining_max = effective_max_loa_m(
+                position,
+                call_date,
+                exclude_booking_id=exclude_booking_id,
+            )
             suggestions.append(
                 {
                     "id": position.id,
                     "code": position_short_code(port.code, position.code),
                     "position_type": position.position_type,
-                    "max_loa_m": str(position.max_loa_m) if position.max_loa_m else None,
+                    "max_loa_m": str(remaining_max) if remaining_max is not None else None,
                     "occupied": occupied,
                     "occupant": occupant,
                     "recommended": recommended is not None and position.id == recommended.id,

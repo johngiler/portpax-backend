@@ -7,6 +7,9 @@ from apps.catalogs.serializers.port_fender import PortFenderSerializer
 from apps.catalogs.serializers.port_image import PortImageSerializer
 from apps.catalogs.serializers.position import PositionSerializer
 from apps.catalogs.serializers.position_image import PositionImageSerializer
+from apps.catalogs.serializers.position_loa_recalc_rule import (
+    PositionLoaRecalcRuleSerializer,
+)
 from apps.catalogs.serializers.position_nesting_rule import PositionNestingRuleSerializer
 from apps.catalogs.serializers.shipping_line import ShippingLineSerializer
 from apps.catalogs.serializers.shipping_line_detail import ShippingLineDetailSerializer
@@ -22,6 +25,7 @@ __all__ = [
     "PortImageSerializer",
     "PortSerializer",
     "PositionImageSerializer",
+    "PositionLoaRecalcRuleSerializer",
     "PositionNestingRuleSerializer",
     "PositionSerializer",
     "ShippingLineDetailSerializer",

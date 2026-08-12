@@ -30,6 +30,13 @@ class Position(models.Model):
         blank=True,
         help_text="Max LOA (eslora) for this slot (m).",
     )
+    min_loa_m = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Mega-ship threshold for combined slots: vessel LOA >= this value must use this slot (e.g. 365 m).",
+    )
     max_beam_m = models.DecimalField(
         max_digits=5,
         decimal_places=2,

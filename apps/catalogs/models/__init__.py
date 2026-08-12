@@ -10,6 +10,7 @@ from apps.catalogs.models.position_bollard_line import PositionBollardLine
 from apps.catalogs.models.position_component import PositionComponent
 from apps.catalogs.models.position_fender_line import PositionFenderLine
 from apps.catalogs.models.position_image import PositionImage
+from apps.catalogs.models.position_loa_recalc_rule import PositionLoaRecalcRule
 from apps.catalogs.models.position_nesting_rule import PositionNestingRule
 from apps.catalogs.models.position_pair_constraint import PositionPairConstraint
 from apps.catalogs.models.shipping_line import ShippingLine
@@ -32,6 +33,7 @@ __all__ = [
     "PositionComponent",
     "PositionFenderLine",
     "PositionImage",
+    "PositionLoaRecalcRule",
     "PositionNestingRule",
     "PositionPairConstraint",
     "PositionType",

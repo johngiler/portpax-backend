@@ -65,6 +65,7 @@ class PositionSerializer(serializers.ModelSerializer):
             "code",
             "position_type",
             "max_loa_m",
+            "min_loa_m",
             "max_beam_m",
             "min_draft_m",
             "min_eta",
@@ -186,6 +187,30 @@ class PositionSerializer(serializers.ModelSerializer):
                 short = position_short_code(port_code or "", attrs["code"])
                 raise serializers.ValidationError(
                     {"code": f"Ya existe una posición «{short}» en este puerto."}
+                )
+
+        is_combined = False
+        if (
+            self._pending_component_ids is not _PENDING_COMPONENTS_UNSET
+            and self._pending_component_ids
+        ):
+            is_combined = len(self._pending_component_ids) == 2
+        elif self.instance:
+            is_combined = bool(self._component_links(self.instance))
+        if not is_combined:
+            attrs["min_loa_m"] = None
+        else:
+            min_loa = attrs.get(
+                "min_loa_m",
+                getattr(self.instance, "min_loa_m", None) if self.instance else None,
+            )
+            max_loa = attrs.get(
+                "max_loa_m",
+                getattr(self.instance, "max_loa_m", None) if self.instance else None,
+            )
+            if min_loa is not None and max_loa is not None and min_loa > max_loa:
+                raise serializers.ValidationError(
+                    {"min_loa_m": "Debe ser menor o igual a la eslora máxima."}
                 )
 
         self._apply_inventory_allocations(attrs, _port_id)

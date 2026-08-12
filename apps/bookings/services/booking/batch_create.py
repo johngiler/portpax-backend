@@ -5,6 +5,7 @@ from django.db import transaction
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.booking.code import resolve_unique_booking_code
 from apps.bookings.services.position_assignment import resolve_booking_position
+from apps.bookings.services.validation.rules import related_position_ids
 from apps.catalogs.models import Port, ShippingLine, Vessel
 
 # Mass-import initial statuses (NR retired from this flow; C/R not created here).
@@ -141,7 +142,7 @@ def create_booking_batch(
                 reserved_position_ids=reserved,
             )
             if position:
-                reserved.add(position.id)
+                reserved.update(related_position_ids(position.id))
 
             code = resolve_unique_booking_code(
                 port,

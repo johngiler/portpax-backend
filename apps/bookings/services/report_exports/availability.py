@@ -9,16 +9,39 @@ from io import BytesIO, StringIO
 from typing import Any
 
 from django.core.files.storage import default_storage
+from django.db.models import Q
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 from apps.bookings.services.report_exports.common import scheduled_bookings_qs
-from apps.catalogs.models import Port, Position
+from apps.catalogs.models import Port, Position, PositionComponent
 
 # Occupancy density filter (Barcos por día) — exact distinct ships on that day.
 SHIPS_PER_DAY_MIN = 1
 SHIPS_PER_DAY_MAX = 4
+
+
+def _related_column_indexes(
+    positions: list[Position],
+    position_index: dict[int, int],
+) -> dict[int, list[int]]:
+    """Map each position to chart columns it occupies (self + combined siblings)."""
+    ids = [position.id for position in positions]
+    related: dict[int, set[int]] = {pid: {pid} for pid in ids}
+    links = PositionComponent.objects.filter(
+        Q(combined_position_id__in=ids) | Q(source_position_id__in=ids)
+    ).values_list("combined_position_id", "source_position_id")
+    for combined_id, source_id in links:
+        if combined_id in related and source_id in related:
+            related[combined_id].add(source_id)
+            related[source_id].add(combined_id)
+    return {
+        pid: sorted(
+            position_index[rid] for rid in siblings if rid in position_index
+        )
+        for pid, siblings in related.items()
+    }
 
 
 def _day_ship_count(cells: list[list[dict]]) -> int:
@@ -173,6 +196,7 @@ def build_availability_data(
         }
         for position in positions
     ]
+
     status_filters = list(statuses or [])
     if status and status not in status_filters:
         status_filters.append(status)
@@ -207,9 +231,16 @@ def build_availability_data(
 
     bookings_by_day: dict[date, list[list[dict]]] = {}
     cell_count = len(columns)
+    related_indexes = _related_column_indexes(positions, position_index)
     for booking in bookings:
-        cell_index = position_index.get(booking.position_id, unassigned_index)
-        if cell_index is None:
+        if booking.position_id in position_index:
+            cell_indexes = related_indexes.get(
+                booking.position_id,
+                [position_index[booking.position_id]],
+            )
+        elif unassigned_index is not None:
+            cell_indexes = [unassigned_index]
+        else:
             continue
         day_cells = bookings_by_day.setdefault(
             booking.call_date,
@@ -225,23 +256,26 @@ def build_availability_data(
         )
         if vessel_logo and request is not None:
             vessel_logo = request.build_absolute_uri(vessel_logo)
-        day_cells[cell_index].append(
-            {
-                "booking_code": booking.booking_code,
-                "status": booking.status,
-                "shipping_line_name": booking.shipping_line.name,
-                "shipping_line_logo": logo,
-                "vessel_name": booking.vessel.name,
-                "vessel_logo": vessel_logo,
-                "loa_m": (
-                    str(booking.vessel.loa_m)
-                    if booking.vessel.loa_m is not None
-                    else None
-                ),
-                "eta": booking.eta.isoformat() if booking.eta else None,
-                "etd": booking.etd.isoformat() if booking.etd else None,
-            }
-        )
+        call = {
+            "booking_code": booking.booking_code,
+            "status": booking.status,
+            "shipping_line_name": booking.shipping_line.name,
+            "shipping_line_logo": logo,
+            "vessel_name": booking.vessel.name,
+            "vessel_logo": vessel_logo,
+            "loa_m": (
+                str(booking.vessel.loa_m)
+                if booking.vessel.loa_m is not None
+                else None
+            ),
+            "eta": booking.eta.isoformat() if booking.eta else None,
+            "etd": booking.etd.isoformat() if booking.etd else None,
+        }
+        for cell_index in cell_indexes:
+            existing = day_cells[cell_index]
+            if any(item.get("booking_code") == call["booking_code"] for item in existing):
+                continue
+            existing.append(call)
 
     if ships_per_day is not None:
         matching_days = sorted(

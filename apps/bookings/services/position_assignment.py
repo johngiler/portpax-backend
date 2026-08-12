@@ -4,8 +4,10 @@ from decimal import Decimal
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.validation.rules import (
     ValidationIssue,
+    related_position_ids,
     validate_physical_fit,
     validate_position_availability,
+    vessel_meets_combined_min,
     _decimal,
 )
 from apps.catalogs.models import Port, Position, Vessel
@@ -16,12 +18,19 @@ def _rank_position(vessel: Vessel, position: Position, port: Port) -> tuple:
     """
     Lower tuple wins.
 
-    Prefer simple pier slots over combined (E1+E2) when both fit, then
-    catalog sort_order, then overhang, then tighter LOA fit.
+    Mega-ship (vessel LOA >= combined min_loa) must rank the combined slot first.
+    Otherwise prefer simple piers over combined, then catalog sort_order.
     """
     physical = validate_physical_fit(vessel, position, port)
     has_overhang = 1 if any(i.code == "loa_overhang" for i in physical) else 0
-    is_combined = 1 if position_is_combined(position) else 0
+    if position_is_combined(position) and vessel_meets_combined_min(
+        vessel, position.min_loa_m
+    ):
+        combined_rank = 0
+    elif position_is_combined(position):
+        combined_rank = 2
+    else:
+        combined_rank = 1
 
     loa = _decimal(vessel.loa_m)
     max_loa = _decimal(position.max_loa_m)
@@ -29,7 +38,7 @@ def _rank_position(vessel: Vessel, position: Position, port: Port) -> tuple:
     if loa is not None and max_loa is not None:
         loa_slack = abs(max_loa - loa)
 
-    return (is_combined, position.sort_order, has_overhang, loa_slack, position.code)
+    return (combined_rank, position.sort_order, has_overhang, loa_slack, position.code)
 
 
 def auto_assign_position(
@@ -46,6 +55,8 @@ def auto_assign_position(
     Prefers a simple pier that fits LOA/draft over a combined slot.
     Skips occupied slots and slots reserved in the same batch transaction.
     """
+    from apps.bookings.services.validation.loa_recalc import validate_loa_recalc
+
     reserved = reserved_position_ids or set()
 
     positions = (
@@ -61,7 +72,7 @@ def auto_assign_position(
     candidates: list[tuple[tuple, Position]] = []
 
     for position in positions:
-        if position.id in reserved:
+        if reserved & related_position_ids(position.id):
             continue
 
         physical_issues = validate_physical_fit(vessel, position, port)
@@ -74,6 +85,15 @@ def auto_assign_position(
             exclude_booking_id,
         )
         if any(issue.level == "error" for issue in occupancy_issues):
+            continue
+
+        recalc_issues = validate_loa_recalc(
+            vessel,
+            position,
+            call_date,
+            exclude_booking_id=exclude_booking_id,
+        )
+        if any(issue.level == "error" for issue in recalc_issues):
             continue
 
         candidates.append((_rank_position(vessel, position, port), position))
@@ -96,7 +116,7 @@ def try_preferred_position(
 ) -> Position | None:
     """Return preferred pier if free and physically fit; otherwise None."""
     reserved = reserved_position_ids or set()
-    if preferred_position_id in reserved:
+    if reserved & related_position_ids(preferred_position_id):
         return None
     try:
         position = (
@@ -121,6 +141,17 @@ def try_preferred_position(
         exclude_booking_id,
     )
     if any(issue.level == "error" for issue in occupancy_issues):
+        return None
+
+    from apps.bookings.services.validation.loa_recalc import validate_loa_recalc
+
+    recalc_issues = validate_loa_recalc(
+        vessel,
+        position,
+        call_date,
+        exclude_booking_id=exclude_booking_id,
+    )
+    if any(issue.level == "error" for issue in recalc_issues):
         return None
 
     return position

@@ -11,6 +11,7 @@ from apps.catalogs.models import (
     PortImage,
     Position,
     PositionImage,
+    PositionLoaRecalcRule,
     PositionNestingRule,
     PositionPairConstraint,
     ShippingLine,
@@ -110,6 +111,7 @@ class PositionAdmin(admin.ModelAdmin):
         "position_type",
         "berth",
         "max_loa_m",
+        "min_loa_m",
         "max_beam_m",
         "min_draft_m",
         "min_eta",
@@ -137,6 +139,22 @@ class PositionNestingRuleAdmin(admin.ModelAdmin):
         "port__code",
         "outer_position__code",
         "inner_position__code",
+        "notes",
+    )
+
+
+@admin.register(PositionLoaRecalcRule)
+class PositionLoaRecalcRuleAdmin(admin.ModelAdmin):
+    list_display = (
+        "port",
+        "combined_position",
+        "min_separation_m",
+        "is_active",
+    )
+    list_filter = ("port", "is_active")
+    search_fields = (
+        "port__code",
+        "combined_position__code",
         "notes",
     )
 
