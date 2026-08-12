@@ -140,7 +140,7 @@ def validate_loa_recalc(
     other = occupant.position.code if occupant.position_id else "?"
     return [
         ValidationIssue(
-            "error",
+            "warning",
             "loa_recalc_exceeds",
             f"Eslora restante en {position.code}: {remaining} m "
             f"({rule.combined_position.code} {rule.combined_position.max_loa_m} m "
