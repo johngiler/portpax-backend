@@ -138,6 +138,7 @@ def validate_loa_recalc(
     if our_loa <= remaining:
         return []
     other = occupant.position.code if occupant.position_id else "?"
+    over = our_loa - remaining
     return [
         ValidationIssue(
             "warning",
@@ -146,6 +147,6 @@ def validate_loa_recalc(
             f"({rule.combined_position.code} {rule.combined_position.max_loa_m} m "
             f"− {occupant.vessel.loa_m} m en {other} "
             f"− {rule.min_separation_m} m de separación). "
-            f"El barco mide {our_loa} m.",
+            f"El barco mide {our_loa} m (overhang {over} m sobre el resto).",
         )
     ]
