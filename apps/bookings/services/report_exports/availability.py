@@ -259,6 +259,7 @@ def build_availability_data(
         call = {
             "booking_code": booking.booking_code,
             "status": booking.status,
+            "position_id": booking.position_id or 0,
             "shipping_line_name": booking.shipping_line.name,
             "shipping_line_logo": logo,
             "vessel_name": booking.vessel.name,
