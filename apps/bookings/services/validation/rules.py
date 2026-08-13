@@ -218,17 +218,6 @@ def validate_physical_fit(
                 )
             )
 
-    if vessel.pax_capacity is not None and position.bollard_count is not None:
-        if vessel.mooring_line_count and vessel.mooring_line_count > position.bollard_count:
-            issues.append(
-                ValidationIssue(
-                    "warning",
-                    "mooring_capacity",
-                    f"El barco requiere {vessel.mooring_line_count} líneas de amarre; "
-                    f"{position.code} tiene {position.bollard_count} bitas.",
-                )
-            )
-
     return issues
 
 

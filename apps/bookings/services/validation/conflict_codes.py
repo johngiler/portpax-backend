@@ -26,7 +26,6 @@ CONFLICT_SEVERITY_BY_CODE: dict[str, str] = {
     "eta_before_min": "yellow",
     "loa_overhang": "yellow",
     "loa_shared_pier": "yellow",
-    "mooring_capacity": "yellow",
     "loa_recalc_sum_yellow": "yellow",
     "combined_loa_orange": "yellow",
     "lta_slot_reserved": "yellow",
