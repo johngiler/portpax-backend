@@ -200,23 +200,17 @@ def validate_physical_fit(
         )
 
     draft = _decimal(vessel.draft_m)
-    depth_limits = [
-        _decimal(position.min_draft_m),
-        _decimal(position.berth.min_draft_m) if position.berth_id else None,
-        _decimal(port.min_berth_draft_m),
-    ]
-    applicable = [d for d in depth_limits if d is not None]
-    if draft is not None and applicable:
-        min_depth = min(applicable)
-        if draft > min_depth:
-            issues.append(
-                ValidationIssue(
-                    "error",
-                    "draft_too_deep",
-                    f"Calado del barco ({draft} m) supera la profundidad disponible "
-                    f"({min_depth} m) en {position.code}.",
-                )
+    # Draft is validated against the position only (not berth / port minimum).
+    position_depth = _decimal(position.min_draft_m)
+    if draft is not None and position_depth is not None and draft > position_depth:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "draft_too_deep",
+                f"Calado del barco ({draft} m) supera la profundidad disponible "
+                f"({position_depth} m) en {position.code}.",
             )
+        )
 
     return issues
 
