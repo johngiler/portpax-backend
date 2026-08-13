@@ -1,7 +1,6 @@
-from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
-from rest_framework import filters, status, viewsets
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.mixins import (
@@ -81,6 +80,7 @@ from apps.bookings.services.import_mass import (
 )
 from apps.bookings.services.import_mass.export_rows import build_import_rows_xlsx
 from apps.bookings.utils.list_ordering import apply_booking_list_ordering
+from apps.bookings.utils.list_search import BookingSearchFilter
 
 _PORT_ACCESS_DENIED = "No tienes acceso a este puerto."
 
@@ -95,7 +95,7 @@ class BookingViewSet(
     permission_classes = [IsAuthenticated, DenyViewerWrites]
     serializer_class = BookingSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [BookingSearchFilter]
     search_fields = [
         "booking_code",
         "port__name",

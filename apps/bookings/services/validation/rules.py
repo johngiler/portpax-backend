@@ -251,7 +251,7 @@ def validate_multi_port_conflict(
             message = (
                 f"El mismo barco tiene escala en {other.port.name} "
                 f"({other.booking_code}) el {other.call_date.isoformat()} "
-                f"(±2 días). La escala actual puede no ser viable."
+                f"(±2 días)."
             )
             code = "multi_port_proximity"
         issues.append(ValidationIssue("warning", code, message))

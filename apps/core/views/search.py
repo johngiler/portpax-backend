@@ -96,13 +96,11 @@ def _search_vessels(q: str) -> list[dict]:
 
 
 def _search_bookings(q: str, allowed_ports: set[int] | None) -> list[dict]:
-    qs = Booking.objects.filter(
-        Q(booking_code__icontains=q)
-        | Q(vessel__name__icontains=q)
-        | Q(port__name__icontains=q)
-        | Q(port__code__icontains=q)
-        | Q(shipping_line__name__icontains=q)
-    ).select_related("vessel", "port").order_by("-call_date", "-id")
+    from apps.bookings.utils.list_search import apply_booking_text_search
+
+    qs = apply_booking_text_search(Booking.objects.all(), q).select_related(
+        "vessel", "port"
+    ).order_by("-call_date", "-id")
     if allowed_ports is not None:
         qs = qs.filter(port_id__in=allowed_ports)
     return [
