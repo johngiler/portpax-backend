@@ -166,7 +166,7 @@ def validate_loa_recalc(
                 "warning",
                 "loa_recalc_exceeds",
                 (
-                    f"Recálculo de slora: máx. muelle {rule.max_loa_m} m − "
+                    f"Recálculo de eslora: máx. muelle {rule.max_loa_m} m − "
                     f"barco en {other} ({other_loa} m) − separación {sep} m "
                     f"= {remaining} m disponibles en {position.code}. "
                     f"Este barco mide {our_loa} m → overhang {over} m."

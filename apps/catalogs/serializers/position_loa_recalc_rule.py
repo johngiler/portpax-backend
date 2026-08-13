@@ -5,6 +5,21 @@ from apps.catalogs.services.position_combination import position_is_combined
 from apps.catalogs.utils.position_code import position_short_code
 
 
+def _refresh_bookings_for_rule(rule: PositionLoaRecalcRule) -> None:
+    """Persist conflict flags after LOA pair rules change."""
+    from apps.bookings.constants import OCCUPATION_CONFLICT_STATUSES
+    from apps.bookings.models import Booking
+    from apps.bookings.services.validation.conflicts import refresh_booking_conflicts
+
+    position_ids = {rule.position_a_id, rule.position_b_id}
+    qs = Booking.objects.filter(
+        position_id__in=position_ids,
+        status__in=OCCUPATION_CONFLICT_STATUSES,
+    ).order_by("id")
+    for booking in qs.iterator(chunk_size=100):
+        refresh_booking_conflicts(booking)
+
+
 class PositionLoaRecalcRuleSerializer(serializers.ModelSerializer):
     position_a_code = serializers.CharField(source="position_a.code", read_only=True)
     position_a_label = serializers.SerializerMethodField()
@@ -38,6 +53,16 @@ class PositionLoaRecalcRuleSerializer(serializers.ModelSerializer):
 
     def get_position_b_label(self, obj) -> str:
         return position_short_code(obj.port.code, obj.position_b.code)
+
+    def create(self, validated_data):
+        rule = super().create(validated_data)
+        _refresh_bookings_for_rule(rule)
+        return rule
+
+    def update(self, instance, validated_data):
+        rule = super().update(instance, validated_data)
+        _refresh_bookings_for_rule(rule)
+        return rule
 
     def validate(self, attrs):
         port = attrs.get("port") or getattr(self.instance, "port", None)
