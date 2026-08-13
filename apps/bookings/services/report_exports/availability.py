@@ -274,6 +274,7 @@ def build_availability_data(
             "status": booking.status,
             "has_conflict": bool(getattr(booking, "has_conflict", False)),
             "conflict_snapshot": getattr(booking, "conflict_snapshot", None) or [],
+            "conflict_severity": getattr(booking, "conflict_severity", None) or None,
             "position_id": booking.position_id or 0,
             "shipping_line_name": booking.shipping_line.name,
             "shipping_line_logo": logo,
@@ -287,6 +288,10 @@ def build_availability_data(
             "eta": booking.eta.isoformat() if booking.eta else None,
             "etd": booking.etd.isoformat() if booking.etd else None,
         }
+        if call["has_conflict"] and not call["conflict_severity"]:
+            from apps.bookings.services.validation.conflicts import max_snapshot_severity
+
+            call["conflict_severity"] = max_snapshot_severity(call["conflict_snapshot"])
         for cell_index in cell_indexes:
             existing = day_cells[cell_index]
             if any(item.get("booking_code") == call["booking_code"] for item in existing):

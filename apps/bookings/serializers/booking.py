@@ -103,6 +103,7 @@ class BookingSerializer(serializers.ModelSerializer):
             "status_display",
             "notes",
             "has_conflict",
+            "conflict_severity",
             "conflict_snapshot",
             "cancellation_reason",
             "cancellation_reason_display",

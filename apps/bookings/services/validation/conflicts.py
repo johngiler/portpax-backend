@@ -51,6 +51,24 @@ def snapshot_sets_has_conflict(snapshot: list[dict]) -> bool:
     )
 
 
+def max_snapshot_severity(snapshot: list[dict] | None) -> str | None:
+    """Highest paint severity in a conflict snapshot (red > yellow > green)."""
+    from apps.bookings.services.validation.conflict_codes import resolve_issue_severity
+
+    rank = {"red": 3, "yellow": 2, "green": 1}
+    best: str | None = None
+    best_n = 0
+    for item in snapshot or []:
+        if not isinstance(item, dict):
+            continue
+        sev = resolve_issue_severity(item)
+        n = rank.get(sev, 0)
+        if n > best_n:
+            best_n = n
+            best = sev
+    return best
+
+
 def apply_nonblocking_validation(result: dict) -> dict:
     """
     Operational rules never block create/update/confirm.
@@ -77,14 +95,16 @@ def refresh_booking_conflicts(
     user=None,
     request=None,
 ) -> list[dict]:
-    """Recompute and persist has_conflict + conflict_snapshot on a booking.
+    """Recompute and persist has_conflict + conflict_severity + conflict_snapshot.
 
     Records booking audit when conflicts are detected or cleared.
     """
     from apps.audit.services.record import record_booking_audit
     from apps.bookings.services.validation import validate_booking_instance
+    from apps.bookings.services.validation.conflict_codes import resolve_issue_severity
 
     prev_flag = bool(booking.has_conflict)
+    prev_severity = getattr(booking, "conflict_severity", None) or None
     prev_snapshot = list(booking.conflict_snapshot or [])
 
     result = validate_booking_instance(
@@ -93,21 +113,40 @@ def refresh_booking_conflicts(
         nonblocking=False,
     )
     conflicts = conflicts_from_validation(result)
-    snapshot = [
-        c
-        for c in conflicts
-        if c.get("severity") in ("yellow", "red")
-        and c.get("code") not in INFO_ONLY_CODES
-    ]
+    snapshot: list[dict] = []
+    for item in conflicts:
+        code = str(item.get("code") or "")
+        if code in INFO_ONLY_CODES:
+            continue
+        sev = resolve_issue_severity(item)
+        if sev not in ("yellow", "red"):
+            continue
+        normalized = dict(item)
+        normalized["severity"] = sev
+        snapshot.append(normalized)
+
     next_flag = snapshot_sets_has_conflict(snapshot)
+    next_severity = max_snapshot_severity(snapshot) if next_flag else None
 
     booking.has_conflict = next_flag
+    booking.conflict_severity = next_severity
     booking.conflict_snapshot = snapshot
-    booking.save(update_fields=["has_conflict", "conflict_snapshot", "updated_at"])
+    booking.save(
+        update_fields=[
+            "has_conflict",
+            "conflict_severity",
+            "conflict_snapshot",
+            "updated_at",
+        ]
+    )
 
     prev_codes = {str(i.get("code") or "") for i in prev_snapshot}
     next_codes = {str(i.get("code") or "") for i in snapshot}
-    snapshot_changed = prev_codes != next_codes or prev_flag != next_flag
+    snapshot_changed = (
+        prev_codes != next_codes
+        or prev_flag != next_flag
+        or prev_severity != next_severity
+    )
 
     if snapshot_changed:
         if next_flag and not prev_flag:
@@ -117,6 +156,7 @@ def refresh_booking_conflicts(
                 summary=_conflict_detected_summary(snapshot),
                 changes={
                     "has_conflict": {"from": False, "to": True},
+                    "conflict_severity": {"from": None, "to": next_severity},
                     "conflicts": snapshot,
                 },
                 user=user,
@@ -129,18 +169,25 @@ def refresh_booking_conflicts(
                 summary="Conflictos operativos resueltos",
                 changes={
                     "has_conflict": {"from": True, "to": False},
+                    "conflict_severity": {"from": prev_severity, "to": None},
                     "resolved_conflicts": prev_snapshot,
                 },
                 user=user,
                 request=request,
             )
-        elif next_flag and prev_flag and prev_codes != next_codes:
+        elif next_flag and prev_flag and (
+            prev_codes != next_codes or prev_severity != next_severity
+        ):
             record_booking_audit(
                 booking,
                 action="conflict_updated",
                 summary=_conflict_updated_summary(prev_snapshot, snapshot),
                 changes={
                     "has_conflict": {"from": True, "to": True},
+                    "conflict_severity": {
+                        "from": prev_severity,
+                        "to": next_severity,
+                    },
                     "conflicts_from": prev_snapshot,
                     "conflicts_to": snapshot,
                 },

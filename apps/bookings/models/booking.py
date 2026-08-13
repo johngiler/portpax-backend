@@ -64,6 +64,18 @@ class Booking(models.Model):
         db_index=True,
         help_text="True when operational conflicts (non-blocking) are present.",
     )
+    conflict_severity = models.CharField(
+        max_length=10,
+        blank=True,
+        null=True,
+        db_index=True,
+        choices=[
+            ("yellow", "Yellow"),
+            ("red", "Red"),
+            ("green", "Green"),
+        ],
+        help_text="Highest severity in conflict_snapshot (yellow|red); null when no conflict.",
+    )
     conflict_snapshot = models.JSONField(
         default=list,
         blank=True,
