@@ -549,7 +549,10 @@ def validate_lta(
     """
     LTA seasonal windows + strategic slot ownership.
 
-    Windows (Especificaciones LTA — Winter/Summer):
+    Only applies when the port has at least one active LTA agreement.
+    Ports without LTAs are open booking for all dates (no LTA horizon/slot rules).
+
+    Windows (Especificaciones LTA — Winter/Summer), when LTAs exist for the port:
     - Current + general: open market (any carrier).
     - LTA covered: only matching LTA holders; foreign weekday+position is reserved.
     - Beyond LTA covered: blocked.
@@ -561,6 +564,7 @@ def validate_lta(
     from apps.bookings.services.lta.matching import (
         find_best_matching_agreement,
         find_foreign_slot_agreements,
+        port_has_active_agreements,
     )
     from apps.bookings.services.lta.windows import (
         BookingWindowZone,
@@ -568,6 +572,9 @@ def validate_lta(
         lta_holder_allows,
         open_market_allows,
     )
+
+    if not port_has_active_agreements(port.id):
+        return []
 
     issues: list[ValidationIssue] = []
     today = date_cls.today()

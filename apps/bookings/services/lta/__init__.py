@@ -5,6 +5,7 @@ from apps.bookings.services.lta.matching import (
     find_best_matching_agreement,
     find_foreign_slot_agreements,
     find_matching_agreements,
+    port_has_active_agreements,
     system_far_window,
 )
 from apps.bookings.services.lta.windows import (
@@ -25,5 +26,6 @@ __all__ = [
     "link_matching_bookings",
     "lta_holder_allows",
     "open_market_allows",
+    "port_has_active_agreements",
     "system_far_window",
 ]

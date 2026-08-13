@@ -29,6 +29,11 @@ def _base_qs() -> QuerySet[LongTermAgreement]:
     ).prefetch_related("vessels", "positions")
 
 
+def port_has_active_agreements(port_id: int) -> bool:
+    """LTA seasonal/slot rules only apply when the port has at least one active LTA."""
+    return LongTermAgreement.objects.filter(port_id=port_id, is_active=True).exists()
+
+
 def agreement_covers_validity(agreement: LongTermAgreement, call_date: date) -> bool:
     if agreement.valid_from and call_date < agreement.valid_from:
         return False
