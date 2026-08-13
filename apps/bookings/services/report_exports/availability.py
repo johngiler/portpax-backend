@@ -158,6 +158,7 @@ def build_availability_data(
     status: str | None = None,
     statuses: list[str] | None = None,
     has_conflict: bool | None = None,
+    conflict_severity: str | None = None,
     ships_per_day: int | None = None,
     page: int | None = None,
     page_size: int = 30,
@@ -225,7 +226,13 @@ def build_availability_data(
         for booking in scheduled_bookings_qs(**qs_kwargs, status="c"):
             if booking.id not in seen:
                 bookings.append(booking)
-    if has_conflict is True:
+    if conflict_severity in {"yellow", "red", "green"}:
+        bookings = [
+            b
+            for b in bookings
+            if getattr(b, "conflict_severity", None) == conflict_severity
+        ]
+    elif has_conflict is True:
         bookings = [b for b in bookings if b.has_conflict]
     elif has_conflict is False:
         bookings = [b for b in bookings if not b.has_conflict]
@@ -332,7 +339,7 @@ def build_availability_data(
         }
 
     # Conflict filter: only days with calls after filtering (paginated).
-    if has_conflict is not None:
+    if has_conflict is not None or conflict_severity in {"yellow", "red", "green"}:
         matching_days = sorted(
             day
             for day, cells in bookings_by_day.items()

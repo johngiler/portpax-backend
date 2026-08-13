@@ -142,6 +142,11 @@ class BookingViewSet(
         if has_conflict is not None and str(has_conflict).strip() != "":
             flag = str(has_conflict).strip().lower() in {"1", "true", "yes", "si", "sí"}
             qs = qs.filter(has_conflict=flag)
+        conflict_severity = str(
+            self.request.query_params.get("conflict_severity") or ""
+        ).strip().lower()
+        if conflict_severity in {"yellow", "red", "green"}:
+            qs = qs.filter(conflict_severity=conflict_severity)
         call_date_from = self.request.query_params.get("call_date_from")
         if call_date_from:
             qs = qs.filter(call_date__gte=call_date_from)
@@ -942,6 +947,14 @@ class BookingViewSet(
                 "si",
                 "sí",
             }
+        conflict_severity_raw = str(
+            request.query_params.get("conflict_severity") or ""
+        ).strip().lower()
+        conflict_severity_filter = (
+            conflict_severity_raw
+            if conflict_severity_raw in {"yellow", "red", "green"}
+            else None
+        )
         ships_per_day = self._optional_int_param("ships_per_day")
         if isinstance(ships_per_day, Response):
             return ships_per_day
@@ -963,9 +976,12 @@ class BookingViewSet(
                 position_id=position_id,
                 statuses=status_values,
                 has_conflict=has_conflict_filter,
+                conflict_severity=conflict_severity_filter,
                 ships_per_day=ships_per_day,
                 page=page
-                if ships_per_day is not None or has_conflict_filter is not None
+                if ships_per_day is not None
+                or has_conflict_filter is not None
+                or conflict_severity_filter is not None
                 else None,
                 page_size=page_size or 30,
                 request=request,

@@ -568,10 +568,9 @@ def validate_lta(
 
     Windows (Especificaciones LTA — Winter/Summer):
     - Current + general: open market (any carrier).
-    - LTA covered: only matching LTA holders.
+    - LTA covered: only matching LTA holders; foreign weekday+position is reserved.
     - Beyond LTA covered: blocked.
 
-    Also: foreign LTA owning weekday+position blocks other lines.
     Cadence (interval_days) is enforced via agreement matching.
     """
     from datetime import date as date_cls
@@ -593,22 +592,25 @@ def validate_lta(
     windows = compute_seasonal_windows(today)
     zone = windows.zone_for(call_date)
 
-    foreign = find_foreign_slot_agreements(
-        port_id=port.id,
-        shipping_line_id=shipping_line_id,
-        call_date=call_date,
-        position=position,
-    )
-    if foreign:
-        other = foreign[0]
-        issues.append(
-            ValidationIssue(
-                "error",
-                "lta_slot_reserved",
-                f"La posición está reservada por el LTA {other.code} "
-                f"({other.shipping_line.code}) en este día de la semana.",
-            )
+    # Strategic LTA slots apply only in the LTA covered window — not in
+    # current/general open booking (anyone may take the weekday+position there).
+    if zone == BookingWindowZone.LTA_COVERED:
+        foreign = find_foreign_slot_agreements(
+            port_id=port.id,
+            shipping_line_id=shipping_line_id,
+            call_date=call_date,
+            position=position,
         )
+        if foreign:
+            other = foreign[0]
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "lta_slot_reserved",
+                    f"La posición está reservada por el LTA {other.code} "
+                    f"({other.shipping_line.code}) en este día de la semana.",
+                )
+            )
 
     own = find_best_matching_agreement(
         port_id=port.id,
