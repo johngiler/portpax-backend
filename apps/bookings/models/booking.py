@@ -59,6 +59,16 @@ class Booking(models.Model):
     actual_pax = models.PositiveIntegerField(null=True, blank=True)
     actual_crew = models.PositiveIntegerField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    has_conflict = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="True when operational conflicts (non-blocking) are present.",
+    )
+    conflict_snapshot = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Normalized conflict items (code, severity, message, detail).",
+    )
     cancellation_reason = models.CharField(
         max_length=40,
         choices=CancellationReason.choices,

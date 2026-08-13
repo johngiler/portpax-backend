@@ -8,6 +8,7 @@ from apps.bookings.services.booking.status import (
     update_booking_operational,
     update_booking_status,
 )
+from apps.bookings.services.booking.identity import update_booking_identity
 from apps.bookings.services.validation import validate_booking_params
 from apps.catalogs.utils.position_code import position_short_code
 
@@ -39,6 +40,11 @@ class BookingSerializer(serializers.ModelSerializer):
     shipping_line_code = serializers.CharField(source="shipping_line.code", read_only=True)
     shipping_line_name = serializers.CharField(source="shipping_line.name", read_only=True)
     shipping_line_logo = serializers.SerializerMethodField()
+    shipping_line_group = serializers.IntegerField(
+        source="shipping_line.group_id",
+        read_only=True,
+        allow_null=True,
+    )
     vessel_name = serializers.CharField(source="vessel.name", read_only=True)
     vessel_logo = serializers.SerializerMethodField()
     vessel_loa_m = serializers.DecimalField(
@@ -78,6 +84,7 @@ class BookingSerializer(serializers.ModelSerializer):
             "shipping_line_code",
             "shipping_line_name",
             "shipping_line_logo",
+            "shipping_line_group",
             "vessel",
             "vessel_name",
             "vessel_logo",
@@ -95,6 +102,8 @@ class BookingSerializer(serializers.ModelSerializer):
             "status",
             "status_display",
             "notes",
+            "has_conflict",
+            "conflict_snapshot",
             "cancellation_reason",
             "cancellation_reason_display",
             "cancellation_evidence_url",
@@ -154,6 +163,11 @@ class BookingUpdateSerializer(serializers.Serializer):
     planned_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     actual_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     actual_crew = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    port = serializers.IntegerField(required=False)
+    shipping_line = serializers.IntegerField(required=False)
+    vessel = serializers.IntegerField(required=False)
+    call_date = serializers.DateField(required=False)
+    notes = serializers.CharField(required=False, allow_blank=True)
     cancellation_reason = serializers.ChoiceField(
         choices=CancellationReason.choices,
         required=False,
@@ -179,6 +193,13 @@ class BookingUpdateSerializer(serializers.Serializer):
         acknowledge_combined_red = validated_data.pop("acknowledge_combined_red", False)
         override_reason = validated_data.pop("override_reason", "")
 
+        identity_keys = ("port", "shipping_line", "vessel", "call_date", "notes")
+        identity_fields = {
+            key: validated_data.pop(key)
+            for key in identity_keys
+            if key in validated_data
+        }
+
         operational_keys = (
             "position",
             "eta",
@@ -194,6 +215,17 @@ class BookingUpdateSerializer(serializers.Serializer):
         }
 
         try:
+            if identity_fields:
+                instance = update_booking_identity(
+                    instance,
+                    user=user,
+                    request=request,
+                    port_id=identity_fields.get("port"),
+                    shipping_line_id=identity_fields.get("shipping_line"),
+                    vessel_id=identity_fields.get("vessel"),
+                    call_date=identity_fields.get("call_date"),
+                    notes=identity_fields.get("notes"),
+                )
             if new_status == BookingStatus.R:
                 pre_r = {
                     k: v
@@ -255,7 +287,12 @@ class BookingUpdateSerializer(serializers.Serializer):
                         acknowledge_combined_red=acknowledge_combined_red,
                     )
         except BookingValidationError as exc:
-            field = "status" if new_status else "position"
+            field = "shipping_line" if identity_fields else ("status" if new_status else "position")
+            if any(
+                isinstance(e, dict) and e.get("code") == "shipping_line_group_mismatch"
+                for e in exc.errors
+            ):
+                field = "shipping_line"
             raise serializers.ValidationError({field: exc.errors}) from exc
         except BookingStatusError as exc:
             field = "status" if new_status else "non_field_errors"
@@ -272,6 +309,7 @@ class BookingValidateSerializer(serializers.Serializer):
     eta = serializers.TimeField(required=False, allow_null=True)
     etd = serializers.TimeField(required=False, allow_null=True)
     acknowledge_combined_red = serializers.BooleanField(required=False, default=False)
+    exclude_booking = serializers.IntegerField(required=False, allow_null=True)
 
     def validate_call_dates(self, value):
         unique = sorted({d for d in value})
@@ -295,6 +333,7 @@ class BookingValidateSerializer(serializers.Serializer):
             eta=validated_data.get("eta"),
             etd=validated_data.get("etd"),
             acknowledge_combined_red=ack,
+            exclude_booking_id=validated_data.get("exclude_booking"),
         )
 
 

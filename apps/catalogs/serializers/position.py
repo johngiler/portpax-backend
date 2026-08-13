@@ -150,30 +150,17 @@ class PositionSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if "component_position_ids" in attrs:
             raw_ids = attrs.pop("component_position_ids")
-            if raw_ids is None:
-                self._pending_component_ids = None
-            elif len(raw_ids) == 0:
-                self._pending_component_ids = []
-            elif len(raw_ids) == 2:
-                port_id, _port_code = self._resolve_port(attrs)
-                if not port_id:
-                    raise serializers.ValidationError({"port": "Requerido para posición combinada."})
-                combined_id = self.instance.id if self.instance else None
-                try:
-                    sources = validate_component_ids(
-                        port_id=port_id,
-                        component_ids=raw_ids,
-                        combined_position_id=combined_id,
-                    )
-                except ValidationError as exc:
-                    message = exc.messages[0] if getattr(exc, "messages", None) else str(exc)
-                    raise serializers.ValidationError({"component_position_ids": message}) from exc
-                self._pending_component_ids = [source.id for source in sources]
-                attrs.setdefault("position_type", PositionType.PIER)
-            else:
+            # Combined positions retired (Fernanda/Herman Aug 2026).
+            if raw_ids:
                 raise serializers.ValidationError(
-                    {"component_position_ids": "Indica exactamente dos posiciones base o deja vacío."}
+                    {
+                        "component_position_ids": (
+                            "Las posiciones combinadas ya no se crean. "
+                            "Usa una regla de atraque «Recalcular slora» entre dos muelles."
+                        )
+                    }
                 )
+            self._pending_component_ids = []
 
         _port_id, port_code = self._resolve_port(attrs)
         if port_code and "code" in attrs:

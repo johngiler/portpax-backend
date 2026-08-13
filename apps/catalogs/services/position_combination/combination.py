@@ -15,6 +15,13 @@ def position_is_combined(position: Position) -> bool:
     return position.component_links.exists()
 
 
+def exclude_combined_positions(queryset):
+    """Drop catalog rows that are combined slots (no longer bookable)."""
+    return queryset.exclude(
+        pk__in=PositionComponent.objects.values_list("combined_position_id", flat=True)
+    )
+
+
 def validate_component_ids(
     *,
     port_id: int,

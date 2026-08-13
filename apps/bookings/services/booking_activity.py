@@ -11,7 +11,13 @@ from django.utils.dateparse import parse_date, parse_datetime
 from apps.audit.models import BookingAuditEntry
 from apps.bookings.models import Booking, BookingImportBatch
 
-SINGLE_ACTIONS = ("created", "operational_update", "status_change", "lta_linked")
+SINGLE_ACTIONS = (
+    "created",
+    "operational_update",
+    "identity_update",
+    "status_change",
+    "lta_linked",
+)
 
 
 def _user_display(user) -> str | None:

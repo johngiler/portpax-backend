@@ -7,7 +7,6 @@ from apps.bookings.services.confirmation_pdf import (
     save_confirmation_pdf,
 )
 from apps.bookings.services.position_assignment import auto_assign_position
-from apps.bookings.services.validation import validate_booking_instance
 
 
 class BookingStatusError(Exception):
@@ -95,15 +94,8 @@ def update_booking_status(
             )
         ack = bool(acknowledge_combined_red) and user_may_authorize_exceptions(user)
 
-        validation = validate_booking_instance(
-            booking,
-            acknowledge_combined_red=ack,
-        )
-        if not validation["valid"]:
-            raise BookingValidationError(
-                "La reserva no cumple las validaciones operativas.",
-                validation["errors"],
-            )
+        # Operational conflicts are non-blocking; persist on save below.
+        _ = ack
 
     if new_status in (BookingStatus.LTA, BookingStatus.CL):
         from apps.bookings.services.lta.matching import find_best_matching_agreement
@@ -124,22 +116,6 @@ def update_booking_status(
             )
         if agreement is not None:
             booking.long_term_agreement = agreement
-
-        validation = validate_booking_instance(booking)
-        errors = list(validation.get("errors") or [])
-        if not require_lta_agreement:
-            from apps.bookings.constants import LTA_SOFT_FAIL_CODES
-
-            errors = [
-                e
-                for e in errors
-                if not (isinstance(e, dict) and e.get("code") in LTA_SOFT_FAIL_CODES)
-            ]
-        if errors:
-            raise BookingValidationError(
-                "La reserva no cumple las validaciones operativas.",
-                errors,
-            )
 
     old_status = booking.status
     booking.status = new_status
@@ -166,6 +142,12 @@ def update_booking_status(
         update_fields.append("confirmation_pdf")
 
     booking.save(update_fields=list(dict.fromkeys(update_fields)))
+
+    from apps.bookings.services.validation.conflicts import (
+        refresh_related_booking_conflicts,
+    )
+
+    refresh_related_booking_conflicts(booking, user=user, request=request)
 
     record_booking_audit(
         booking,
@@ -297,25 +279,8 @@ def update_booking_operational(
                 "Solo port-operator o admin pueden autorizar la zona roja de LOA combinada."
             )
         ack = bool(acknowledge_combined_red) and user_may_authorize_exceptions(user)
-
-        from apps.bookings.constants import LTA_SOFT_FAIL_CODES
-
-        validation = validate_booking_instance(
-            booking,
-            acknowledge_combined_red=ack,
-        )
-        # Existing bookings may sit in the LTA window as Hold; do not block
-        # position/ETA edits with the same soft codes used at create.
-        hard_errors = [
-            e
-            for e in (validation.get("errors") or [])
-            if e.get("code") not in LTA_SOFT_FAIL_CODES
-        ]
-        if hard_errors:
-            raise BookingValidationError(
-                "La reserva no cumple las validaciones operativas.",
-                hard_errors,
-            )
+        # Operational conflicts are non-blocking; refreshed after save.
+        _ = ack
 
     if len(update_fields) > 1:
         booking.save(update_fields=update_fields)
@@ -338,5 +303,10 @@ def update_booking_operational(
             user=user,
             request=request,
         )
+        from apps.bookings.services.validation.conflicts import (
+            refresh_related_booking_conflicts,
+        )
+
+        refresh_related_booking_conflicts(booking, user=user, request=request)
 
     return booking

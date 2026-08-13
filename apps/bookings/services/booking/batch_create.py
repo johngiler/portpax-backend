@@ -87,23 +87,10 @@ def create_booking_batch(
             "call_dates",
         )
 
-    from apps.bookings.constants import LTA_SOFT_FAIL_CODES
     from apps.bookings.services.lta.matching import find_best_matching_agreement
-    from apps.bookings.services.validation import validate_booking_params
-
-    validation = validate_booking_params(
-        port_id=port.id,
-        vessel_id=vessel.id,
-        call_dates=unique_dates,
-        eta=eta,
-        etd=etd,
+    from apps.bookings.services.validation.conflicts import (
+        refresh_related_booking_conflicts,
     )
-    errors = list(validation.get("errors") or [])
-    if status == BookingStatus.H:
-        errors = [e for e in errors if e.get("code") not in LTA_SOFT_FAIL_CODES]
-    if errors:
-        messages = "; ".join(e["message"] for e in errors)
-        raise BookingBatchCreateError(messages, "call_dates")
 
     if status in {BookingStatus.LTA, BookingStatus.CL}:
         for call_date in unique_dates:
@@ -204,6 +191,7 @@ def create_booking_batch(
         if booking.status in CONFIRMATION_PDF_STATUSES:
             save_confirmation_pdf(booking)
             booking.save(update_fields=["confirmation_pdf", "updated_at"])
+        refresh_related_booking_conflicts(booking, user=created_by)
         record_booking_audit(
             booking,
             action="created",

@@ -13,13 +13,14 @@ def validate_booking_instance(
     booking: Booking,
     *,
     acknowledge_combined_red: bool = False,
+    nonblocking: bool = True,
 ) -> dict:
     position = booking.position
     if position is None and booking.position_id:
         position = Position.objects.select_related("berth", "port").filter(
             pk=booking.position_id,
         ).first()
-    return validate_booking(
+    result = validate_booking(
         port=booking.port,
         vessel=booking.vessel,
         call_date=booking.call_date,
@@ -29,6 +30,10 @@ def validate_booking_instance(
         exclude_booking_id=booking.id,
         acknowledge_combined_red=acknowledge_combined_red,
     )
+    if nonblocking:
+        return result
+    # Raw path unused for blocking; still return normalized shape.
+    return result
 
 
 def validate_booking_params(
@@ -40,6 +45,7 @@ def validate_booking_params(
     eta=None,
     etd=None,
     acknowledge_combined_red: bool = False,
+    exclude_booking_id: int | None = None,
 ) -> dict:
     port = Port.objects.get(pk=port_id)
     vessel = Vessel.objects.get(pk=vessel_id)
@@ -48,6 +54,7 @@ def validate_booking_params(
         position = Position.objects.select_related("berth", "port").get(pk=position_id)
 
     from apps.bookings.services.position_assignment import no_position_available_warning
+    from apps.bookings.services.validation.conflicts import apply_nonblocking_validation
 
     all_errors: list[dict] = []
     all_warnings: list[dict] = []
@@ -61,12 +68,20 @@ def validate_booking_params(
             position=position,
             eta=eta,
             etd=etd,
+            exclude_booking_id=exclude_booking_id,
             acknowledge_combined_red=acknowledge_combined_red,
         )
         if position is None:
             missing = no_position_available_warning(port, vessel, call_date)
             if missing:
                 result["warnings"].append(missing.as_dict())
+                # Re-normalize after append
+                result = apply_nonblocking_validation(
+                    {
+                        "errors": result.get("errors") or [],
+                        "warnings": result.get("warnings") or [],
+                    }
+                )
 
         all_errors.extend(result["errors"])
         all_warnings.extend(result["warnings"])
@@ -74,12 +89,14 @@ def validate_booking_params(
             "errors": result["errors"],
             "warnings": result["warnings"],
             "valid": result["valid"],
+            "conflicts": result.get("conflicts") or result["warnings"],
         }
 
     return {
-        "valid": len(all_errors) == 0,
+        "valid": True,
         "errors": all_errors,
         "warnings": all_warnings,
+        "conflicts": all_warnings,
         "by_date": by_date,
     }
 
@@ -95,6 +112,7 @@ def suggest_positions(
     from apps.bookings.constants import LTA_SOFT_FAIL_CODES
     from apps.bookings.services.position_assignment import auto_assign_position
     from apps.bookings.services.validation.loa_recalc import effective_max_loa_m
+    from apps.catalogs.services.position_combination import exclude_combined_positions
 
     # Still list these so the UI can offer replace / show occupied slots.
     suggest_allow_codes = LTA_SOFT_FAIL_CODES | {"position_occupied"}
@@ -108,10 +126,12 @@ def suggest_positions(
         exclude_booking_id=exclude_booking_id,
     )
 
-    positions = Position.objects.filter(
-        port_id=port_id,
-        is_active=True,
-    ).select_related("berth").order_by("sort_order", "code")
+    positions = exclude_combined_positions(
+        Position.objects.filter(
+            port_id=port_id,
+            is_active=True,
+        ).select_related("berth").order_by("sort_order", "code")
+    )
 
     suggestions: list[dict] = []
     for position in positions:

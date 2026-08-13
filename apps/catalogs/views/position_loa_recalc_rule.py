@@ -10,8 +10,9 @@ from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
 class PositionLoaRecalcRuleViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSet):
     queryset = PositionLoaRecalcRule.objects.select_related(
         "port",
-        "combined_position",
-    ).prefetch_related("combined_position__component_links__source_position")
+        "position_a",
+        "position_b",
+    )
     serializer_class = PositionLoaRecalcRuleSerializer
     port_access_field = "port_id"
 

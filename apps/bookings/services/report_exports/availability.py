@@ -70,7 +70,11 @@ def _availability_matrix(
         raise ValueError("Puerto no permitido.")
 
     Port.objects.get(pk=port_id)
-    positions_qs = Position.objects.filter(port_id=port_id, is_active=True)
+    from apps.catalogs.services.position_combination import exclude_combined_positions
+
+    positions_qs = exclude_combined_positions(
+        Position.objects.filter(port_id=port_id, is_active=True)
+    )
     if position_id:
         positions_qs = positions_qs.filter(pk=position_id)
     positions = list(
@@ -153,6 +157,7 @@ def build_availability_data(
     position_id: int | None = None,
     status: str | None = None,
     statuses: list[str] | None = None,
+    has_conflict: bool | None = None,
     ships_per_day: int | None = None,
     page: int | None = None,
     page_size: int = 30,
@@ -173,7 +178,11 @@ def build_availability_data(
         raise ValueError("page_size debe estar entre 1 y 100.")
 
     port = Port.objects.get(pk=port_id)
-    positions_qs = Position.objects.filter(port_id=port_id, is_active=True)
+    from apps.catalogs.services.position_combination import exclude_combined_positions
+
+    positions_qs = exclude_combined_positions(
+        Position.objects.filter(port_id=port_id, is_active=True)
+    )
     if position_id:
         positions_qs = positions_qs.filter(pk=position_id)
     positions = list(
@@ -216,6 +225,10 @@ def build_availability_data(
         for booking in scheduled_bookings_qs(**qs_kwargs, status="c"):
             if booking.id not in seen:
                 bookings.append(booking)
+    if has_conflict is True:
+        bookings = [b for b in bookings if b.has_conflict]
+    elif has_conflict is False:
+        bookings = [b for b in bookings if not b.has_conflict]
     has_unassigned = any(booking.position_id not in position_index for booking in bookings)
     unassigned_index = len(positions) if has_unassigned else None
     if has_unassigned:
@@ -259,6 +272,8 @@ def build_availability_data(
         call = {
             "booking_code": booking.booking_code,
             "status": booking.status,
+            "has_conflict": bool(getattr(booking, "has_conflict", False)),
+            "conflict_snapshot": getattr(booking, "conflict_snapshot", None) or [],
             "position_id": booking.position_id or 0,
             "shipping_line_name": booking.shipping_line.name,
             "shipping_line_logo": logo,
@@ -305,6 +320,39 @@ def build_availability_data(
             "columns": columns,
             "rows": rows,
             "ships_per_day": ships_per_day,
+            "matched_days": matched_total,
+            "page": use_page,
+            "page_size": page_size,
+            "has_more": end < matched_total,
+        }
+
+    # Conflict filter: only days with calls after filtering (paginated).
+    if has_conflict is not None:
+        matching_days = sorted(
+            day
+            for day, cells in bookings_by_day.items()
+            if date_from <= day <= date_to and _day_ship_count(cells) >= 1
+        )
+        matched_total = len(matching_days)
+        use_page = page if page is not None else 1
+        start = (use_page - 1) * page_size
+        end = start + page_size
+        page_days = matching_days[start:end]
+        rows = [
+            {
+                "date": day.isoformat(),
+                "cells": bookings_by_day.get(day, [[] for _ in range(cell_count)]),
+            }
+            for day in page_days
+        ]
+        return {
+            "port_id": port.id,
+            "port_code": port.code,
+            "port_name": port.name,
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "columns": columns,
+            "rows": rows,
             "matched_days": matched_total,
             "page": use_page,
             "page_size": page_size,

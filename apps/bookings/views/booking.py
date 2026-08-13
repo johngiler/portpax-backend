@@ -32,6 +32,11 @@ from apps.bookings.services.booking import (
     create_booking_batch,
     delete_cancelled_booking,
 )
+from apps.bookings.services.booking.bulk_edit import (
+    apply_bulk_edit_rows,
+    bookings_to_edit_rows,
+    revalidate_bulk_edit_row,
+)
 from apps.bookings.services.booking_activity import (
     build_booking_activity,
     build_import_batch_detail,
@@ -108,6 +113,7 @@ class BookingViewSet(
         qs = Booking.objects.select_related(
             "port",
             "shipping_line",
+            "shipping_line__group",
             "vessel",
             "position",
             "long_term_agreement",
@@ -132,6 +138,10 @@ class BookingViewSet(
             qs = qs.filter(long_term_agreement_id=lta_id)
         status_values = parse_status_query_params(self.request.query_params)
         qs = apply_booking_status_filters(qs, status_values)
+        has_conflict = self.request.query_params.get("has_conflict")
+        if has_conflict is not None and str(has_conflict).strip() != "":
+            flag = str(has_conflict).strip().lower() in {"1", "true", "yes", "si", "sí"}
+            qs = qs.filter(has_conflict=flag)
         call_date_from = self.request.query_params.get("call_date_from")
         if call_date_from:
             qs = qs.filter(call_date__gte=call_date_from)
@@ -312,6 +322,87 @@ class BookingViewSet(
         )
         # Batch is always persisted; include total-failure runs so the client can open detail.
         return Response(result, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["post"], url_path="bulk-edit/preview")
+    def bulk_edit_preview(self, request):
+        """Hydrate selected booking ids into editable mass-edit rows + avisos."""
+        ids = request.data.get("booking_ids")
+        if not isinstance(ids, list) or not ids:
+            return Response(
+                {"detail": "Selecciona al menos una reserva."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            id_list = [int(x) for x in ids]
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "booking_ids debe ser una lista de ids numéricos."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        qs = Booking.objects.select_related(
+            "port",
+            "shipping_line",
+            "shipping_line__group",
+            "vessel",
+            "position",
+        ).filter(pk__in=id_list)
+        allowed = user_port_ids(request.user)
+        if allowed is not None:
+            qs = qs.filter(port_id__in=allowed)
+        by_id = {b.id: b for b in qs}
+        ordered = [by_id[i] for i in id_list if i in by_id]
+        rows = bookings_to_edit_rows(ordered)
+        return Response({"rows": rows, "total": len(rows)})
+
+    @action(detail=False, methods=["post"], url_path="bulk-edit/revalidate")
+    def bulk_edit_revalidate(self, request):
+        if not isinstance(request.data, dict):
+            return Response(
+                {"detail": "Envía una fila a revalidar."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        booking_id = request.data.get("booking_id")
+        try:
+            booking = Booking.objects.get(pk=int(booking_id))
+        except (TypeError, ValueError, Booking.DoesNotExist):
+            return Response(
+                {"detail": "Reserva no encontrada."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        self._ensure_port_access(booking.port_id)
+        port_id = request.data.get("port_id") or booking.port_id
+        self._ensure_port_access(port_id)
+        try:
+            row = revalidate_bulk_edit_row(request.data)
+        except Exception:
+            return Response(
+                {"detail": "No se pudo revalidar la fila."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(row)
+
+    @action(detail=False, methods=["post"], url_path="bulk-edit/apply")
+    def bulk_edit_apply(self, request):
+        rows = request.data.get("rows")
+        if not isinstance(rows, list) or not rows:
+            return Response(
+                {"detail": "Selecciona al menos una reserva para guardar."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        for row in rows:
+            port_id = row.get("port_id")
+            booking_id = row.get("booking_id")
+            if port_id:
+                self._ensure_port_access(port_id)
+            elif booking_id:
+                try:
+                    b = Booking.objects.only("port_id").get(pk=int(booking_id))
+                    self._ensure_port_access(b.port_id)
+                except (TypeError, ValueError, Booking.DoesNotExist):
+                    pass
+        result = apply_bulk_edit_rows(rows, user=request.user, request=request)
+        return Response(result)
 
     @action(detail=False, methods=["get"], url_path="activity")
     def activity(self, request):
@@ -841,6 +932,16 @@ class BookingViewSet(
         if isinstance(position_id, Response):
             return position_id
         status_values = parse_status_query_params(request.query_params)
+        has_conflict_param = request.query_params.get("has_conflict")
+        has_conflict_filter = None
+        if has_conflict_param is not None and str(has_conflict_param).strip() != "":
+            has_conflict_filter = str(has_conflict_param).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "si",
+                "sí",
+            }
         ships_per_day = self._optional_int_param("ships_per_day")
         if isinstance(ships_per_day, Response):
             return ships_per_day
@@ -861,8 +962,11 @@ class BookingViewSet(
                 vessel_id=vessel_id,
                 position_id=position_id,
                 statuses=status_values,
+                has_conflict=has_conflict_filter,
                 ships_per_day=ships_per_day,
-                page=page if ships_per_day else None,
+                page=page
+                if ships_per_day is not None or has_conflict_filter is not None
+                else None,
                 page_size=page_size or 30,
                 request=request,
             )

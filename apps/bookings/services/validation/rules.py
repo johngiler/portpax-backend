@@ -18,13 +18,37 @@ FULL_DAY_END = time(23, 59)
 
 
 class ValidationIssue:
-    def __init__(self, level: Literal["error", "warning"], code: str, message: str):
+    def __init__(
+        self,
+        level: Literal["error", "warning", "info"],
+        code: str,
+        message: str,
+        *,
+        severity: str | None = None,
+        detail: dict | None = None,
+    ):
         self.level = level
         self.code = code
         self.message = message
+        self.severity = severity
+        self.detail = detail or {}
 
     def as_dict(self) -> dict:
-        return {"level": self.level, "code": self.code, "message": self.message}
+        from apps.bookings.services.validation.conflict_codes import (
+            severity_for_code,
+        )
+
+        severity = self.severity or severity_for_code(self.code, level=self.level)
+        payload = {
+            "level": self.level,
+            "code": self.code,
+            "message": self.message,
+            "severity": severity,
+        }
+        if self.detail:
+            payload["detail"] = self.detail
+        return payload
+
 
 
 def _decimal(value) -> Decimal | None:
@@ -104,46 +128,53 @@ def validate_physical_fit(
     loa = _decimal(vessel.loa_m)
     from apps.catalogs.services.position_combination import position_is_combined
 
-    # Mega-ship: vessel LOA >= combined.min_loa_m → must use that combined slot.
-    mega_slots = mega_combined_positions(port_id=port.id, vessel=vessel)
-    if mega_slots:
-        mega_ids = {slot.id for slot in mega_slots}
-        if position.id not in mega_ids:
-            codes = ", ".join(
-                slot.code.split("-", 1)[-1] if "-" in slot.code else slot.code
-                for slot in mega_slots
+    # Combined catalog rows are no longer bookable (Fernanda/Herman Aug 2026).
+    if position_is_combined(position):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "combined_position_retired",
+                f"{position.code} ya no es una posición reservable. "
+                "Usa las posiciones físicas del muelle (p. ej. E1 o E2).",
             )
-            issues.append(
-                ValidationIssue(
-                    "error",
-                    "loa_requires_combined",
-                    f"Mega-barco (LOA {loa} m ≥ eslora mínima): "
-                    f"debe ocupar {codes}.",
-                )
-            )
-    elif position_is_combined(position) and position.min_loa_m is not None:
-        min_loa = _decimal(position.min_loa_m)
-        if loa is not None and min_loa is not None and loa < min_loa:
-            issues.append(
-                ValidationIssue(
-                    "error",
-                    "loa_below_combined_min",
-                    f"LOA del barco ({loa} m) no alcanza la eslora mínima de "
-                    f"{position.code} ({min_loa} m) para ocupar el slot combinado.",
-                )
-            )
+        )
+        return issues
 
-    max_loa = _decimal(position.max_loa_m)
-    if loa is not None and max_loa is not None:
-        if loa > max_loa:
-            over = loa - max_loa
+    from apps.bookings.services.validation.loa_recalc import pier_shared_max_loa
+
+    slot_max = _decimal(position.max_loa_m)
+    pier_max = pier_shared_max_loa(position)
+    # Shared-pier rule: hard ceiling is pier max_loa; slot max is soft.
+    if pier_max is not None and loa is not None:
+        if loa > pier_max:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "loa_exceeds_position",
+                    f"LOA del barco ({loa} m) excede la eslora máxima del muelle "
+                    f"({pier_max} m) para {position.code}.",
+                )
+            )
+        elif slot_max is not None and loa > slot_max:
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    "loa_shared_pier",
+                    f"LOA ({loa} m) supera el máximo de {position.code} ({slot_max} m); "
+                    f"se recalcula la eslora restante de la posición vecina "
+                    f"(máx. muelle {pier_max} m).",
+                )
+            )
+    elif loa is not None and slot_max is not None:
+        if loa > slot_max:
+            over = loa - slot_max
             if over > MAX_OVERHANG_M:
                 issues.append(
                     ValidationIssue(
                         "error",
                         "loa_exceeds_position",
                         f"LOA del barco ({loa} m) excede la posición {position.code} "
-                        f"({max_loa} m) por más de {MAX_OVERHANG_M} m de overhang.",
+                        f"({slot_max} m) por más de {MAX_OVERHANG_M} m de overhang.",
                     )
                 )
             else:
@@ -151,7 +182,7 @@ def validate_physical_fit(
                     ValidationIssue(
                         "warning",
                         "loa_overhang",
-                        f"LOA ({loa} m) supera el máximo de {position.code} ({max_loa} m) "
+                        f"LOA ({loa} m) supera el máximo de {position.code} ({slot_max} m) "
                         f"con overhang de {over} m (límite {MAX_OVERHANG_M} m).",
                     )
                 )
@@ -207,26 +238,41 @@ def validate_multi_port_conflict(
     port_id: int,
     exclude_booking_id: int | None = None,
 ) -> list[ValidationIssue]:
+    """Warn if the vessel has an active call at another port within ±2 days."""
+    from datetime import timedelta
+
+    window_start = call_date - timedelta(days=2)
+    window_end = call_date + timedelta(days=2)
     qs = Booking.objects.filter(
         vessel_id=vessel_id,
-        call_date=call_date,
+        call_date__gte=window_start,
+        call_date__lte=window_end,
         status__in=ACTIVE_BOOKING_STATUSES,
     ).exclude(port_id=port_id)
     if exclude_booking_id:
         qs = qs.exclude(pk=exclude_booking_id)
 
-    other = qs.select_related("port").first()
-    if not other:
+    others = list(qs.select_related("port").order_by("call_date", "id")[:8])
+    if not others:
         return []
 
-    return [
-        ValidationIssue(
-            "warning",
-            "multi_port_conflict",
-            f"El mismo barco ya tiene escala en {other.port.name} "
-            f"({other.booking_code}) en esta fecha.",
-        )
-    ]
+    issues: list[ValidationIssue] = []
+    for other in others:
+        if other.call_date == call_date:
+            message = (
+                f"El mismo barco ya tiene escala en {other.port.name} "
+                f"({other.booking_code}) en esta fecha."
+            )
+            code = "multi_port_conflict"
+        else:
+            message = (
+                f"El mismo barco tiene escala en {other.port.name} "
+                f"({other.booking_code}) el {other.call_date.isoformat()} "
+                f"(±2 días). La escala actual puede no ser viable."
+            )
+            code = "multi_port_proximity"
+        issues.append(ValidationIssue("warning", code, message))
+    return issues
 
 
 def related_position_ids(position_id: int) -> set[int]:
@@ -662,7 +708,16 @@ def validate_booking(
         for issue in issues:
             if issue.code == "combined_loa_red" and issue.level == "error":
                 issue.level = "warning"
+                issue.severity = "red"
 
-    errors = [i.as_dict() for i in issues if i.level == "error"]
-    warnings = [i.as_dict() for i in issues if i.level == "warning"]
-    return {"errors": errors, "warnings": warnings, "valid": len(errors) == 0}
+    raw_errors = [i.as_dict() for i in issues if i.level == "error"]
+    raw_warnings = [i.as_dict() for i in issues if i.level in ("warning", "info")]
+    from apps.bookings.services.validation.conflicts import apply_nonblocking_validation
+
+    return apply_nonblocking_validation(
+        {
+            "errors": raw_errors,
+            "warnings": raw_warnings,
+            "valid": len(raw_errors) == 0,
+        }
+    )

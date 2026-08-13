@@ -147,14 +147,19 @@ class PositionNestingRuleAdmin(admin.ModelAdmin):
 class PositionLoaRecalcRuleAdmin(admin.ModelAdmin):
     list_display = (
         "port",
-        "combined_position",
-        "min_separation_m",
+        "position_a",
+        "position_b",
+        "max_loa_m",
+        "separation_m",
+        "yellow_from_m",
+        "red_from_m",
         "is_active",
     )
     list_filter = ("port", "is_active")
     search_fields = (
         "port__code",
-        "combined_position__code",
+        "position_a__code",
+        "position_b__code",
         "notes",
     )
 
