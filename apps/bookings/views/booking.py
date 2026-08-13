@@ -591,11 +591,29 @@ class BookingViewSet(
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+        def _parse_hhmm(raw: str | None):
+            if not raw:
+                return None
+            text = str(raw).strip()
+            if not text:
+                return None
+            from datetime import time as time_cls
+
+            try:
+                return time_cls.fromisoformat(text)
+            except ValueError:
+                return None
+
+        eta = _parse_hhmm(request.query_params.get("eta"))
+        etd = _parse_hhmm(request.query_params.get("etd"))
+
         suggestions = suggest_positions(
             int(port_id),
             int(vessel_id),
             parsed_date,
             exclude_booking_id=exclude_id,
+            eta=eta,
+            etd=etd,
         )
         return Response({"positions": suggestions})
 

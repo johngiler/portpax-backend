@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time
 
 from apps.bookings.models import Booking
 from apps.bookings.services.validation.rules import (
@@ -107,8 +107,14 @@ def suggest_positions(
     call_date: date,
     *,
     exclude_booking_id: int | None = None,
+    eta: time | None = None,
+    etd: time | None = None,
 ) -> list[dict]:
-    """Pier positions that fit LOA/draft; ordered by first-in (sort_order)."""
+    """Pier positions that fit LOA/draft; ordered by first-in (sort_order).
+
+    Optional ``eta``/``etd`` enable schedule-dependent rules (FILO, overlap)
+    in the returned warnings — needed for live avisos in detail/calendar.
+    """
     from apps.bookings.constants import LTA_SOFT_FAIL_CODES
     from apps.bookings.services.position_assignment import auto_assign_position
     from apps.bookings.services.validation.loa_recalc import effective_max_loa_m
@@ -140,6 +146,8 @@ def suggest_positions(
             vessel=vessel,
             call_date=call_date,
             position=position,
+            eta=eta,
+            etd=etd,
             exclude_booking_id=exclude_booking_id,
         )
         hard_errors = [
