@@ -16,7 +16,7 @@ from apps.bookings.services.booking.status import (
     update_booking_status,
 )
 from apps.bookings.services.validation import validate_booking_params
-from apps.catalogs.models import ShippingLine, Vessel
+from apps.catalogs.models import Port, Position, ShippingLine, Vessel
 
 
 EDITABLE_STATUSES = frozenset(
@@ -186,16 +186,30 @@ def revalidate_bulk_edit_row(payload: dict) -> dict:
         warnings = list(result.get("warnings") or result.get("conflicts") or [])
 
     selectable = len(blocking) == 0 and booking.status != BookingStatus.C
+    port = Port.objects.filter(pk=port_id).first()
+    shipping_line = ShippingLine.objects.filter(pk=shipping_line_id).first()
+    vessel = Vessel.objects.filter(pk=vessel_id).first()
+    position = (
+        Position.objects.filter(pk=position_id).first() if position_id else None
+    )
     return {
         "booking_id": booking.id,
         "booking_code": booking.booking_code,
         "port_id": port_id,
+        "port_name": port.name if port else None,
+        "port_code": port.code if port else None,
         "shipping_line_id": shipping_line_id,
+        "shipping_line_name": shipping_line.name if shipping_line else None,
+        "shipping_line_group": (
+            shipping_line.group_id if shipping_line else None
+        ),
         "vessel_id": vessel_id,
+        "vessel_name": vessel.name if vessel else None,
         "call_date": call_date.isoformat(),
         "eta": eta.strftime("%H:%M") if eta else None,
         "etd": etd.strftime("%H:%M") if etd else None,
         "position_id": position_id,
+        "position_code": position.code if position else None,
         "status": status_value,
         "notes": notes or "",
         "blocking_issues": blocking,
@@ -336,17 +350,5 @@ def bookings_to_edit_rows(bookings: list[Booking]) -> list[dict]:
                 "notes": booking.notes or "",
             }
         )
-        rows.append(
-            {
-                **revalidated,
-                "port_name": booking.port.name,
-                "port_code": booking.port.code,
-                "vessel_name": booking.vessel.name,
-                "shipping_line_name": booking.shipping_line.name,
-                "shipping_line_group": booking.shipping_line.group_id,
-                "position_code": (
-                    booking.position.code if booking.position_id else None
-                ),
-            }
-        )
+        rows.append(revalidated)
     return rows
