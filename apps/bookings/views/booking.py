@@ -406,7 +406,15 @@ class BookingViewSet(
                     self._ensure_port_access(b.port_id)
                 except (TypeError, ValueError, Booking.DoesNotExist):
                     pass
-        result = apply_bulk_edit_rows(rows, user=request.user, request=request)
+        result = apply_bulk_edit_rows(
+            rows,
+            user=request.user,
+            request=request,
+            port_operator_override=bool(
+                request.data.get("port_operator_override")
+            ),
+            override_reason=str(request.data.get("override_reason") or ""),
+        )
         return Response(result)
 
     @action(detail=False, methods=["get"], url_path="activity")

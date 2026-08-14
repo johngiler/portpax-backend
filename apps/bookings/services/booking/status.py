@@ -186,18 +186,6 @@ def update_booking_operational(
     pending_position = position_id is not None and position_id != booking.position_id
     pending_eta = eta is not None and eta != booking.eta
     pending_etd = etd is not None and etd != booking.etd
-    cl_schedule_or_berth = pending_position or pending_eta or pending_etd
-
-    if booking.status == BookingStatus.CL and cl_schedule_or_berth:
-        if not port_operator_override:
-            raise BookingStatusError(
-                "Call CL (LTA) es inamovible: un port-operator o admin debe autorizar "
-                "el cambio de muelle o ETA/ETD (RN-06)."
-            )
-        if not user_may_authorize_exceptions(user):
-            raise BookingStatusError(
-                "Solo port-operator o admin pueden autorizar cambios en un call CL."
-            )
 
     if pending_position:
         old_position_id = booking.position_id
@@ -287,12 +275,8 @@ def update_booking_operational(
         summary = "Actualización operativa"
         if position_changed and not schedule_changed:
             summary = "Reasignación de posición"
-        elif schedule_changed and not position_changed:
+        el        if schedule_changed and not position_changed:
             summary = "Cambio de horario"
-        if booking.status == BookingStatus.CL and port_operator_override and cl_schedule_or_berth:
-            summary = "Override port-operator en call CL (RN-06)"
-            if override_reason:
-                changes["override_reason"] = override_reason
         if acknowledge_combined_red:
             changes["acknowledge_combined_red"] = True
         record_booking_audit(

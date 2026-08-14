@@ -223,6 +223,8 @@ def apply_bulk_edit_rows(
     *,
     user=None,
     request=None,
+    port_operator_override: bool = False,
+    override_reason: str = "",
 ) -> dict:
     updated: list[dict] = []
     failed: list[dict] = []
@@ -291,6 +293,8 @@ def apply_bulk_edit_rows(
                 position_id=position_id,
                 eta=eta,
                 etd=etd,
+                port_operator_override=port_operator_override,
+                override_reason=override_reason,
             )
             if (
                 new_status
