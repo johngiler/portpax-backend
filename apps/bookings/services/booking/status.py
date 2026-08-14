@@ -275,7 +275,7 @@ def update_booking_operational(
         summary = "Actualización operativa"
         if position_changed and not schedule_changed:
             summary = "Reasignación de posición"
-        el        if schedule_changed and not position_changed:
+        elif schedule_changed and not position_changed:
             summary = "Cambio de horario"
         if acknowledge_combined_red:
             changes["acknowledge_combined_red"] = True
