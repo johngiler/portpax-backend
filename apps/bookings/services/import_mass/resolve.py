@@ -12,7 +12,7 @@ from django.db.models import Q
 from apps.bookings.constants import LTA_SOFT_FAIL_CODES
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.validation import validate_booking_params
-from apps.catalogs.models import Port, Vessel
+from apps.catalogs.models import Port, ShippingLine, ShippingLineGroup, Vessel
 
 BULK_IMPORT_STATUSES = frozenset(
     {
@@ -72,35 +72,125 @@ def resolve_port(port_raw: str) -> Port | None:
     return None
 
 
-def resolve_vessel(ship_raw: str) -> Vessel | None:
+def resolve_shipping_line(raw: str) -> ShippingLine | None:
+    name = re.sub(r"\s+", " ", (raw or "").strip())
+    if not name or len(name) < 2:
+        return None
+    qs = ShippingLine.objects.filter(is_active=True)
+    exact = qs.filter(Q(name__iexact=name) | Q(code__iexact=name)).first()
+    if exact:
+        return exact
+    token = _strip_accents(name).lower()
+    matches = [
+        line
+        for line in qs
+        if token in _strip_accents(line.name).lower()
+        or token in _strip_accents(line.code.replace("_", " ")).lower()
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def resolve_shipping_line_group(raw: str) -> ShippingLineGroup | None:
+    name = re.sub(r"\s+", " ", (raw or "").strip())
+    if not name or len(name) < 2:
+        return None
+    qs = ShippingLineGroup.objects.filter(is_active=True)
+    exact = qs.filter(Q(name__iexact=name) | Q(code__iexact=name)).first()
+    if exact:
+        return exact
+    token = _strip_accents(name).lower()
+    matches = [
+        group
+        for group in qs
+        if token in _strip_accents(group.name).lower()
+        or token in _strip_accents(group.code.replace("_", " ")).lower()
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def resolve_vessel(
+    ship_raw: str,
+    shipping_line_id: int | None = None,
+    *,
+    shipping_line_group_id: int | None = None,
+) -> Vessel | None:
     name = re.sub(r"\s+", " ", (ship_raw or "").strip())
     if not name or len(name) < 2:
         return None
 
-    exact = (
-        Vessel.objects.filter(is_active=True, name__iexact=name)
-        .select_related("shipping_line")
-        .first()
+    qs = Vessel.objects.filter(is_active=True).select_related(
+        "shipping_line",
+        "shipping_line__group",
     )
-    if exact:
-        return exact
+    if shipping_line_id:
+        qs = qs.filter(shipping_line_id=shipping_line_id)
+        if shipping_line_group_id:
+            qs = qs.filter(shipping_line__group_id=shipping_line_group_id)
+    elif shipping_line_group_id:
+        qs = qs.filter(
+            shipping_line__group_id=shipping_line_group_id,
+            shipping_line__is_active=True,
+        )
 
-    starts = list(
-        Vessel.objects.filter(is_active=True, name__istartswith=name)
-        .select_related("shipping_line")
-        .order_by("name")[:5]
-    )
+    exact = list(qs.filter(name__iexact=name)[:5])
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        return None
+
+    starts = list(qs.filter(name__istartswith=name).order_by("name")[:5])
     if len(starts) == 1:
         return starts[0]
+    if len(starts) > 1:
+        return None
 
-    contains = list(
-        Vessel.objects.filter(is_active=True, name__icontains=name)
-        .select_related("shipping_line")
-        .order_by("name")[:5]
-    )
+    contains = list(qs.filter(name__icontains=name).order_by("name")[:5])
     if len(contains) == 1:
         return contains[0]
     return None
+
+
+def _unresolved_vessel_issue(
+    ship: str,
+    shipping_line_id: int | None = None,
+    *,
+    shipping_line_group_id: int | None = None,
+) -> str:
+    qs = Vessel.objects.filter(is_active=True, name__iexact=ship)
+    if shipping_line_id:
+        if qs.filter(shipping_line_id=shipping_line_id).exists():
+            return f"Barco no encontrado: «{ship}»."
+        if qs.exists():
+            return (
+                f"«{ship}» existe en otra naviera. "
+                "Elige el grupo o la naviera correcta."
+            )
+        return f"Barco no encontrado en esta naviera: «{ship}»."
+    if shipping_line_group_id:
+        in_group = qs.filter(shipping_line__group_id=shipping_line_group_id)
+        if in_group.count() > 1:
+            return (
+                f"Hay varios barcos llamados «{ship}» en este grupo. "
+                "Elige la naviera de la fila."
+            )
+        if in_group.exists():
+            return f"Barco no encontrado: «{ship}»."
+        if qs.exists():
+            return (
+                f"«{ship}» existe en otro grupo de naviera. "
+                "Elige el grupo correcto."
+            )
+        return f"Barco no encontrado en este grupo: «{ship}»."
+    if qs.count() > 1:
+        return (
+            f"Hay varios barcos llamados «{ship}». "
+            "Elige un grupo de naviera para resolverlo."
+        )
+    return f"Barco no encontrado: «{ship}»."
 
 
 def _time_iso(dt: datetime | None) -> str | None:
@@ -301,10 +391,27 @@ def _validate_import_booking(
     return suggested_status, pos
 
 
-def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def resolve_itm_rows(
+    raw_rows: list[dict[str, Any]],
+    *,
+    shipping_line_group_id: int | None = None,
+    shipping_line_id: int | None = None,
+) -> list[dict[str, Any]]:
     """Attach catalog matches, booking validation, and selectable flag."""
     resolved: list[dict[str, Any]] = []
     seen_keys: set[tuple[int, int, str]] = set()
+    forced_line = None
+    if shipping_line_id:
+        forced_line = ShippingLine.objects.filter(
+            pk=shipping_line_id, is_active=True
+        ).select_related("group").first()
+    forced_group = None
+    if shipping_line_group_id:
+        forced_group = ShippingLineGroup.objects.filter(
+            pk=shipping_line_group_id, is_active=True
+        ).first()
+    elif forced_line is not None:
+        forced_group = forced_line.group
 
     for raw in raw_rows:
         ship = raw.get("ship") or ""
@@ -333,12 +440,41 @@ def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             issues.append("Fecha/hora de Departure inválida.")
 
         port = resolve_port(port_raw) if port_raw else None
-        vessel = resolve_vessel(ship) if ship else None
+        vendor_name = str(raw.get("vendor_name") or "").strip()
+        row_line = forced_line
+        row_group = forced_group
+        if row_line is None and vendor_name:
+            guessed_line = resolve_shipping_line(vendor_name)
+            if guessed_line is not None and (
+                row_group is None or guessed_line.group_id == row_group.id
+            ):
+                row_line = guessed_line
+                if row_group is None:
+                    row_group = guessed_line.group
+        if row_group is None and vendor_name:
+            row_group = resolve_shipping_line_group(vendor_name)
+        line_id = row_line.id if row_line else None
+        group_id = row_group.id if row_group else None
+        vessel = (
+            resolve_vessel(
+                ship,
+                line_id,
+                shipping_line_group_id=group_id,
+            )
+            if ship
+            else None
+        )
 
         if port_raw and port is None:
             issues.append(f"Puerto no encontrado: «{port_raw}».")
         if ship and vessel is None:
-            issues.append(f"Barco no encontrado: «{ship}».")
+            issues.append(
+                _unresolved_vessel_issue(
+                    ship,
+                    line_id,
+                    shipping_line_group_id=group_id,
+                )
+            )
 
         call_date = arrival.date().isoformat() if arrival else None
         eta = _time_iso(arrival)
@@ -388,7 +524,7 @@ def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "row_number": row_number,
                 "ship": ship,
                 "port_raw": port_raw,
-                "vendor_name": raw.get("vendor_name") or "",
+                "vendor_name": vendor_name,
                 "call_type": raw.get("call_type") or "",
                 "call_date": call_date,
                 "eta": eta,
@@ -398,8 +534,26 @@ def resolve_itm_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "port_code": port.code if port else None,
                 "vessel_id": vessel.id if vessel else None,
                 "vessel_name": vessel.name if vessel else None,
-                "shipping_line_id": vessel.shipping_line_id if vessel else None,
-                "shipping_line_name": vessel.shipping_line.name if vessel else None,
+                "shipping_line_id": (
+                    vessel.shipping_line_id
+                    if vessel
+                    else (row_line.id if row_line else None)
+                ),
+                "shipping_line_name": (
+                    vessel.shipping_line.name
+                    if vessel
+                    else (row_line.name if row_line else None)
+                ),
+                "shipping_line_group_id": (
+                    vessel.shipping_line.group_id
+                    if vessel
+                    else (row_group.id if row_group else None)
+                ),
+                "shipping_line_group_name": (
+                    vessel.shipping_line.group.name
+                    if vessel and vessel.shipping_line.group_id
+                    else (row_group.name if row_group else None)
+                ),
                 "suggested_status": _normalize_bulk_status(suggested_status),
                 "position_id": position_fields.get("position_id"),
                 "position_code": position_fields.get("position_code"),
@@ -469,12 +623,19 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
         "call_type": payload.get("call_type") or "",
         "row_number": row_number,
     }
-    resolved = resolve_itm_rows([raw])[0]
+    resolved = resolve_itm_rows(
+        [raw],
+        shipping_line_group_id=_parse_optional_int(
+            payload.get("shipping_line_group_id")
+        ),
+        shipping_line_id=_parse_optional_int(payload.get("shipping_line_id")),
+    )[0]
 
     # Force catalog picks from the editor when provided.
     port_id = payload.get("port_id")
     vessel_id = payload.get("vessel_id")
-    if port_id or vessel_id or payload.get("shipping_line_id"):
+    group_id = _parse_optional_int(payload.get("shipping_line_group_id"))
+    if port_id or vessel_id or payload.get("shipping_line_id") or group_id:
         issues: list[str] = []
         # Fresh list — resolve_itm_rows above already ran validation; do not keep
         # those warnings or LTA soft-fails appear twice after revalidate.
@@ -486,15 +647,24 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
         port = None
         vessel = None
         shipping_line = None
-        line_id = payload.get("shipping_line_id")
+        group = None
+        if group_id:
+            group = ShippingLineGroup.objects.filter(
+                pk=group_id, is_active=True
+            ).first()
+            if group is None:
+                issues.append("Grupo de naviera no válido.")
+                group_id = None
+        line_id = _parse_optional_int(payload.get("shipping_line_id"))
         if line_id:
-            from apps.catalogs.models import ShippingLine
-
             shipping_line = ShippingLine.objects.filter(
                 pk=line_id, is_active=True
-            ).first()
+            ).select_related("group").first()
             if shipping_line is None:
                 issues.append("Naviera no válida.")
+            elif group_id and shipping_line.group_id != group_id:
+                issues.append("La naviera no pertenece al grupo seleccionado.")
+                shipping_line = None
 
         if port_id:
             port = Port.objects.filter(pk=port_id, is_active=True).first()
@@ -508,21 +678,65 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
         if vessel_id:
             vessel = (
                 Vessel.objects.filter(pk=vessel_id, is_active=True)
-                .select_related("shipping_line")
+                .select_related("shipping_line", "shipping_line__group")
                 .first()
             )
             if vessel is None:
                 issues.append("Barco no válido.")
             elif shipping_line and vessel.shipping_line_id != shipping_line.id:
-                issues.append("El barco no pertenece a la naviera seleccionada.")
+                rematch = resolve_vessel(
+                    ship or vessel.name,
+                    shipping_line.id,
+                    shipping_line_group_id=group_id,
+                )
+                if rematch:
+                    vessel = rematch
+                else:
+                    issues.append(
+                        _unresolved_vessel_issue(
+                            ship or vessel.name,
+                            shipping_line.id,
+                            shipping_line_group_id=group_id,
+                        )
+                    )
+                    vessel = None
+            elif (
+                group_id
+                and vessel
+                and vessel.shipping_line.group_id != group_id
+            ):
+                rematch = resolve_vessel(
+                    ship or vessel.name,
+                    shipping_line_group_id=group_id,
+                )
+                if rematch:
+                    vessel = rematch
+                    shipping_line = rematch.shipping_line
+                else:
+                    issues.append(
+                        _unresolved_vessel_issue(
+                            ship or vessel.name,
+                            shipping_line_group_id=group_id,
+                        )
+                    )
+                    vessel = None
             elif vessel and shipping_line is None:
                 shipping_line = vessel.shipping_line
         elif ship:
-            vessel = resolve_vessel(ship)
+            line_pk = shipping_line.id if shipping_line else None
+            vessel = resolve_vessel(
+                ship,
+                line_pk,
+                shipping_line_group_id=group_id,
+            )
             if vessel is None:
-                issues.append(f"Barco no encontrado: «{ship}».")
-            elif shipping_line and vessel.shipping_line_id != shipping_line.id:
-                issues.append("El barco no pertenece a la naviera seleccionada.")
+                issues.append(
+                    _unresolved_vessel_issue(
+                        ship,
+                        line_pk,
+                        shipping_line_group_id=group_id,
+                    )
+                )
             elif vessel and shipping_line is None:
                 shipping_line = vessel.shipping_line
 
@@ -588,6 +802,16 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
             "vessel_name": vessel.name if vessel else None,
             "shipping_line_id": shipping_line.id if shipping_line else None,
             "shipping_line_name": shipping_line.name if shipping_line else None,
+            "shipping_line_group_id": (
+                shipping_line.group_id
+                if shipping_line
+                else (group.id if group else group_id)
+            ),
+            "shipping_line_group_name": (
+                shipping_line.group.name
+                if shipping_line
+                else (group.name if group else None)
+            ),
             "suggested_status": _normalize_bulk_status(suggested_status),
             "position_id": position_fields.get("position_id"),
             "position_code": position_fields.get("position_code"),

@@ -9,6 +9,9 @@ from apps.bookings.services.booking.identity import (
     GROUP_MISMATCH_MESSAGE,
     update_booking_identity,
 )
+from apps.bookings.services.booking.shipping_line_group import (
+    rematch_vessel_by_name,
+)
 from apps.bookings.services.booking.status import (
     BookingStatusError,
     BookingValidationError,
@@ -95,7 +98,7 @@ def _identity_blocking_issues(
         )
 
     try:
-        vessel = Vessel.objects.get(pk=vessel_id)
+        vessel = Vessel.objects.select_related("shipping_line").get(pk=vessel_id)
     except Vessel.DoesNotExist:
         issues.append(
             {
@@ -107,7 +110,16 @@ def _identity_blocking_issues(
         )
         return issues
 
-    if vessel.shipping_line_id != shipping_line_id:
+    if vessel.shipping_line.group_id != booking.shipping_line.group_id:
+        issues.append(
+            {
+                "code": "shipping_line_group_mismatch",
+                "message": GROUP_MISMATCH_MESSAGE,
+                "severity": "red",
+                "level": "error",
+            }
+        )
+    elif vessel.shipping_line_id != shipping_line_id:
         issues.append(
             {
                 "code": "vessel_line_mismatch",
@@ -142,6 +154,45 @@ def _identity_blocking_issues(
     return issues
 
 
+def _resolve_edit_vessel_id(
+    booking: Booking,
+    *,
+    shipping_line_id: int,
+    vessel_id: int,
+    vessel_name: str | None,
+) -> int:
+    """Keep the ship inside the booking's group; rematch by name when the line changes."""
+    line = (
+        ShippingLine.objects.filter(pk=shipping_line_id, is_active=True)
+        .select_related("group")
+        .first()
+    )
+    if line is None or line.group_id != booking.shipping_line.group_id:
+        return vessel_id or booking.vessel_id
+
+    vessel = (
+        Vessel.objects.select_related("shipping_line")
+        .filter(pk=vessel_id, is_active=True)
+        .first()
+        if vessel_id
+        else None
+    )
+    if vessel is not None and vessel.shipping_line_id == shipping_line_id:
+        return vessel.id
+
+    name = (vessel_name or "").strip() or (
+        vessel.name if vessel is not None else booking.vessel.name
+    )
+    rematch = rematch_vessel_by_name(
+        name,
+        shipping_line_id=shipping_line_id,
+        shipping_line_group_id=line.group_id,
+    )
+    if rematch:
+        return rematch.id
+    return vessel_id or booking.vessel_id
+
+
 def revalidate_bulk_edit_row(payload: dict) -> dict:
     """Validate one edited booking row; return structured issues (non-blocking ops)."""
     booking_id = int(payload["booking_id"])
@@ -155,7 +206,17 @@ def revalidate_bulk_edit_row(payload: dict) -> dict:
 
     port_id = int(payload.get("port_id") or booking.port_id)
     shipping_line_id = int(payload.get("shipping_line_id") or booking.shipping_line_id)
-    vessel_id = int(payload.get("vessel_id") or booking.vessel_id)
+    try:
+        raw_vessel_id = int(payload.get("vessel_id") or 0)
+    except (TypeError, ValueError):
+        raw_vessel_id = 0
+    vessel_name = str(payload.get("vessel_name") or "").strip()
+    vessel_id = _resolve_edit_vessel_id(
+        booking,
+        shipping_line_id=shipping_line_id,
+        vessel_id=raw_vessel_id,
+        vessel_name=vessel_name,
+    )
     call_date = _parse_date(payload.get("call_date")) or booking.call_date
     eta = _parse_time(payload.get("eta")) if "eta" in payload else booking.eta
     etd = _parse_time(payload.get("etd")) if "etd" in payload else booking.etd
@@ -254,7 +315,16 @@ def apply_bulk_edit_rows(
             shipping_line_id = int(
                 payload.get("shipping_line_id") or booking.shipping_line_id
             )
-            vessel_id = int(payload.get("vessel_id") or booking.vessel_id)
+            try:
+                raw_vessel_id = int(payload.get("vessel_id") or 0)
+            except (TypeError, ValueError):
+                raw_vessel_id = 0
+            vessel_id = _resolve_edit_vessel_id(
+                booking,
+                shipping_line_id=shipping_line_id,
+                vessel_id=raw_vessel_id,
+                vessel_name=str(payload.get("vessel_name") or "").strip(),
+            )
             call_date = _parse_date(payload.get("call_date")) or booking.call_date
             notes = payload["notes"] if "notes" in payload else None
             eta = (

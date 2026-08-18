@@ -8,14 +8,16 @@ from apps.audit.services.record import record_booking_audit
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.booking.code import resolve_unique_booking_code
 from apps.bookings.services.booking.status import BookingValidationError
+from apps.bookings.services.booking.shipping_line_group import (
+    UPDATE_GROUP_MISMATCH_MESSAGE as GROUP_MISMATCH_MESSAGE,
+    group_mismatch_error,
+    rematch_vessel_by_name,
+    same_shipping_line_group,
+    vessel_line_mismatch_error,
+)
 from apps.catalogs.models import Port, ShippingLine, Vessel
 
-
-GROUP_MISMATCH_MESSAGE = (
-    "No se puede mover la reserva a una naviera de otro grupo corporativo. "
-    "Cancela esta reserva para liberar la posición y la fecha; "
-    "luego crea una nueva en el otro grupo."
-)
+__all__ = ["GROUP_MISMATCH_MESSAGE", "update_booking_identity"]
 
 
 def _not_found(entity: str) -> BookingValidationError:
@@ -89,16 +91,7 @@ def update_booking_identity(
         except ShippingLine.DoesNotExist as exc:
             raise _not_found("Naviera") from exc
         if new_line.group_id != old_line.group_id:
-            raise BookingValidationError(
-                GROUP_MISMATCH_MESSAGE,
-                [
-                    {
-                        "code": "shipping_line_group_mismatch",
-                        "message": GROUP_MISMATCH_MESSAGE,
-                        "severity": "error",
-                    }
-                ],
-            )
+            raise group_mismatch_error(for_update=True)
         changes["shipping_line_id"] = {
             "from": booking.shipping_line_id,
             "to": new_line.id,
@@ -113,55 +106,54 @@ def update_booking_identity(
     new_vessel = old_vessel
     if vessel_id is not None and vessel_id != booking.vessel_id:
         try:
-            new_vessel = Vessel.objects.select_related("shipping_line").get(pk=vessel_id)
+            new_vessel = (
+                Vessel.objects.select_related("shipping_line", "shipping_line__group")
+                .get(pk=vessel_id)
+            )
         except Vessel.DoesNotExist as exc:
             raise _not_found("Barco") from exc
+        if not same_shipping_line_group(new_line, new_vessel):
+            raise group_mismatch_error(for_update=True)
         if new_vessel.shipping_line_id != new_line.id:
-            raise BookingValidationError(
-                "El barco debe pertenecer a la naviera seleccionada.",
-                [
-                    {
-                        "code": "vessel_line_mismatch",
-                        "message": "El barco debe pertenecer a la naviera seleccionada.",
-                        "severity": "error",
-                    }
-                ],
+            rematch = rematch_vessel_by_name(
+                new_vessel.name,
+                shipping_line_id=new_line.id,
+                shipping_line_group_id=new_line.group_id,
             )
-        # Vessel's line group must still match (covers vessel-only edit).
-        vessel_line = new_vessel.shipping_line
-        if vessel_line.group_id != old_line.group_id:
-            raise BookingValidationError(
-                GROUP_MISMATCH_MESSAGE,
-                [
-                    {
-                        "code": "shipping_line_group_mismatch",
-                        "message": GROUP_MISMATCH_MESSAGE,
-                        "severity": "error",
-                    }
-                ],
-            )
-        changes["vessel_id"] = {
-            "from": booking.vessel_id,
-            "to": new_vessel.id,
-            "from_name": old_vessel.name,
-            "to_name": new_vessel.name,
-        }
-        booking.vessel = new_vessel
-        update_fields.append("vessel")
-    elif booking.vessel.shipping_line_id != new_line.id:
-        raise BookingValidationError(
-            "El barco actual no pertenece a la naviera seleccionada. Elige otro barco.",
-            [
-                {
-                    "code": "vessel_line_mismatch",
-                    "message": (
-                        "El barco actual no pertenece a la naviera seleccionada. "
-                        "Elige otro barco."
-                    ),
-                    "severity": "error",
-                }
-            ],
+            if rematch:
+                new_vessel = rematch
+            else:
+                raise vessel_line_mismatch_error()
+        if new_vessel.id != old_vessel.id:
+            changes["vessel_id"] = {
+                "from": booking.vessel_id,
+                "to": new_vessel.id,
+                "from_name": old_vessel.name,
+                "to_name": new_vessel.name,
+            }
+            booking.vessel = new_vessel
+            update_fields.append("vessel")
+    elif new_vessel.shipping_line_id != new_line.id:
+        rematch = rematch_vessel_by_name(
+            new_vessel.name,
+            shipping_line_id=new_line.id,
+            shipping_line_group_id=new_line.group_id,
         )
+        if rematch:
+            new_vessel = rematch
+            changes["vessel_id"] = {
+                "from": booking.vessel_id,
+                "to": new_vessel.id,
+                "from_name": old_vessel.name,
+                "to_name": new_vessel.name,
+            }
+            booking.vessel = new_vessel
+            update_fields.append("vessel")
+        else:
+            raise vessel_line_mismatch_error(
+                "El barco actual no pertenece a la naviera seleccionada. "
+                "Elige otro barco."
+            )
 
     new_call_date = old_call_date
     if call_date is not None and call_date != booking.call_date:

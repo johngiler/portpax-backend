@@ -18,6 +18,7 @@ class VesselSerializer(WebPImageFieldsMixin, serializers.ModelSerializer):
             "shipping_line_name",
             "group_name",
             "name",
+            "ship_code",
             "logo",
             "vessel_class",
             "gross_tonnage",

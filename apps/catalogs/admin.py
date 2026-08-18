@@ -199,7 +199,7 @@ class ShippingLineInline(admin.TabularInline):
 class VesselInline(admin.TabularInline):
     model = Vessel
     extra = 0
-    fields = ("name", "vessel_class", "loa_m", "draft_m", "pax_capacity", "is_active")
+    fields = ("name", "ship_code", "vessel_class", "loa_m", "draft_m", "pax_capacity", "is_active")
     show_change_link = True
 
 
@@ -223,6 +223,7 @@ class ShippingLineAdmin(admin.ModelAdmin):
 class VesselAdmin(admin.ModelAdmin):
     list_display = (
         "name",
+        "ship_code",
         "shipping_line",
         "loa_m",
         "draft_m",
@@ -230,5 +231,5 @@ class VesselAdmin(admin.ModelAdmin):
         "segment",
         "is_active",
     )
-    search_fields = ("name", "shipping_line__name", "shipping_line__group__name")
+    search_fields = ("name", "ship_code", "shipping_line__name", "shipping_line__group__name")
     list_filter = ("shipping_line__group", "shipping_line", "segment", "is_active")

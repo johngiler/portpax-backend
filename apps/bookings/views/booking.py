@@ -215,10 +215,18 @@ class BookingViewSet(
     def bulk_import_preview(self, request):
         upload = request.FILES.get("file")
         paste_text = ""
+        group_id = None
         if not upload:
             if isinstance(request.data, dict):
                 paste_text = (request.data.get("text") or request.data.get("tsv") or "")
+                group_id = request.data.get("shipping_line_group")
             paste_text = str(paste_text).strip()
+        elif request.data is not None:
+            group_id = request.data.get("shipping_line_group")
+        try:
+            group_id = int(group_id) if group_id not in (None, "", 0, "0") else None
+        except (TypeError, ValueError):
+            group_id = None
 
         if not upload and not paste_text:
             return Response(
@@ -240,7 +248,7 @@ class BookingViewSet(
                 raw_rows = parse_itm_workbook(upload)
             else:
                 raw_rows = parse_itm_tsv(paste_text)
-            rows = resolve_itm_rows(raw_rows)
+            rows = resolve_itm_rows(raw_rows, shipping_line_group_id=group_id)
         except ItmParseError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception:

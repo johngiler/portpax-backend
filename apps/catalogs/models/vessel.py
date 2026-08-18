@@ -12,6 +12,7 @@ class Vessel(models.Model):
         related_name="vessels",
     )
     name = models.CharField(max_length=128)
+    ship_code = models.CharField(max_length=64, blank=True)
     logo = models.ImageField(
         upload_to="vessels/logos/",
         blank=True,

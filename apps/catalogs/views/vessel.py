@@ -10,7 +10,7 @@ class VesselViewSet(viewsets.ModelViewSet):
     serializer_class = VesselSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["name", "vessel_class", "shipping_line__name", "shipping_line__group__name"]
+    search_fields = ["name", "ship_code", "vessel_class", "shipping_line__name", "shipping_line__group__name"]
     ordering_fields = ["name", "loa_m", "draft_m", "created_at"]
     ordering = ["name"]
 
@@ -19,4 +19,10 @@ class VesselViewSet(viewsets.ModelViewSet):
         shipping_line_id = self.request.query_params.get("shipping_line")
         if shipping_line_id:
             qs = qs.filter(shipping_line_id=shipping_line_id)
+        group_id = (
+            self.request.query_params.get("shipping_line_group")
+            or self.request.query_params.get("group")
+        )
+        if group_id:
+            qs = qs.filter(shipping_line__group_id=group_id)
         return qs

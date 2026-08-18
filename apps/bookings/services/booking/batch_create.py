@@ -6,6 +6,9 @@ from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.booking.code import resolve_unique_booking_code
 from apps.bookings.services.position_assignment import resolve_booking_position
 from apps.bookings.services.validation.rules import related_position_ids
+from apps.bookings.services.booking.shipping_line_group import (
+    CREATE_GROUP_MISMATCH_MESSAGE,
+)
 from apps.catalogs.models import Port, ShippingLine, Vessel
 
 # Mass-import initial statuses (NR retired from this flow; C/R not created here).
@@ -57,18 +60,28 @@ def create_booking_batch(
         raise BookingBatchCreateError("Puerto no válido.", "port")
 
     try:
-        shipping_line = ShippingLine.objects.get(pk=shipping_line_id, is_active=True)
+        shipping_line = ShippingLine.objects.select_related("group").get(
+            pk=shipping_line_id, is_active=True
+        )
     except ShippingLine.DoesNotExist:
         raise BookingBatchCreateError("Naviera no válida.", "shipping_line")
 
     try:
-        vessel = Vessel.objects.select_related("shipping_line").get(
+        vessel = Vessel.objects.select_related(
+            "shipping_line",
+            "shipping_line__group",
+        ).get(
             pk=vessel_id,
             is_active=True,
         )
     except Vessel.DoesNotExist:
         raise BookingBatchCreateError("Barco no válido.", "vessel")
 
+    if vessel.shipping_line.group_id != shipping_line.group_id:
+        raise BookingBatchCreateError(
+            CREATE_GROUP_MISMATCH_MESSAGE,
+            "vessel",
+        )
     if vessel.shipping_line_id != shipping_line.id:
         raise BookingBatchCreateError(
             "El barco no pertenece a la naviera seleccionada.",
