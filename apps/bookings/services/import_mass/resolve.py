@@ -136,20 +136,24 @@ def resolve_vessel(
             shipping_line__is_active=True,
         )
 
-    exact = list(qs.filter(name__iexact=name)[:5])
-    if len(exact) == 1:
+    # Homonyms: suggest the first match (group, then brand). The operator can
+    # force a shipping-line group afterwards to pick the other Prima.
+    order = (
+        "shipping_line__group__name",
+        "shipping_line__name",
+        "name",
+        "id",
+    )
+    exact = list(qs.filter(name__iexact=name).order_by(*order)[:5])
+    if exact:
         return exact[0]
-    if len(exact) > 1:
-        return None
 
-    starts = list(qs.filter(name__istartswith=name).order_by("name")[:5])
-    if len(starts) == 1:
+    starts = list(qs.filter(name__istartswith=name).order_by(*order)[:5])
+    if starts:
         return starts[0]
-    if len(starts) > 1:
-        return None
 
-    contains = list(qs.filter(name__icontains=name).order_by("name")[:5])
-    if len(contains) == 1:
+    contains = list(qs.filter(name__icontains=name).order_by(*order)[:5])
+    if contains:
         return contains[0]
     return None
 
