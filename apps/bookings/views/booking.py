@@ -14,7 +14,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import DenyViewerWrites, user_can_access_port, user_port_ids
-from apps.bookings.models import Booking, BookingImportBatch
+from apps.bookings.models import Booking, BookingImportBatch, BookingStatus
 from apps.bookings.utils.status_query import (
     apply_booking_status_filters,
     parse_status_query_params,
@@ -198,6 +198,7 @@ class BookingViewSet(
                 etd=data.get("etd"),
                 planned_pax=data.get("planned_pax"),
                 preferred_position_id=data.get("position"),
+                status=data.get("status") or BookingStatus.H,
             )
         except BookingBatchCreateError as exc:
             payload = {"detail": str(exc)}

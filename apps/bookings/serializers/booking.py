@@ -9,6 +9,7 @@ from apps.bookings.services.booking.status import (
     update_booking_status,
 )
 from apps.bookings.services.booking.identity import update_booking_identity
+from apps.bookings.services.booking.batch_create import BULK_CREATE_STATUSES
 from apps.bookings.services.validation import validate_booking_params
 from apps.catalogs.utils.position_code import position_short_code
 
@@ -352,6 +353,11 @@ class BookingBatchCreateSerializer(serializers.Serializer):
     etd = serializers.TimeField(required=False, allow_null=True)
     planned_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     position = serializers.IntegerField(required=False, allow_null=True)
+    status = serializers.ChoiceField(
+        choices=[(s, s) for s in sorted(BULK_CREATE_STATUSES)],
+        required=False,
+        default=BookingStatus.H,
+    )
 
     def validate_call_dates(self, value):
         if not value:

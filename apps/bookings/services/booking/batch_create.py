@@ -45,7 +45,7 @@ def create_booking_batch(
         raise BookingBatchCreateError("Selecciona al menos una fecha.", "call_dates")
 
     if status not in BULK_CREATE_STATUSES:
-        raise BookingBatchCreateError("Estado inicial no válido para creación masiva.", "status")
+        raise BookingBatchCreateError("Estado inicial no válido.", "status")
 
     unique_dates = sorted({d for d in call_dates})
     if len(unique_dates) != len(call_dates):
