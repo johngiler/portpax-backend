@@ -1,9 +1,8 @@
-"""Availability Chart export — day × position matrix (carrier + LOA)."""
+"""Availability chart JSON plus list export (ship / line / port / date / times / position)."""
 
 from __future__ import annotations
 
 import csv
-from collections import defaultdict
 from datetime import date, timedelta
 from io import BytesIO, StringIO
 from typing import Any
@@ -16,6 +15,7 @@ from openpyxl.utils import get_column_letter
 
 from apps.bookings.services.report_exports.common import scheduled_bookings_qs
 from apps.catalogs.models import Port, Position, PositionComponent
+from apps.catalogs.utils.position_code import position_short_code
 
 # Occupancy density filter (Barcos por día) — exact distinct ships on that day.
 SHIPS_PER_DAY_MIN = 1
@@ -54,7 +54,37 @@ def _day_ship_count(cells: list[list[dict]]) -> int:
     return len(codes)
 
 
-def _availability_matrix(
+EXPORT_HEADERS = [
+    "Barco",
+    "Naviera",
+    "Puerto",
+    "Fecha",
+    "ETA",
+    "ETD",
+    "Posición",
+]
+
+
+def _format_export_time(value) -> str:
+    if value is None:
+        return ""
+    return value.strftime("%H:%M")
+
+
+def _port_display_name(port: Port) -> str:
+    commercial = (port.commercial_name or "").strip()
+    if commercial:
+        return f"{port.name} ({commercial})"
+    return port.name
+
+
+def _position_display(booking) -> str:
+    if not booking.position_id or booking.position is None:
+        return ""
+    return position_short_code(booking.port.code, booking.position.code)
+
+
+def _availability_export_bookings(
     *,
     port_id: int,
     date_from: date,
@@ -65,29 +95,15 @@ def _availability_matrix(
     position_id: int | None = None,
     status: str | None = None,
     statuses: list[str] | None = None,
-) -> tuple[list[str], list[list[str]]]:
+):
     if allowed_ports is not None and port_id not in allowed_ports:
         raise ValueError("Puerto no permitido.")
 
     Port.objects.get(pk=port_id)
-    from apps.catalogs.services.position_combination import exclude_combined_positions
-
-    positions_qs = exclude_combined_positions(
-        Position.objects.filter(port_id=port_id, is_active=True)
-    )
-    if position_id:
-        positions_qs = positions_qs.filter(pk=position_id)
-    positions = list(
-        positions_qs.select_related("berth").order_by("sort_order", "code")
-    )
-    pos_codes = [p.code for p in positions]
-    pos_by_id = {p.id: p.code for p in positions}
-
     status_filters = list(statuses or [])
     if status and status not in status_filters:
         status_filters.append(status)
 
-    cells: dict[tuple[date, str], list[str]] = defaultdict(list)
     qs = scheduled_bookings_qs(
         date_from=date_from,
         date_to=date_to,
@@ -99,7 +115,6 @@ def _availability_matrix(
         status=None,
     )
     if "c" in status_filters:
-        # Include cancelled alongside occupancy set when requested.
         from apps.bookings.models import Booking
         from apps.bookings.utils.status_query import apply_booking_status_filters
 
@@ -121,29 +136,46 @@ def _availability_matrix(
         from apps.bookings.utils.status_query import apply_booking_status_filters
 
         qs = apply_booking_status_filters(qs, status_filters)
-    for b in qs.iterator(chunk_size=500):
-        code = pos_by_id.get(b.position_id) if b.position_id else "TBD"
-        line = (b.shipping_line.code or b.shipping_line.name or "").strip() or "?"
-        loa = ""
-        if b.vessel_id and b.vessel.loa_m is not None:
-            loa_val = b.vessel.loa_m
-            loa = str(int(loa_val) if loa_val == int(loa_val) else loa_val)
-        cells[(b.call_date, code)].append(f"{line} {loa}".strip() if loa else line)
+    return qs.order_by("call_date", "position__sort_order", "vessel__name")
 
-    if "TBD" not in pos_codes and any(k[1] == "TBD" for k in cells):
-        pos_codes = [*pos_codes, "TBD"]
 
-    header = ["Fecha", *pos_codes]
+def _availability_export_rows(
+    *,
+    port_id: int,
+    date_from: date,
+    date_to: date,
+    allowed_ports: set[int] | None = None,
+    shipping_line_id: int | None = None,
+    vessel_id: int | None = None,
+    position_id: int | None = None,
+    status: str | None = None,
+    statuses: list[str] | None = None,
+) -> tuple[list[str], list[list[str]]]:
+    qs = _availability_export_bookings(
+        port_id=port_id,
+        date_from=date_from,
+        date_to=date_to,
+        allowed_ports=allowed_ports,
+        shipping_line_id=shipping_line_id,
+        vessel_id=vessel_id,
+        position_id=position_id,
+        status=status,
+        statuses=statuses,
+    )
     rows: list[list[str]] = []
-    day = date_from
-    while day <= date_to:
-        row = [day.isoformat()]
-        for code in pos_codes:
-            vals = cells.get((day, code), [])
-            row.append(" | ".join(vals) if vals else "0")
-        rows.append(row)
-        day += timedelta(days=1)
-    return header, rows
+    for booking in qs.iterator(chunk_size=500):
+        rows.append(
+            [
+                booking.vessel.name if booking.vessel_id else "",
+                booking.shipping_line.name if booking.shipping_line_id else "",
+                _port_display_name(booking.port),
+                booking.call_date.strftime("%d/%m/%Y"),
+                _format_export_time(booking.eta),
+                _format_export_time(booking.etd),
+                _position_display(booking),
+            ]
+        )
+    return EXPORT_HEADERS, rows
 
 
 def build_availability_data(
@@ -405,7 +437,7 @@ def build_availability_chart_xlsx(
     status: str | None = None,
     statuses: list[str] | None = None,
 ) -> bytes:
-    header, rows = _availability_matrix(
+    header, rows = _availability_export_rows(
         port_id=port_id,
         date_from=date_from,
         date_to=date_to,
@@ -418,17 +450,17 @@ def build_availability_chart_xlsx(
     )
     wb = Workbook()
     ws = wb.active
-    ws.title = "Availability"
+    ws.title = "Disponibilidad"
     ws.append(header)
     for cell in ws[1]:
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
     for row in rows:
         ws.append(row)
-    ws.column_dimensions["A"].width = 12
-    for idx in range(2, len(header) + 1):
-        ws.column_dimensions[get_column_letter(idx)].width = 16
-    ws.freeze_panes = "B2"
+    widths = (28, 28, 24, 12, 10, 10, 14)
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+    ws.freeze_panes = "A2"
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -446,7 +478,7 @@ def build_availability_chart_csv(
     status: str | None = None,
     statuses: list[str] | None = None,
 ) -> bytes:
-    header, rows = _availability_matrix(
+    header, rows = _availability_export_rows(
         port_id=port_id,
         date_from=date_from,
         date_to=date_to,
