@@ -1,4 +1,5 @@
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -21,6 +22,7 @@ from apps.bookings.utils.status_query import (
 )
 from apps.bookings.serializers import (
     BookingBatchCreateSerializer,
+    BookingListSerializer,
     BookingSerializer,
     BookingUpdateSerializer,
     BookingValidateSerializer,
@@ -68,6 +70,14 @@ from apps.bookings.services.report_exports import (
 )
 from apps.catalogs.models import Port, ShippingLine
 from apps.bookings.services.validation import suggest_positions
+from apps.bookings.services.validation.conflict_type_filters import (
+    CONFLICT_TYPES,
+    filter_queryset_by_conflict_type,
+)
+from apps.bookings.services.vessel_proximity_matrix import (
+    build_vessel_proximity_matrix,
+    parse_vessel_proximity_matrix_params,
+)
 from apps.bookings.services.import_mass import (
     ItmParseError,
     create_from_resolved_rows,
@@ -117,7 +127,9 @@ class BookingViewSet(
             "vessel",
             "position",
             "long_term_agreement",
-        ).prefetch_related("audit_entries")
+        )
+        if self.action in ("retrieve", "by_code"):
+            qs = qs.prefetch_related("audit_entries")
         allowed_ports = user_port_ids(self.request.user)
         if allowed_ports is not None:
             qs = qs.filter(port_id__in=allowed_ports)
@@ -147,6 +159,11 @@ class BookingViewSet(
         ).strip().lower()
         if conflict_severity in {"yellow", "red", "green"}:
             qs = qs.filter(conflict_severity=conflict_severity)
+        conflict_type = str(
+            self.request.query_params.get("conflict_type") or ""
+        ).strip().lower()
+        if conflict_type in CONFLICT_TYPES:
+            qs = filter_queryset_by_conflict_type(qs, conflict_type)
         call_date_from = self.request.query_params.get("call_date_from")
         if call_date_from:
             qs = qs.filter(call_date__gte=call_date_from)
@@ -156,11 +173,22 @@ class BookingViewSet(
         ordering = self.request.query_params.get("ordering", "call_date_proximity")
         return apply_booking_list_ordering(qs, ordering)
 
+    @action(detail=False, methods=["get"], url_path=r"by-code/(?P<booking_code>[^/]+)")
+    def by_code(self, request, booking_code=None):
+        """Full booking payload by operational code (detail view — one request)."""
+        qs = self.filter_queryset(self.get_queryset())
+        booking = get_object_or_404(qs, booking_code=booking_code)
+        self._ensure_port_access(booking.port_id)
+        serializer = BookingSerializer(booking, context={"request": request})
+        return Response(serializer.data)
+
     def get_serializer_class(self):
         if self.action in ("update", "partial_update"):
             return BookingUpdateSerializer
         if self.action == "validate":
             return BookingValidateSerializer
+        if self.action == "list":
+            return BookingListSerializer
         return BookingSerializer
 
     def partial_update(self, request, *args, **kwargs):
@@ -207,7 +235,7 @@ class BookingViewSet(
             return Response(payload, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(
-            BookingSerializer(bookings, many=True, context={"request": request}).data,
+            BookingListSerializer(bookings, many=True, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -566,6 +594,36 @@ class BookingViewSet(
                 {"detail": "No se pudo leer los datos de disponibilidad."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        return Response(payload)
+
+    @action(detail=False, methods=["get"], url_path="vessel-proximity-matrix")
+    def vessel_proximity_matrix(self, request):
+        try:
+            params = parse_vessel_proximity_matrix_params(request.query_params)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        if params["port_id"]:
+            self._ensure_port_access(params["port_id"])
+
+        try:
+            payload = build_vessel_proximity_matrix(
+                user=request.user,
+                request=request,
+                vessel_id=params["vessel_id"],
+                call_date_from=params["call_date_from"],
+                call_date_to=params["call_date_to"],
+                status_values=params["status_values"],
+                port_id=params["port_id"],
+                has_conflict=params["has_conflict"],
+                conflict_severity=params["conflict_severity"],
+                conflict_type=params["conflict_type"],
+                page=params["page"],
+                page_size=params["page_size"],
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         return Response(payload)
 
     @action(detail=False, methods=["post"], url_path="validate")
@@ -990,6 +1048,12 @@ class BookingViewSet(
             if conflict_severity_raw in {"yellow", "red", "green"}
             else None
         )
+        conflict_type_raw = str(
+            request.query_params.get("conflict_type") or ""
+        ).strip().lower()
+        conflict_type_filter = (
+            conflict_type_raw if conflict_type_raw in CONFLICT_TYPES else None
+        )
         ships_per_day = self._optional_int_param("ships_per_day")
         if isinstance(ships_per_day, Response):
             return ships_per_day
@@ -1012,11 +1076,13 @@ class BookingViewSet(
                 statuses=status_values,
                 has_conflict=has_conflict_filter,
                 conflict_severity=conflict_severity_filter,
+                conflict_type=conflict_type_filter,
                 ships_per_day=ships_per_day,
                 page=page
                 if ships_per_day is not None
                 or has_conflict_filter is not None
                 or conflict_severity_filter is not None
+                or conflict_type_filter is not None
                 else None,
                 page_size=page_size or 30,
                 request=request,

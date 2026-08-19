@@ -11,6 +11,7 @@ from apps.bookings.services.booking.status import (
 from apps.bookings.services.booking.identity import update_booking_identity
 from apps.bookings.services.booking.batch_create import BULK_CREATE_STATUSES
 from apps.bookings.services.validation import validate_booking_params
+from apps.bookings.services.validation.conflict_display import booking_conflict_display
 from apps.catalogs.utils.position_code import position_short_code
 
 
@@ -34,7 +35,97 @@ class BookingAuditEntrySerializer(serializers.ModelSerializer):
         return obj.user.get_username()
 
 
-class BookingSerializer(serializers.ModelSerializer):
+class _BookingFileUrlMixin:
+    def _file_url(self, field) -> str | None:
+        if not field:
+            return None
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(field.url)
+        return field.url
+
+
+class _BookingConflictDisplayMixin(serializers.Serializer):
+    conflict_chips = serializers.SerializerMethodField()
+    conflict_highlights = serializers.SerializerMethodField()
+
+    def get_conflict_chips(self, obj: Booking) -> list:
+        return booking_conflict_display(
+            has_conflict=bool(obj.has_conflict),
+            conflict_severity=getattr(obj, "conflict_severity", None),
+            snapshot=getattr(obj, "conflict_snapshot", None) or [],
+        )["conflict_chips"]
+
+    def get_conflict_highlights(self, obj: Booking) -> dict:
+        return booking_conflict_display(
+            has_conflict=bool(obj.has_conflict),
+            conflict_severity=getattr(obj, "conflict_severity", None),
+            snapshot=getattr(obj, "conflict_snapshot", None) or [],
+        )["conflict_highlights"]
+
+
+class BookingListSerializer(
+    _BookingFileUrlMixin,
+    _BookingConflictDisplayMixin,
+    serializers.ModelSerializer,
+):
+    """Lightweight payload for list, calendar, and batch-create responses."""
+
+    port_name = serializers.CharField(source="port.name", read_only=True)
+    shipping_line_code = serializers.CharField(source="shipping_line.code", read_only=True)
+    shipping_line_name = serializers.CharField(source="shipping_line.name", read_only=True)
+    vessel_name = serializers.CharField(source="vessel.name", read_only=True)
+    vessel_loa_m = serializers.DecimalField(
+        source="vessel.loa_m",
+        max_digits=6,
+        decimal_places=2,
+        read_only=True,
+        allow_null=True,
+    )
+    position_code = serializers.SerializerMethodField()
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    confirmation_pdf_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Booking
+        fields = [
+            "id",
+            "booking_code",
+            "port",
+            "port_name",
+            "vessel",
+            "vessel_name",
+            "vessel_loa_m",
+            "shipping_line_code",
+            "shipping_line_name",
+            "position",
+            "position_code",
+            "call_date",
+            "eta",
+            "etd",
+            "planned_pax",
+            "status",
+            "status_display",
+            "confirmation_pdf_url",
+            "conflict_chips",
+            "conflict_highlights",
+        ]
+        read_only_fields = fields
+
+    def get_position_code(self, obj: Booking) -> str | None:
+        if not obj.position_id:
+            return None
+        return position_short_code(obj.port.code, obj.position.code)
+
+    def get_confirmation_pdf_url(self, obj) -> str | None:
+        return self._file_url(obj.confirmation_pdf)
+
+
+class BookingSerializer(
+    _BookingFileUrlMixin,
+    _BookingConflictDisplayMixin,
+    serializers.ModelSerializer,
+):
     port_code = serializers.CharField(source="port.code", read_only=True)
     port_name = serializers.CharField(source="port.name", read_only=True)
     port_logo = serializers.SerializerMethodField()
@@ -106,6 +197,8 @@ class BookingSerializer(serializers.ModelSerializer):
             "has_conflict",
             "conflict_severity",
             "conflict_snapshot",
+            "conflict_chips",
+            "conflict_highlights",
             "cancellation_reason",
             "cancellation_reason_display",
             "cancellation_evidence_url",
@@ -117,14 +210,6 @@ class BookingSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
-
-    def _file_url(self, field) -> str | None:
-        if not field:
-            return None
-        request = self.context.get("request")
-        if request:
-            return request.build_absolute_uri(field.url)
-        return field.url
 
     def get_port_logo(self, obj) -> str | None:
         return self._file_url(obj.port.logo)

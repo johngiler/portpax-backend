@@ -14,3 +14,6 @@ LTA_SOFT_FAIL_CODES = frozenset({"lta_beyond_horizon", "lta_horizon_denied"})
 
 # Minimum gap between non-overlapping windows on the same position (hours).
 ETA_CLOSE_GAP_HOURS = 2
+
+# Search window (±days) when comparing multi-port itineraries (geo proximity).
+MAX_GEO_PROXIMITY_WINDOW_DAYS = 3

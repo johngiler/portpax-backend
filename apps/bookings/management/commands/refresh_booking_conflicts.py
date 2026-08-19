@@ -6,7 +6,10 @@ from django.core.management.base import BaseCommand
 
 from apps.bookings.constants import OCCUPATION_CONFLICT_STATUSES
 from apps.bookings.models import Booking
-from apps.bookings.services.validation.conflicts import refresh_booking_conflicts
+from apps.bookings.services.validation.conflicts import (
+    refresh_booking_conflicts,
+    refresh_booking_conflicts_for_vessel_itinerary,
+)
 
 
 class Command(BaseCommand):
@@ -23,6 +26,12 @@ class Command(BaseCommand):
             help="Limit to bookings at this port id.",
         )
         parser.add_argument(
+            "--vessel",
+            type=int,
+            default=None,
+            help="Limit to bookings for this vessel id (full itinerary refresh).",
+        )
+        parser.add_argument(
             "--call-date",
             type=str,
             default=None,
@@ -31,13 +40,32 @@ class Command(BaseCommand):
         parser.add_argument(
             "--only-stale",
             action="store_true",
-            help="Only rows currently flagged has_conflict=False with a position.",
+            help="Only rows currently flagged has_conflict=False.",
+        )
+        parser.add_argument(
+            "--assigned-only",
+            action="store_true",
+            help=(
+                "Skip bookings without position (legacy pier-only refill). "
+                "Geo proximity applies to all active bookings."
+            ),
         )
 
     def handle(self, *args, **options):
+        if options["vessel"]:
+            total = refresh_booking_conflicts_for_vessel_itinerary(options["vessel"])
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Done. refreshed_itinerary vessel_id={options['vessel']} count={total}"
+                )
+            )
+            return
+
         qs = Booking.objects.filter(
             status__in=OCCUPATION_CONFLICT_STATUSES,
-        ).exclude(position_id=None).order_by("id")
+        ).order_by("id")
+        if options["assigned_only"]:
+            qs = qs.exclude(position_id=None)
         if options["port"]:
             qs = qs.filter(port_id=options["port"])
         if options["call_date"]:

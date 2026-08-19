@@ -221,6 +221,58 @@ def _conflict_updated_summary(prev: list[dict], nxt: list[dict]) -> str:
     return f"Conflictos actualizados ({detail})"
 
 
+def refresh_booking_conflicts_for_vessel_itinerary(
+    vessel_id: int,
+    *,
+    user=None,
+    request=None,
+) -> int:
+    """Recompute conflicts for every active booking on a vessel (geo + pier)."""
+    from apps.bookings.constants import OCCUPATION_CONFLICT_STATUSES
+    from apps.bookings.models import Booking
+
+    qs = Booking.objects.filter(
+        vessel_id=vessel_id,
+        status__in=OCCUPATION_CONFLICT_STATUSES,
+    ).order_by("call_date", "id")
+    count = 0
+    for booking in qs.iterator(chunk_size=200):
+        refresh_booking_conflicts(booking, user=user, request=request)
+        count += 1
+    return count
+
+
+def refresh_booking_conflicts_after_port_proximity_change(
+    port_id: int,
+    *,
+    user=None,
+    request=None,
+) -> int:
+    """
+    After PortProximity rows change, refresh bookings for vessels that call
+    at the affected port (multi-port geo compares the full itinerary).
+    """
+    from apps.bookings.constants import OCCUPATION_CONFLICT_STATUSES
+    from apps.bookings.models import Booking
+
+    vessel_ids = (
+        Booking.objects.filter(
+            port_id=port_id,
+            status__in=OCCUPATION_CONFLICT_STATUSES,
+        )
+        .values_list("vessel_id", flat=True)
+        .distinct()
+    )
+    total = 0
+    for vessel_id in vessel_ids:
+        total += refresh_booking_conflicts_for_vessel_itinerary(
+            vessel_id,
+            user=user,
+            request=request,
+        )
+    return total
+
+
 def refresh_related_booking_conflicts(
     booking,
     *,

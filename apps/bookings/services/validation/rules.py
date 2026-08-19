@@ -238,9 +238,10 @@ def validate_multi_port_conflict(
     """
     from datetime import timedelta
 
-    MAX_GEO_PROXIMITY_DAYS = 3
-    window_start = call_date - timedelta(days=MAX_GEO_PROXIMITY_DAYS)
-    window_end = call_date + timedelta(days=MAX_GEO_PROXIMITY_DAYS)
+    from apps.bookings.constants import MAX_GEO_PROXIMITY_WINDOW_DAYS
+
+    window_start = call_date - timedelta(days=MAX_GEO_PROXIMITY_WINDOW_DAYS)
+    window_end = call_date + timedelta(days=MAX_GEO_PROXIMITY_WINDOW_DAYS)
     qs = Booking.objects.filter(
         vessel_id=vessel_id,
         call_date__gte=window_start,
@@ -253,6 +254,8 @@ def validate_multi_port_conflict(
     others = list(qs.select_related("port").order_by("call_date", "id")[:8])
     if not others:
         return []
+
+    current_port = Port.objects.filter(pk=port_id).only("id", "code", "name").first()
 
     other_port_ids = {o.port_id for o in others if getattr(o, "port_id", None)}
     proximity_map: dict[tuple[int, int], PortProximity] = {
@@ -273,13 +276,28 @@ def validate_multi_port_conflict(
     )
 
     issues: list[ValidationIssue] = []
+    current_port_name = current_port.name if current_port else "puerto actual"
     for other in others:
         if other.call_date == call_date:
             message = (
                 f"El mismo barco ya tiene escala en {other.port.name} "
                 f"({other.booking_code}) en esta fecha."
             )
-            issues.append(ValidationIssue("warning", "multi_port_conflict", message))
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    "multi_port_conflict",
+                    message,
+                    detail={
+                        "formula": (
+                            f"Mismo barco · {other.port.name} y {current_port_name} "
+                            f"el {call_date.isoformat()}"
+                        ),
+                        "other_booking_code": other.booking_code,
+                        "other_port": other.port.code,
+                    },
+                )
+            )
             continue
 
         delta_days = abs((other.call_date - call_date).days)
@@ -288,9 +306,13 @@ def validate_multi_port_conflict(
         if other.call_date < call_date:
             # other → current
             prox = proximity_map.get((other.port_id, port_id))
+            from_port = other.port
+            to_port = current_port
         else:
             # current → other
             prox = proximity_map.get((port_id, other.port_id))
+            from_port = current_port
+            to_port = other.port
 
         if prox is None:
             # No proximity data (missing coords) → skip geo rule.
@@ -299,14 +321,33 @@ def validate_multi_port_conflict(
         required_hours = float(prox.travel_hours_min)
 
         if available_hours < required_hours:
+            from_label = from_port.name if from_port else "?"
+            to_label = to_port.name if to_port else "?"
+            formula = (
+                f"{from_label} → {to_label}: "
+                f"{float(prox.distance_km):.0f} km · mín. {required_hours:.0f} h · "
+                f"salto {available_hours:.0f} h"
+            )
             message = (
                 f"El mismo barco tiene escala en {other.port.name} "
-                f"({other.booking_code}) el {other.call_date.isoformat()}. "
-                f"Mínimo viaje geográfico: {required_hours:.0f} h. "
-                f"Salto disponible: {available_hours:.0f} h."
+                f"({other.booking_code}) el {other.call_date.isoformat()}."
             )
             issues.append(
-                ValidationIssue("warning", "multi_port_proximity", message)
+                ValidationIssue(
+                    "warning",
+                    "multi_port_proximity",
+                    message,
+                    detail={
+                        "formula": formula,
+                        "from_port": from_port.code if from_port else "",
+                        "to_port": to_port.code if to_port else "",
+                        "distance_km": str(prox.distance_km),
+                        "travel_hours_min": f"{required_hours:.2f}",
+                        "available_hours": f"{available_hours:.0f}",
+                        "other_booking_code": other.booking_code,
+                        "other_call_date": other.call_date.isoformat(),
+                    },
+                )
             )
 
     return issues

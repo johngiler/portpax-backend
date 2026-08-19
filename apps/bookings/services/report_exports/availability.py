@@ -16,6 +16,10 @@ from openpyxl.utils import get_column_letter
 from apps.bookings.services.report_exports.common import scheduled_bookings_qs
 from apps.catalogs.models import Port, Position, PositionComponent
 from apps.catalogs.utils.position_code import position_short_code
+from apps.bookings.services.validation.conflict_display import (
+    booking_conflict_display,
+    cell_matches_conflict_filter,
+)
 
 # Occupancy density filter (Barcos por día) — exact distinct ships on that day.
 SHIPS_PER_DAY_MIN = 1
@@ -191,6 +195,7 @@ def build_availability_data(
     statuses: list[str] | None = None,
     has_conflict: bool | None = None,
     conflict_severity: str | None = None,
+    conflict_type: str | None = None,
     ships_per_day: int | None = None,
     page: int | None = None,
     page_size: int = 30,
@@ -258,16 +263,25 @@ def build_availability_data(
         for booking in scheduled_bookings_qs(**qs_kwargs, status="c"):
             if booking.id not in seen:
                 bookings.append(booking)
-    if conflict_severity in {"yellow", "red", "green"}:
+    if (
+        has_conflict is not None
+        or conflict_severity in {"yellow", "red", "green"}
+        or conflict_type
+    ):
         bookings = [
             b
             for b in bookings
-            if getattr(b, "conflict_severity", None) == conflict_severity
+            if cell_matches_conflict_filter(
+                {
+                    "has_conflict": bool(getattr(b, "has_conflict", False)),
+                    "conflict_severity": getattr(b, "conflict_severity", None),
+                    "conflict_snapshot": getattr(b, "conflict_snapshot", None),
+                },
+                has_conflict=has_conflict,
+                conflict_severity=conflict_severity,
+                conflict_type=conflict_type,
+            )
         ]
-    elif has_conflict is True:
-        bookings = [b for b in bookings if b.has_conflict]
-    elif has_conflict is False:
-        bookings = [b for b in bookings if not b.has_conflict]
     has_unassigned = any(booking.position_id not in position_index for booking in bookings)
     unassigned_index = len(positions) if has_unassigned else None
     if has_unassigned:
@@ -308,12 +322,16 @@ def build_availability_data(
         )
         if vessel_logo and request is not None:
             vessel_logo = request.build_absolute_uri(vessel_logo)
+        conflict_display = booking_conflict_display(
+            has_conflict=bool(getattr(booking, "has_conflict", False)),
+            conflict_severity=getattr(booking, "conflict_severity", None),
+            snapshot=getattr(booking, "conflict_snapshot", None) or [],
+        )
         call = {
             "booking_code": booking.booking_code,
             "status": booking.status,
-            "has_conflict": bool(getattr(booking, "has_conflict", False)),
-            "conflict_snapshot": getattr(booking, "conflict_snapshot", None) or [],
-            "conflict_severity": getattr(booking, "conflict_severity", None) or None,
+            "conflict_chips": conflict_display["conflict_chips"],
+            "conflict_highlights": conflict_display["conflict_highlights"],
             "position_id": booking.position_id or 0,
             "shipping_line_name": booking.shipping_line.name,
             "shipping_line_logo": logo,
@@ -327,10 +345,6 @@ def build_availability_data(
             "eta": booking.eta.isoformat() if booking.eta else None,
             "etd": booking.etd.isoformat() if booking.etd else None,
         }
-        if call["has_conflict"] and not call["conflict_severity"]:
-            from apps.bookings.services.validation.conflicts import max_snapshot_severity
-
-            call["conflict_severity"] = max_snapshot_severity(call["conflict_snapshot"])
         for cell_index in cell_indexes:
             existing = day_cells[cell_index]
             if any(item.get("booking_code") == call["booking_code"] for item in existing):
@@ -371,7 +385,11 @@ def build_availability_data(
         }
 
     # Conflict filter: only days with calls after filtering (paginated).
-    if has_conflict is not None or conflict_severity in {"yellow", "red", "green"}:
+    if (
+        has_conflict is not None
+        or conflict_severity in {"yellow", "red", "green"}
+        or conflict_type
+    ):
         matching_days = sorted(
             day
             for day, cells in bookings_by_day.items()

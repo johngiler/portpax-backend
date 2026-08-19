@@ -72,6 +72,11 @@ class PortViewSet(viewsets.ModelViewSet):
             if "latitude" in changes or "longitude" in changes:
                 try:
                     recalculate_port_proximity_for_port(port.id)
+                    from apps.bookings.services.validation.conflicts import (
+                        refresh_booking_conflicts_after_port_proximity_change,
+                    )
+
+                    refresh_booking_conflicts_after_port_proximity_change(port.id)
                 except Exception:
                     # Keep port update safe; proximity can be recalculated later.
                     pass
