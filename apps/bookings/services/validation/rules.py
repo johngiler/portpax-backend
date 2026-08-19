@@ -558,6 +558,8 @@ def validate_filo_nesting(
     position: Position | None,
     call_date,
     *,
+    vessel: Vessel | None = None,
+    port: Port | None = None,
     eta: time | None = None,
     etd: time | None = None,
     exclude_booking_id: int | None = None,
@@ -570,6 +572,19 @@ def validate_filo_nesting(
     """
     if not position:
         return []
+
+    from apps.catalogs.utils.position_code import position_short_code
+
+    port_code = (port.code if port else None) or (
+        position.port.code if getattr(position, "port_id", None) and hasattr(position, "port") else ""
+    )
+
+    def pos_label(code: str) -> str:
+        if port_code:
+            return position_short_code(port_code, code)
+        return code
+
+    subject_vessel = vessel.name if vessel else "Este barco"
 
     rules = (
         PositionNestingRule.objects.filter(port_id=position.port_id, is_active=True)
@@ -600,35 +615,85 @@ def validate_filo_nesting(
         if position.id == rule.outer_position_id:
             outer_eta, outer_etd = eta, etd
             inner_eta, inner_etd = other.eta, other.etd
-            outer_label = position.code
-            inner_label = other.position.code if other.position_id else rule.inner_position.code
+            outer_code = position.code
+            inner_code = other.position.code if other.position_id else rule.inner_position.code
+            validating_outer = True
         else:
             outer_eta, outer_etd = other.eta, other.etd
             inner_eta, inner_etd = eta, etd
-            outer_label = other.position.code if other.position_id else rule.outer_position.code
-            inner_label = position.code
+            outer_code = other.position.code if other.position_id else rule.outer_position.code
+            inner_code = position.code
+            validating_outer = False
+
+        outer_label = pos_label(outer_code)
+        inner_label = pos_label(inner_code)
+        other_vessel = other.vessel.name if other.vessel_id else "Otro barco"
 
         if rule.enforce_eta and outer_eta is not None and inner_eta is not None:
             if inner_eta < outer_eta:
+                if validating_outer:
+                    message = (
+                        f"El barco {subject_vessel} en {outer_label} no puede arribar "
+                        f"a las {outer_eta.strftime('%H:%M')}: {other_vessel} en {inner_label} "
+                        f"({other.booking_code}) arriba a las {inner_eta.strftime('%H:%M')} "
+                        f"antes que la entrada (FILO)."
+                    )
+                else:
+                    message = (
+                        f"El barco {subject_vessel} en {inner_label} no puede arribar "
+                        f"a las {inner_eta.strftime('%H:%M')}: {other_vessel} en {outer_label} "
+                        f"({other.booking_code}) arriba a las {outer_eta.strftime('%H:%M')} "
+                        f"(FILO: la entrada debe arribar primero)."
+                    )
                 issues.append(
                     ValidationIssue(
                         "error",
                         "filo_eta_violation",
-                        f"First-in / last-out: {inner_label} no puede arribar "
-                        f"({inner_eta.strftime('%H:%M')}) antes que {outer_label} "
-                        f"({outer_eta.strftime('%H:%M')}).",
+                        message,
+                        severity="red",
+                        detail={
+                            "formula": (
+                                f"FILO · {outer_label} ETA {outer_eta.strftime('%H:%M')} · "
+                                f"{inner_label} ETA {inner_eta.strftime('%H:%M')}"
+                            ),
+                            "blocking_booking_code": other.booking_code,
+                            "outer_position": outer_label,
+                            "inner_position": inner_label,
+                        },
                     )
                 )
 
         if rule.enforce_etd and outer_etd is not None and inner_etd is not None:
             if inner_etd > outer_etd:
+                if validating_outer:
+                    message = (
+                        f"El barco {subject_vessel} en {outer_label} no puede zarpar "
+                        f"a las {outer_etd.strftime('%H:%M')}: {other_vessel} en {inner_label} "
+                        f"({other.booking_code}) zarpa a las {inner_etd.strftime('%H:%M')} "
+                        f"(FILO: el fondo debe salir antes o a la vez que la entrada)."
+                    )
+                else:
+                    message = (
+                        f"El barco {subject_vessel} en {inner_label} no puede zarpar "
+                        f"a las {inner_etd.strftime('%H:%M')}: {other_vessel} en {outer_label} "
+                        f"({other.booking_code}) zarpa a las {outer_etd.strftime('%H:%M')} "
+                        f"(FILO: el fondo debe salir antes o a la vez que la entrada)."
+                    )
                 issues.append(
                     ValidationIssue(
                         "error",
                         "filo_etd_violation",
-                        f"First-in / last-out: {inner_label} no puede zarpar "
-                        f"({inner_etd.strftime('%H:%M')}) después que {outer_label} "
-                        f"({outer_etd.strftime('%H:%M')}).",
+                        message,
+                        severity="red",
+                        detail={
+                            "formula": (
+                                f"FILO · {outer_label} ETD {outer_etd.strftime('%H:%M')} · "
+                                f"{inner_label} ETD {inner_etd.strftime('%H:%M')}"
+                            ),
+                            "blocking_booking_code": other.booking_code,
+                            "outer_position": outer_label,
+                            "inner_position": inner_label,
+                        },
                     )
                 )
 
@@ -773,6 +838,8 @@ def validate_booking(
             validate_filo_nesting(
                 position,
                 call_date,
+                vessel=vessel,
+                port=port,
                 eta=eta,
                 etd=etd,
                 exclude_booking_id=exclude_booking_id,
