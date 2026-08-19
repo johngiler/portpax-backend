@@ -1,6 +1,7 @@
 from apps.catalogs.views.berth import BerthViewSet
 from apps.catalogs.views.berth_image import BerthImageViewSet
 from apps.catalogs.views.port import PortViewSet
+from apps.catalogs.views.port_proximity import PortProximityViewSet
 from apps.catalogs.views.port_bollard import PortBollardViewSet
 from apps.catalogs.views.port_fender import PortFenderViewSet
 from apps.catalogs.views.port_image import PortImageViewSet
@@ -19,6 +20,7 @@ __all__ = [
     "PortFenderViewSet",
     "PortImageViewSet",
     "PortViewSet",
+    "PortProximityViewSet",
     "PositionImageViewSet",
     "PositionLoaRecalcRuleViewSet",
     "PositionNestingRuleViewSet",

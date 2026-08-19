@@ -16,6 +16,7 @@ from apps.catalogs.models.position_pair_constraint import PositionPairConstraint
 from apps.catalogs.models.shipping_line import ShippingLine
 from apps.catalogs.models.shipping_line_group import ShippingLineGroup
 from apps.catalogs.models.vessel import Vessel
+from apps.catalogs.models.port_proximity import PortProximity
 
 __all__ = [
     "Berth",
@@ -39,5 +40,6 @@ __all__ = [
     "PositionType",
     "ShippingLine",
     "ShippingLineGroup",
+    "PortProximity",
     "Vessel",
 ]

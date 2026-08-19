@@ -11,7 +11,14 @@ from apps.bookings.constants import (
     OCCUPATION_CONFLICT_STATUSES,
 )
 from apps.bookings.models import Booking, BookingStatus
-from apps.catalogs.models import Port, Position, PositionNestingRule, PositionPairConstraint, Vessel
+from apps.catalogs.models import (
+    Port,
+    PortProximity,
+    Position,
+    PositionNestingRule,
+    PositionPairConstraint,
+    Vessel,
+)
 
 FULL_DAY_START = time(0, 0)
 FULL_DAY_END = time(23, 59)
@@ -221,11 +228,19 @@ def validate_multi_port_conflict(
     port_id: int,
     exclude_booking_id: int | None = None,
 ) -> list[ValidationIssue]:
-    """Warn if the vessel has an active call at another port within ±2 days."""
+    """
+    Geo proximity based on minimum travel time between ports.
+
+    - Same day: multi_port_conflict (still a warning)
+    - Different days: multi_port_proximity when the itinerary gap is
+      shorter than the geo minimum travel time (from → to depending on
+      chronological order).
+    """
     from datetime import timedelta
 
-    window_start = call_date - timedelta(days=2)
-    window_end = call_date + timedelta(days=2)
+    MAX_GEO_PROXIMITY_DAYS = 3
+    window_start = call_date - timedelta(days=MAX_GEO_PROXIMITY_DAYS)
+    window_end = call_date + timedelta(days=MAX_GEO_PROXIMITY_DAYS)
     qs = Booking.objects.filter(
         vessel_id=vessel_id,
         call_date__gte=window_start,
@@ -239,6 +254,24 @@ def validate_multi_port_conflict(
     if not others:
         return []
 
+    other_port_ids = {o.port_id for o in others if getattr(o, "port_id", None)}
+    proximity_map: dict[tuple[int, int], PortProximity] = {
+        (p.from_port_id, p.to_port_id): p
+        for p in PortProximity.objects.filter(
+            from_port_id__in=other_port_ids,
+            to_port_id=port_id,
+        )
+    }
+    proximity_map.update(
+        {
+            (p.from_port_id, p.to_port_id): p
+            for p in PortProximity.objects.filter(
+                from_port_id=port_id,
+                to_port_id__in=other_port_ids,
+            )
+        }
+    )
+
     issues: list[ValidationIssue] = []
     for other in others:
         if other.call_date == call_date:
@@ -246,15 +279,36 @@ def validate_multi_port_conflict(
                 f"El mismo barco ya tiene escala en {other.port.name} "
                 f"({other.booking_code}) en esta fecha."
             )
-            code = "multi_port_conflict"
+            issues.append(ValidationIssue("warning", "multi_port_conflict", message))
+            continue
+
+        delta_days = abs((other.call_date - call_date).days)
+        available_hours = float(delta_days * 24)
+
+        if other.call_date < call_date:
+            # other → current
+            prox = proximity_map.get((other.port_id, port_id))
         else:
+            # current → other
+            prox = proximity_map.get((port_id, other.port_id))
+
+        if prox is None:
+            # No proximity data (missing coords) → skip geo rule.
+            continue
+
+        required_hours = float(prox.travel_hours_min)
+
+        if available_hours < required_hours:
             message = (
                 f"El mismo barco tiene escala en {other.port.name} "
-                f"({other.booking_code}) el {other.call_date.isoformat()} "
-                f"(±2 días)."
+                f"({other.booking_code}) el {other.call_date.isoformat()}. "
+                f"Mínimo viaje geográfico: {required_hours:.0f} h. "
+                f"Salto disponible: {available_hours:.0f} h."
             )
-            code = "multi_port_proximity"
-        issues.append(ValidationIssue("warning", code, message))
+            issues.append(
+                ValidationIssue("warning", "multi_port_proximity", message)
+            )
+
     return issues
 
 

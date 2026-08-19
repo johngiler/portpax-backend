@@ -10,6 +10,7 @@ from apps.catalogs.models import Berth, Port, Position
 from apps.catalogs.serializers import PortDetailSerializer, PortSerializer
 from apps.catalogs.services.port_activity import build_port_activity
 from apps.catalogs.services.port_audit import diff_port_snapshots, snapshot_port
+from apps.catalogs.services.port_proximity import recalculate_port_proximity_for_port
 from apps.catalogs.utils.port_scope import filter_qs_for_user_ports
 
 
@@ -66,6 +67,14 @@ class PortViewSet(viewsets.ModelViewSet):
         after = snapshot_port(port)
         changes = diff_port_snapshots(before, after)
         if changes:
+            # Geo proximity depends on latitude/longitude. If coordinates
+            # changed, recompute the affected port pairs.
+            if "latitude" in changes or "longitude" in changes:
+                try:
+                    recalculate_port_proximity_for_port(port.id)
+                except Exception:
+                    # Keep port update safe; proximity can be recalculated later.
+                    pass
             record_port_audit(
                 action="updated",
                 summary=f"Modificó el puerto {after['code']}",

@@ -15,6 +15,7 @@ from apps.catalogs.serializers.shipping_line import ShippingLineSerializer
 from apps.catalogs.serializers.shipping_line_detail import ShippingLineDetailSerializer
 from apps.catalogs.serializers.shipping_line_group import ShippingLineGroupSerializer
 from apps.catalogs.serializers.vessel import VesselSerializer
+from apps.catalogs.serializers.port_proximity import PortProximitySerializer
 
 __all__ = [
     "BerthImageSerializer",
@@ -32,4 +33,5 @@ __all__ = [
     "ShippingLineGroupSerializer",
     "ShippingLineSerializer",
     "VesselSerializer",
+    "PortProximitySerializer",
 ]

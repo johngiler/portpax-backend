@@ -15,6 +15,7 @@ from apps.catalogs.views import (
     ShippingLineGroupViewSet,
     ShippingLineViewSet,
     VesselViewSet,
+    PortProximityViewSet,
 )
 
 router = DefaultRouter()
@@ -39,6 +40,11 @@ router.register("position-images", PositionImageViewSet, basename="position-imag
 router.register("shipping-line-groups", ShippingLineGroupViewSet, basename="shipping-line-group")
 router.register("shipping-lines", ShippingLineViewSet, basename="shipping-line")
 router.register("vessels", VesselViewSet, basename="vessel")
+router.register(
+    "port-proximities",
+    PortProximityViewSet,
+    basename="port-proximity",
+)
 
 urlpatterns = [
     path("", include(router.urls)),
