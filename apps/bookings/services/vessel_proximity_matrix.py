@@ -14,10 +14,7 @@ from apps.bookings.services.validation.conflict_display import (
     booking_conflict_filter_ctx,
     cell_matches_conflict_filter,
 )
-from apps.bookings.services.validation.conflict_type_filters import (
-    CONFLICT_TYPES,
-    snapshot_has_conflict_type,
-)
+from apps.bookings.services.validation.conflict_type_filters import CONFLICT_TYPES
 from apps.bookings.utils.status_query import apply_booking_status_filters, parse_status_query_params
 from apps.catalogs.models import Port, Vessel
 from apps.catalogs.utils.position_code import position_short_code
@@ -187,9 +184,6 @@ def build_vessel_proximity_matrix(
 
     for booking in bookings:
         if port_id and booking.port_id != port_id:
-            continue
-        snapshot = booking.conflict_snapshot or []
-        if not snapshot_has_conflict_type(snapshot, "proximity"):
             continue
         filter_ctx = booking_conflict_filter_ctx(booking)
         if conflict_filter_active and not cell_matches_conflict_filter(
