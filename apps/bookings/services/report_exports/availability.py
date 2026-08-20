@@ -58,6 +58,49 @@ def _day_ship_count(cells: list[list[dict]]) -> int:
     return len(codes)
 
 
+def _paged_days_payload(
+    *,
+    port: Port,
+    date_from: date,
+    date_to: date,
+    columns: list[dict],
+    bookings_by_day: dict[date, list[list[dict]]],
+    matching_days: list[date],
+    page: int | None,
+    page_size: int,
+    extra: dict | None = None,
+) -> dict:
+    matched_total = len(matching_days)
+    use_page = page if page is not None else 1
+    start = (use_page - 1) * page_size
+    end = start + page_size
+    page_days = matching_days[start:end]
+    cell_count = len(columns)
+    rows = [
+        {
+            "date": day.isoformat(),
+            "cells": bookings_by_day.get(day, [[] for _ in range(cell_count)]),
+        }
+        for day in page_days
+    ]
+    payload = {
+        "port_id": port.id,
+        "port_code": port.code,
+        "port_name": port.name,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "columns": columns,
+        "rows": rows,
+        "matched_days": matched_total,
+        "page": use_page,
+        "page_size": page_size,
+        "has_more": end < matched_total,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
 EXPORT_HEADERS = [
     "Barco",
     "Naviera",
@@ -197,6 +240,7 @@ def build_availability_data(
     conflict_severity: str | None = None,
     conflict_type: str | None = None,
     ships_per_day: int | None = None,
+    occupied_only: bool = False,
     page: int | None = None,
     page_size: int = 30,
     request: Any = None,
@@ -357,69 +401,40 @@ def build_availability_data(
             for day, cells in bookings_by_day.items()
             if date_from <= day <= date_to and _day_ship_count(cells) == ships_per_day
         )
-        matched_total = len(matching_days)
-        use_page = page if page is not None else 1
-        start = (use_page - 1) * page_size
-        end = start + page_size
-        page_days = matching_days[start:end]
-        rows = [
-            {
-                "date": day.isoformat(),
-                "cells": bookings_by_day.get(day, [[] for _ in range(cell_count)]),
-            }
-            for day in page_days
-        ]
-        return {
-            "port_id": port.id,
-            "port_code": port.code,
-            "port_name": port.name,
-            "date_from": date_from.isoformat(),
-            "date_to": date_to.isoformat(),
-            "columns": columns,
-            "rows": rows,
-            "ships_per_day": ships_per_day,
-            "matched_days": matched_total,
-            "page": use_page,
-            "page_size": page_size,
-            "has_more": end < matched_total,
-        }
+        return _paged_days_payload(
+            port=port,
+            date_from=date_from,
+            date_to=date_to,
+            columns=columns,
+            bookings_by_day=bookings_by_day,
+            matching_days=matching_days,
+            page=page,
+            page_size=page_size,
+            extra={"ships_per_day": ships_per_day},
+        )
 
-    # Conflict filter: only days with calls after filtering (paginated).
+    # Conflict / occupancy: only days with calls after filtering (paginated).
     if (
         has_conflict is not None
         or conflict_severity in {"yellow", "red", "green"}
         or conflict_type
+        or occupied_only
     ):
         matching_days = sorted(
             day
             for day, cells in bookings_by_day.items()
             if date_from <= day <= date_to and _day_ship_count(cells) >= 1
         )
-        matched_total = len(matching_days)
-        use_page = page if page is not None else 1
-        start = (use_page - 1) * page_size
-        end = start + page_size
-        page_days = matching_days[start:end]
-        rows = [
-            {
-                "date": day.isoformat(),
-                "cells": bookings_by_day.get(day, [[] for _ in range(cell_count)]),
-            }
-            for day in page_days
-        ]
-        return {
-            "port_id": port.id,
-            "port_code": port.code,
-            "port_name": port.name,
-            "date_from": date_from.isoformat(),
-            "date_to": date_to.isoformat(),
-            "columns": columns,
-            "rows": rows,
-            "matched_days": matched_total,
-            "page": use_page,
-            "page_size": page_size,
-            "has_more": end < matched_total,
-        }
+        return _paged_days_payload(
+            port=port,
+            date_from=date_from,
+            date_to=date_to,
+            columns=columns,
+            bookings_by_day=bookings_by_day,
+            matching_days=matching_days,
+            page=page,
+            page_size=page_size,
+        )
 
     rows = []
     day = date_from

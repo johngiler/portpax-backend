@@ -1057,6 +1057,10 @@ class BookingViewSet(
         ships_per_day = self._optional_int_param("ships_per_day")
         if isinstance(ships_per_day, Response):
             return ships_per_day
+        occupied_only_raw = str(
+            request.query_params.get("occupied_only") or ""
+        ).strip().lower()
+        occupied_only = occupied_only_raw in {"1", "true", "yes", "si", "sí"}
         page = self._optional_int_param("page")
         if isinstance(page, Response):
             return page
@@ -1064,6 +1068,13 @@ class BookingViewSet(
         if isinstance(page_size, Response):
             return page_size
         self._ensure_port_access(port_id)
+        paged = (
+            ships_per_day is not None
+            or has_conflict_filter is not None
+            or conflict_severity_filter is not None
+            or conflict_type_filter is not None
+            or occupied_only
+        )
         try:
             data = build_availability_data(
                 port_id=port_id,
@@ -1078,12 +1089,8 @@ class BookingViewSet(
                 conflict_severity=conflict_severity_filter,
                 conflict_type=conflict_type_filter,
                 ships_per_day=ships_per_day,
-                page=page
-                if ships_per_day is not None
-                or has_conflict_filter is not None
-                or conflict_severity_filter is not None
-                or conflict_type_filter is not None
-                else None,
+                occupied_only=occupied_only,
+                page=page if paged else None,
                 page_size=page_size or 30,
                 request=request,
             )
