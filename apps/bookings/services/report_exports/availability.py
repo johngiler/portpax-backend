@@ -48,16 +48,6 @@ def _related_column_indexes(
     }
 
 
-def _day_ship_count(cells: list[list[dict]]) -> int:
-    codes: set[str] = set()
-    for cell in cells:
-        for call in cell:
-            code = call.get("booking_code")
-            if code:
-                codes.add(str(code))
-    return len(codes)
-
-
 def _paged_days_payload(
     *,
     port: Port,
@@ -225,53 +215,239 @@ def _availability_export_rows(
     return EXPORT_HEADERS, rows
 
 
-def build_availability_data(
+def _conflict_filter_active(
+    *,
+    has_conflict: bool | None,
+    conflict_severity: str | None,
+    conflict_type: str | None,
+) -> bool:
+    return (
+        has_conflict is not None
+        or conflict_severity in {"yellow", "red", "green"}
+        or bool(conflict_type)
+    )
+
+
+def _soft_focus_active(
+    *,
+    shipping_line_id: int | None,
+    vessel_id: int | None,
+    position_id: int | None,
+    status_filters: list[str],
+    has_conflict: bool | None,
+    conflict_severity: str | None,
+    conflict_type: str | None,
+) -> bool:
+    return bool(
+        shipping_line_id
+        or vessel_id
+        or position_id
+        or status_filters
+        or _conflict_filter_active(
+            has_conflict=has_conflict,
+            conflict_severity=conflict_severity,
+            conflict_type=conflict_type,
+        )
+    )
+
+
+def _booking_matches_conflict(
+    booking,
+    *,
+    has_conflict: bool | None,
+    conflict_severity: str | None,
+    conflict_type: str | None,
+) -> bool:
+    return cell_matches_conflict_filter(
+        {
+            "has_conflict": bool(getattr(booking, "has_conflict", False)),
+            "conflict_severity": getattr(booking, "conflict_severity", None),
+            "conflict_snapshot": getattr(booking, "conflict_snapshot", None),
+        },
+        has_conflict=has_conflict,
+        conflict_severity=conflict_severity,
+        conflict_type=conflict_type,
+    )
+
+
+def _focus_match_queryset(
     *,
     port_id: int,
     date_from: date,
     date_to: date,
-    allowed_ports: set[int] | None = None,
-    shipping_line_id: int | None = None,
-    vessel_id: int | None = None,
-    position_id: int | None = None,
-    status: str | None = None,
-    statuses: list[str] | None = None,
-    has_conflict: bool | None = None,
-    conflict_severity: str | None = None,
-    conflict_type: str | None = None,
-    ships_per_day: int | None = None,
-    occupied_only: bool = False,
-    page: int | None = None,
-    page_size: int = 30,
-    request: Any = None,
-) -> dict:
-    """JSON payload for the on-screen Availability Chart (day × position)."""
-    if allowed_ports is not None and port_id not in allowed_ports:
-        raise ValueError("Puerto no permitido.")
-    if ships_per_day is not None and (
-        ships_per_day < SHIPS_PER_DAY_MIN or ships_per_day > SHIPS_PER_DAY_MAX
-    ):
-        raise ValueError(
-            f"ships_per_day debe estar entre {SHIPS_PER_DAY_MIN} y {SHIPS_PER_DAY_MAX}."
+    allowed_ports: set[int] | None,
+    shipping_line_id: int | None,
+    vessel_id: int | None,
+    position_id: int | None,
+    status_filters: list[str],
+):
+    """Bookings that satisfy soft-focus filters (day discovery only)."""
+    from apps.bookings.models import Booking
+    from apps.bookings.utils.status_query import apply_booking_status_filters
+
+    if "c" in status_filters:
+        qs = Booking.objects.filter(
+            call_date__gte=date_from,
+            call_date__lte=date_to,
+            port_id=port_id,
+        ).select_related("port", "shipping_line", "vessel", "position")
+        if allowed_ports is not None:
+            qs = qs.filter(port_id__in=allowed_ports)
+    else:
+        qs = scheduled_bookings_qs(
+            date_from=date_from,
+            date_to=date_to,
+            port_id=port_id,
+            allowed_ports=allowed_ports,
+            status=None,
         )
-    if page is not None and page < 1:
-        raise ValueError("page debe ser >= 1.")
-    if page_size < 1 or page_size > 100:
-        raise ValueError("page_size debe estar entre 1 y 100.")
-
-    port = Port.objects.get(pk=port_id)
-    from apps.catalogs.services.position_combination import exclude_combined_positions
-
-    positions_qs = exclude_combined_positions(
-        Position.objects.filter(port_id=port_id, is_active=True)
-    )
+    if vessel_id:
+        qs = qs.filter(vessel_id=vessel_id)
+    elif shipping_line_id:
+        # Vessel focus supersedes line (same as FE soft-focus match).
+        qs = qs.filter(shipping_line_id=shipping_line_id)
     if position_id:
-        positions_qs = positions_qs.filter(pk=position_id)
-    positions = list(
-        positions_qs.select_related("berth").order_by("sort_order", "code")
+        qs = qs.filter(position_id=position_id)
+    if status_filters:
+        qs = apply_booking_status_filters(qs, status_filters)
+    return qs
+
+
+def _soft_focus_matching_days(
+    *,
+    port_id: int,
+    date_from: date,
+    date_to: date,
+    allowed_ports: set[int] | None,
+    shipping_line_id: int | None,
+    vessel_id: int | None,
+    position_id: int | None,
+    status_filters: list[str],
+    has_conflict: bool | None,
+    conflict_severity: str | None,
+    conflict_type: str | None,
+) -> list[date]:
+    qs = _focus_match_queryset(
+        port_id=port_id,
+        date_from=date_from,
+        date_to=date_to,
+        allowed_ports=allowed_ports,
+        shipping_line_id=shipping_line_id,
+        vessel_id=vessel_id,
+        position_id=position_id,
+        status_filters=status_filters,
     )
-    position_index = {position.id: index for index, position in enumerate(positions)}
-    columns = [
+    if not _conflict_filter_active(
+        has_conflict=has_conflict,
+        conflict_severity=conflict_severity,
+        conflict_type=conflict_type,
+    ):
+        return list(
+            qs.values_list("call_date", flat=True).distinct().order_by("call_date")
+        )
+    days: set[date] = set()
+    for booking in qs.only(
+        "call_date",
+        "has_conflict",
+        "conflict_severity",
+        "conflict_snapshot",
+    ).iterator(chunk_size=500):
+        if _booking_matches_conflict(
+            booking,
+            has_conflict=has_conflict,
+            conflict_severity=conflict_severity,
+            conflict_type=conflict_type,
+        ):
+            days.add(booking.call_date)
+    return sorted(days)
+
+
+def _occupied_matching_days(
+    *,
+    port_id: int,
+    date_from: date,
+    date_to: date,
+    allowed_ports: set[int] | None,
+) -> list[date]:
+    return list(
+        scheduled_bookings_qs(
+            date_from=date_from,
+            date_to=date_to,
+            port_id=port_id,
+            allowed_ports=allowed_ports,
+            status=None,
+        )
+        .values_list("call_date", flat=True)
+        .distinct()
+        .order_by("call_date")
+    )
+
+
+def _density_matching_days(
+    *,
+    port_id: int,
+    date_from: date,
+    date_to: date,
+    allowed_ports: set[int] | None,
+    ships_per_day: int,
+) -> list[date]:
+    from django.db.models import Count
+
+    rows = (
+        scheduled_bookings_qs(
+            date_from=date_from,
+            date_to=date_to,
+            port_id=port_id,
+            allowed_ports=allowed_ports,
+            status=None,
+        )
+        .values("call_date")
+        .annotate(ship_count=Count("id"))
+        .filter(ship_count=ships_per_day)
+        .order_by("call_date")
+    )
+    return [row["call_date"] for row in rows]
+
+
+def _neighbor_bookings_for_days(
+    *,
+    port_id: int,
+    page_days: list[date],
+    allowed_ports: set[int] | None,
+    include_cancelled: bool,
+):
+    """All occupancy (and optional cancelled) calls on the given days — neighbors."""
+    if not page_days:
+        return []
+    day_min = min(page_days)
+    day_max = max(page_days)
+    bookings = list(
+        scheduled_bookings_qs(
+            date_from=day_min,
+            date_to=day_max,
+            port_id=port_id,
+            allowed_ports=allowed_ports,
+            status=None,
+        ).filter(call_date__in=page_days)
+    )
+    if not include_cancelled:
+        return bookings
+    seen = {booking.id for booking in bookings}
+    for booking in scheduled_bookings_qs(
+        date_from=day_min,
+        date_to=day_max,
+        port_id=port_id,
+        allowed_ports=allowed_ports,
+        status="c",
+    ).filter(call_date__in=page_days):
+        if booking.id not in seen:
+            bookings.append(booking)
+            seen.add(booking.id)
+    return bookings
+
+
+def _availability_columns(port: Port, positions: list[Position]) -> list[dict]:
+    return [
         {
             "id": position.id,
             "code": position.code,
@@ -288,48 +464,23 @@ def build_availability_data(
         for position in positions
     ]
 
-    status_filters = list(statuses or [])
-    if status and status not in status_filters:
-        status_filters.append(status)
-    qs_kwargs = dict(
-        date_from=date_from,
-        date_to=date_to,
-        port_id=port_id,
-        allowed_ports=allowed_ports,
-        shipping_line_id=shipping_line_id,
-        vessel_id=vessel_id,
-        position_id=position_id,
+
+def _place_bookings_by_day(
+    *,
+    bookings,
+    positions: list[Position],
+    columns: list[dict],
+    request: Any,
+) -> tuple[dict[date, list[list[dict]]], list[dict]]:
+    """Fill day → cells grid; may append TBD column when unassigned calls exist."""
+    position_index = {position.id: index for index, position in enumerate(positions)}
+    has_unassigned = any(
+        booking.position_id not in position_index for booking in bookings
     )
-    # Always load the occupancy set so neighbors stay visible with any status filter.
-    bookings = list(scheduled_bookings_qs(**qs_kwargs, status=None))
-    if "c" in status_filters:
-        seen = {b.id for b in bookings}
-        for booking in scheduled_bookings_qs(**qs_kwargs, status="c"):
-            if booking.id not in seen:
-                bookings.append(booking)
-    if (
-        has_conflict is not None
-        or conflict_severity in {"yellow", "red", "green"}
-        or conflict_type
-    ):
-        bookings = [
-            b
-            for b in bookings
-            if cell_matches_conflict_filter(
-                {
-                    "has_conflict": bool(getattr(b, "has_conflict", False)),
-                    "conflict_severity": getattr(b, "conflict_severity", None),
-                    "conflict_snapshot": getattr(b, "conflict_snapshot", None),
-                },
-                has_conflict=has_conflict,
-                conflict_severity=conflict_severity,
-                conflict_type=conflict_type,
-            )
-        ]
-    has_unassigned = any(booking.position_id not in position_index for booking in bookings)
+    working_columns = list(columns)
     unassigned_index = len(positions) if has_unassigned else None
     if has_unassigned:
-        columns.append(
+        working_columns.append(
             {
                 "id": 0,
                 "code": "TBD",
@@ -338,10 +489,9 @@ def build_availability_data(
                 "max_loa_m": None,
             }
         )
-
-    bookings_by_day: dict[date, list[list[dict]]] = {}
-    cell_count = len(columns)
+    cell_count = len(working_columns)
     related_indexes = _related_column_indexes(positions, position_index)
+    bookings_by_day: dict[date, list[list[dict]]] = {}
     for booking in bookings:
         if booking.position_id in position_index:
             cell_indexes = related_indexes.get(
@@ -356,7 +506,9 @@ def build_availability_data(
             booking.call_date,
             [[] for _ in range(cell_count)],
         )
-        logo_name = booking.shipping_line.logo.name if booking.shipping_line.logo else None
+        logo_name = (
+            booking.shipping_line.logo.name if booking.shipping_line.logo else None
+        )
         logo = default_storage.url(logo_name) if logo_name else None
         if logo and request is not None:
             logo = request.build_absolute_uri(logo)
@@ -396,37 +548,136 @@ def build_availability_data(
             if any(item.get("booking_code") == call["booking_code"] for item in existing):
                 continue
             existing.append(call)
+    return bookings_by_day, working_columns
 
-    if ships_per_day is not None:
-        matching_days = sorted(
-            day
-            for day, cells in bookings_by_day.items()
-            if date_from <= day <= date_to and _day_ship_count(cells) == ships_per_day
-        )
-        return _paged_days_payload(
-            port=port,
-            date_from=date_from,
-            date_to=date_to,
-            columns=columns,
-            bookings_by_day=bookings_by_day,
-            matching_days=matching_days,
-            page=page,
-            page_size=page_size,
-            extra={"ships_per_day": ships_per_day},
-        )
 
-    # Conflict / occupancy: only days with calls after filtering (paginated).
-    if (
-        has_conflict is not None
-        or conflict_severity in {"yellow", "red", "green"}
-        or conflict_type
-        or occupied_only
+def build_availability_data(
+    *,
+    port_id: int,
+    date_from: date,
+    date_to: date,
+    allowed_ports: set[int] | None = None,
+    shipping_line_id: int | None = None,
+    vessel_id: int | None = None,
+    position_id: int | None = None,
+    status: str | None = None,
+    statuses: list[str] | None = None,
+    has_conflict: bool | None = None,
+    conflict_severity: str | None = None,
+    conflict_type: str | None = None,
+    ships_per_day: int | None = None,
+    occupied_only: bool = False,
+    page: int | None = None,
+    page_size: int = 30,
+    request: Any = None,
+) -> dict:
+    """JSON payload for the on-screen Availability Chart (day × position).
+
+    Soft-focus filters (vessel/line/position/status/conflict): select matching
+    days in the DB, page those days, then load *all* calls on the page days so
+    neighbors stay visible. Opacity is a FE concern.
+    """
+    if allowed_ports is not None and port_id not in allowed_ports:
+        raise ValueError("Puerto no permitido.")
+    if ships_per_day is not None and (
+        ships_per_day < SHIPS_PER_DAY_MIN or ships_per_day > SHIPS_PER_DAY_MAX
     ):
-        matching_days = sorted(
-            day
-            for day, cells in bookings_by_day.items()
-            if date_from <= day <= date_to and _day_ship_count(cells) >= 1
+        raise ValueError(
+            f"ships_per_day debe estar entre {SHIPS_PER_DAY_MIN} y {SHIPS_PER_DAY_MAX}."
         )
+    if page is not None and page < 1:
+        raise ValueError("page debe ser >= 1.")
+    if page_size < 1 or page_size > 100:
+        raise ValueError("page_size debe estar entre 1 y 100.")
+
+    port = Port.objects.get(pk=port_id)
+    from apps.catalogs.services.position_combination import exclude_combined_positions
+
+    status_filters = list(statuses or [])
+    if status and status not in status_filters:
+        status_filters.append(status)
+    soft_focus = _soft_focus_active(
+        shipping_line_id=shipping_line_id,
+        vessel_id=vessel_id,
+        position_id=position_id,
+        status_filters=status_filters,
+        has_conflict=has_conflict,
+        conflict_severity=conflict_severity,
+        conflict_type=conflict_type,
+    )
+    paged_mode = soft_focus or occupied_only or ships_per_day is not None
+
+    positions_qs = exclude_combined_positions(
+        Position.objects.filter(port_id=port_id, is_active=True)
+    )
+    # Soft focus keeps all berth columns so same-day neighbors stay visible.
+    if position_id and not soft_focus:
+        positions_qs = positions_qs.filter(pk=position_id)
+    positions = list(
+        positions_qs.select_related("berth").order_by("sort_order", "code")
+    )
+    columns = _availability_columns(port, positions)
+
+    if paged_mode:
+        matching_days: list[date]
+        if soft_focus:
+            matching_days = _soft_focus_matching_days(
+                port_id=port_id,
+                date_from=date_from,
+                date_to=date_to,
+                allowed_ports=allowed_ports,
+                shipping_line_id=shipping_line_id,
+                vessel_id=vessel_id,
+                position_id=position_id,
+                status_filters=status_filters,
+                has_conflict=has_conflict,
+                conflict_severity=conflict_severity,
+                conflict_type=conflict_type,
+            )
+            if ships_per_day is not None:
+                density_days = set(
+                    _density_matching_days(
+                        port_id=port_id,
+                        date_from=date_from,
+                        date_to=date_to,
+                        allowed_ports=allowed_ports,
+                        ships_per_day=ships_per_day,
+                    )
+                )
+                matching_days = [day for day in matching_days if day in density_days]
+        elif ships_per_day is not None:
+            matching_days = _density_matching_days(
+                port_id=port_id,
+                date_from=date_from,
+                date_to=date_to,
+                allowed_ports=allowed_ports,
+                ships_per_day=ships_per_day,
+            )
+        else:
+            matching_days = _occupied_matching_days(
+                port_id=port_id,
+                date_from=date_from,
+                date_to=date_to,
+                allowed_ports=allowed_ports,
+            )
+
+        use_page = page if page is not None else 1
+        start = (use_page - 1) * page_size
+        end = start + page_size
+        page_days = matching_days[start:end]
+        bookings = _neighbor_bookings_for_days(
+            port_id=port_id,
+            page_days=page_days,
+            allowed_ports=allowed_ports,
+            include_cancelled="c" in status_filters,
+        )
+        bookings_by_day, columns = _place_bookings_by_day(
+            bookings=bookings,
+            positions=positions,
+            columns=columns,
+            request=request,
+        )
+        extra = {"ships_per_day": ships_per_day} if ships_per_day is not None else None
         return _paged_days_payload(
             port=port,
             date_from=date_from,
@@ -436,8 +687,26 @@ def build_availability_data(
             matching_days=matching_days,
             page=page,
             page_size=page_size,
+            extra=extra,
         )
 
+    # Consecutive calendar strip (no sidebar soft-focus / occupancy paging).
+    bookings = list(
+        scheduled_bookings_qs(
+            date_from=date_from,
+            date_to=date_to,
+            port_id=port_id,
+            allowed_ports=allowed_ports,
+            status=None,
+        )
+    )
+    bookings_by_day, columns = _place_bookings_by_day(
+        bookings=bookings,
+        positions=positions,
+        columns=columns,
+        request=request,
+    )
+    cell_count = len(columns)
     rows = []
     day = date_from
     while day <= date_to:
