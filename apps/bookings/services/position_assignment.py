@@ -85,12 +85,14 @@ def auto_assign_position(
             position,
             call_date,
             exclude_booking_id=exclude_booking_id,
+            port=port,
         )
         red_recalc = sum(
             1
             for i in recalc_issues
-            if i.code in {"loa_recalc_exceeds", "loa_recalc_sum_red"}
+            if i.code == "loa_recalc_sum_red"
             or i.severity == "red"
+            or (i.detail or {}).get("overhang_m")
         )
 
         rank = (

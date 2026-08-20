@@ -128,10 +128,17 @@ def validate_physical_fit(
     position: Position | None,
     port: Port,
 ) -> list[ValidationIssue]:
+    from apps.bookings.services.validation.legend_labels import (
+        position_legend_label,
+        vessel_legend_label,
+    )
+
     issues: list[ValidationIssue] = []
     if not position:
         return issues
 
+    pos_label = position_legend_label(position, port=port)
+    ship = vessel_legend_label(vessel)
     loa = _decimal(vessel.loa_m)
     from apps.catalogs.services.position_combination import position_is_combined
 
@@ -141,7 +148,7 @@ def validate_physical_fit(
             ValidationIssue(
                 "error",
                 "combined_position_retired",
-                f"{position.code} ya no es una posición reservable. "
+                f"{pos_label} ya no es una posición reservable. "
                 "Usa las posiciones físicas del muelle (p. ej. E1 o E2).",
             )
         )
@@ -158,8 +165,8 @@ def validate_physical_fit(
                 ValidationIssue(
                     "error",
                     "loa_exceeds_position",
-                    f"LOA del barco ({loa} m) excede la eslora máxima del muelle "
-                    f"({pier_max} m) para {position.code}.",
+                    f"LOA de {ship} ({loa} m) excede la eslora máxima del muelle "
+                    f"({pier_max} m) para {pos_label}.",
                 )
             )
         elif slot_max is not None and loa > slot_max:
@@ -167,9 +174,9 @@ def validate_physical_fit(
                 ValidationIssue(
                     "warning",
                     "loa_shared_pier",
-                    f"LOA ({loa} m) supera el máximo de {position.code} ({slot_max} m); "
-                    f"se recalcula la eslora restante de la posición vecina "
-                    f"(máx. muelle {pier_max} m).",
+                    f"LOA de {ship} ({loa} m) supera el máximo de {pos_label} "
+                    f"({slot_max} m); se recalcula la eslora restante de la "
+                    f"posición vecina (máx. muelle {pier_max} m).",
                 )
             )
     elif loa is not None and slot_max is not None:
@@ -180,7 +187,7 @@ def validate_physical_fit(
                     ValidationIssue(
                         "error",
                         "loa_exceeds_position",
-                        f"LOA del barco ({loa} m) excede la posición {position.code} "
+                        f"LOA de {ship} ({loa} m) excede la posición {pos_label} "
                         f"({slot_max} m) por más de {MAX_OVERHANG_M} m de overhang.",
                     )
                 )
@@ -189,8 +196,9 @@ def validate_physical_fit(
                     ValidationIssue(
                         "warning",
                         "loa_overhang",
-                        f"LOA ({loa} m) supera el máximo de {position.code} ({slot_max} m) "
-                        f"con overhang de {over} m (límite {MAX_OVERHANG_M} m).",
+                        f"LOA de {ship} ({loa} m) supera el máximo de {pos_label} "
+                        f"({slot_max} m) con overhang de {over} m "
+                        f"(límite {MAX_OVERHANG_M} m).",
                     )
                 )
 
@@ -201,7 +209,7 @@ def validate_physical_fit(
             ValidationIssue(
                 "error",
                 "beam_exceeds_position",
-                f"Manga del barco ({beam} m) excede el máximo de {position.code} "
+                f"Manga de {ship} ({beam} m) excede el máximo de {pos_label} "
                 f"({max_beam} m).",
             )
         )
@@ -214,8 +222,8 @@ def validate_physical_fit(
             ValidationIssue(
                 "error",
                 "draft_too_deep",
-                f"Calado del barco ({draft} m) supera la profundidad disponible "
-                f"({position_depth} m) en {position.code}.",
+                f"Calado de {ship} ({draft} m) supera la profundidad disponible "
+                f"({position_depth} m) en {pos_label}.",
             )
         )
 
@@ -412,9 +420,13 @@ def validate_position_availability(
         qs = qs.exclude(pk=exclude_booking_id)
 
     issues: list[ValidationIssue] = []
-    for conflict in qs.select_related("vessel", "position"):
+    from apps.bookings.services.validation.legend_labels import position_legend_label
+
+    for conflict in qs.select_related("vessel", "position", "position__port"):
         if times_overlap(eta, etd, conflict.eta, conflict.etd):
-            other_code = conflict.position.code if conflict.position_id else "?"
+            other_code = position_legend_label(
+                conflict.position if conflict.position_id else None,
+            )
             if conflict.status == BookingStatus.CL:
                 issues.append(
                     ValidationIssue(
@@ -470,12 +482,15 @@ def validate_min_eta(
     if not position or not position.min_eta or eta is None:
         return []
     if eta < position.min_eta:
+        from apps.bookings.services.validation.legend_labels import position_legend_label
+
         return [
             ValidationIssue(
                 "warning",
                 "eta_before_min",
                 f"ETA ({eta.strftime('%H:%M')}) es anterior al mínimo de "
-                f"{position.code} ({position.min_eta.strftime('%H:%M')}).",
+                f"{position_legend_label(position)} "
+                f"({position.min_eta.strftime('%H:%M')}).",
             )
         ]
     return []
@@ -490,6 +505,11 @@ def validate_combined_loa(
     if not position:
         return []
 
+    from apps.bookings.services.validation.legend_labels import (
+        position_legend_label,
+        vessel_legend_label,
+    )
+
     constraints = PositionPairConstraint.objects.filter(
         port_id=position.port_id,
     ).filter(Q(position_a_id=position.id) | Q(position_b_id=position.id)).select_related(
@@ -501,6 +521,9 @@ def validate_combined_loa(
     our_loa = _decimal(vessel.loa_m)
     if our_loa is None:
         return issues
+
+    our_ship = vessel_legend_label(vessel)
+    our_pos = position_legend_label(position)
 
     for constraint in constraints:
         other_id = (
@@ -515,7 +538,7 @@ def validate_combined_loa(
         )
         if exclude_booking_id:
             other_qs = other_qs.exclude(pk=exclude_booking_id)
-        other = other_qs.select_related("vessel", "position").first()
+        other = other_qs.select_related("vessel", "position", "position__port").first()
         if not other:
             continue
 
@@ -529,7 +552,14 @@ def validate_combined_loa(
         if max_combined is None or hard_cap is None:
             continue
 
-        other_code = other.position.code if other.position_id else "?"
+        other_ship = vessel_legend_label(
+            other.vessel if other.vessel_id else None,
+            fallback="la otra escala",
+        )
+        other_pos = position_legend_label(
+            other.position if other.position_id else None,
+        )
+        pair = f"{our_ship} ({our_pos}) + {other_ship} ({other_pos})"
         if combined <= max_combined:
             continue
         if combined < hard_cap:
@@ -537,7 +567,7 @@ def validate_combined_loa(
                 ValidationIssue(
                     "warning",
                     "combined_loa_orange",
-                    f"LOA combinada ({combined} m) con {other_code} supera "
+                    f"LOA combinada ({combined} m) de {pair} supera "
                     f"{max_combined} m pero está bajo el tope duro ({hard_cap} m).",
                 )
             )
@@ -546,7 +576,7 @@ def validate_combined_loa(
                 ValidationIssue(
                     "error",
                     "combined_loa_red",
-                    f"LOA combinada ({combined} m) con {other_code} alcanza o supera "
+                    f"LOA combinada ({combined} m) de {pair} alcanza o supera "
                     f"el tope duro ({hard_cap} m). Requiere autorización de port-operator.",
                 )
             )
@@ -855,6 +885,7 @@ def validate_booking(
                 eta=eta,
                 etd=etd,
                 exclude_booking_id=exclude_booking_id,
+                port=port,
             )
         )
 

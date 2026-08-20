@@ -65,7 +65,7 @@ def sibling_occupant_for_recalc(
             position_id=sibling_id,
             call_date=call_date,
             status__in=OCCUPATION_CONFLICT_STATUSES,
-        ).select_related("vessel", "position")
+        ).select_related("vessel", "position", "position__port", "port")
         if exclude_booking_id:
             qs = qs.exclude(pk=exclude_booking_id)
         occupant = qs.order_by("id").first()
@@ -117,12 +117,18 @@ def validate_loa_recalc(
     eta=None,
     etd=None,
     exclude_booking_id: int | None = None,
+    port=None,
 ) -> list[ValidationIssue]:
     """
-    Warnings only:
-    - remaining sibling space exceeded (overhang on shared pier max)
-    - traffic light on both LOAs + separation (green / yellow / red)
+    Single traffic-light aviso (green / yellow / red) with both vessels,
+    positions, booking links, sum formula, and overhang when applicable.
     """
+    from apps.bookings.services.validation.legend_labels import (
+        port_legend_label,
+        position_legend_label,
+        vessel_legend_label,
+    )
+
     if not position:
         return []
     found = sibling_occupant_for_recalc(
@@ -141,93 +147,149 @@ def validate_loa_recalc(
     if our_loa is None or other_loa is None:
         return []
 
-    issues: list[ValidationIssue] = []
-    other = occupant.position.code if occupant.position_id else "?"
+    port = (
+        port
+        or getattr(position, "port", None)
+        or getattr(occupant, "port", None)
+    )
+    our_pos = position_legend_label(position, port=port)
+    other_pos = position_legend_label(
+        occupant.position if occupant.position_id else None,
+        port=port,
+    )
+    our_ship = vessel_legend_label(vessel, fallback="Esta reserva")
+    other_ship = vessel_legend_label(
+        occupant.vessel if occupant.vessel_id else None,
+        fallback="La otra escala",
+    )
+    port_label = port_legend_label(port)
+    port_prefix = f"{port_label} · " if port_label else ""
+
+    our_code = ""
+    if exclude_booking_id:
+        our_code = (
+            Booking.objects.filter(pk=exclude_booking_id)
+            .values_list("booking_code", flat=True)
+            .first()
+            or ""
+        )
+
     sep = _decimal(rule.separation_m) or Decimal("0")
-    # Same gap as remaining_shared_loa — total pier occupancy for the semaphore.
     combined = our_loa + other_loa + sep
-    detail = {
+    overhang = our_loa - remaining if our_loa > remaining else None
+
+    # Stable E1 / E2 order in the legend.
+    vessel_lines = sorted(
+        [
+            {
+                "name": other_ship,
+                "position": other_pos,
+                "loa_m": str(other_loa),
+                "booking_code": occupant.booking_code or "",
+                "role": "sibling",
+            },
+            {
+                "name": our_ship,
+                "position": our_pos,
+                "loa_m": str(our_loa),
+                "booking_code": our_code,
+                "role": "self",
+            },
+        ],
+        key=lambda row: str(row["position"]),
+    )
+    line_bits = []
+    for row in vessel_lines:
+        bit = f"{row['name']} en {row['position']} ({row['loa_m']} m)"
+        if row["booking_code"]:
+            bit = f"{bit} · {row['booking_code']}"
+        elif row["role"] == "self":
+            bit = f"{bit} · esta reserva"
+        line_bits.append(bit)
+
+    sum_formula = (
+        f"{our_ship} {our_loa} + {other_ship} {other_loa} + sep. {sep} "
+        f"= {combined} m"
+    )
+    remaining_formula = (
+        f"{rule.max_loa_m} − {other_ship} {other_loa} − sep. {sep} "
+        f"= {remaining} m disponibles en {our_pos}"
+    )
+
+    yellow = _decimal(rule.yellow_from_m)
+    red = _decimal(rule.red_from_m)
+    if red is not None and combined >= red:
+        code = "loa_recalc_sum_red"
+        severity = "red"
+        band = (
+            f"Semáforo rojo: ocupación de muelle {combined} m "
+            f"≥ {rule.red_from_m} m"
+        )
+    elif yellow is not None and combined >= yellow:
+        code = "loa_recalc_sum_yellow"
+        severity = "yellow"
+        band = (
+            f"Semáforo amarillo: ocupación de muelle {combined} m "
+            f"entre {rule.yellow_from_m} y {rule.red_from_m} m"
+        )
+    elif overhang is not None:
+        # Over pier max but under yellow band — still one yellow aviso with why.
+        code = "loa_recalc_sum_yellow"
+        severity = "yellow"
+        band = (
+            f"Semáforo amarillo: ocupación de muelle {combined} m "
+            f"supera el máx. {rule.max_loa_m} m"
+        )
+    else:
+        code = "loa_recalc_sum_green"
+        severity = "green"
+        band = (
+            f"Semáforo verde: ocupación de muelle {combined} m "
+            f"por debajo de {rule.yellow_from_m} m"
+        )
+
+    overhang_bit = ""
+    if overhang is not None:
+        overhang_bit = (
+            f" Hueco en {our_pos}: {remaining} m → overhang {overhang} m "
+            f"(máx. muelle {rule.max_loa_m} m)."
+        )
+
+    message = (
+        f"{port_prefix}{band}. "
+        f"{'; '.join(line_bits)}. "
+        f"{sum_formula}.{overhang_bit}"
+    )
+
+    detail: dict = {
         "pier_max_m": str(rule.max_loa_m),
         "ship_loa_m": str(our_loa),
         "sibling_loa_m": str(other_loa),
         "separation_m": str(sep),
         "remaining_m": str(remaining),
         "sum_m": str(combined),
-        "sibling_position": other,
+        "sibling_position": other_pos,
+        "our_position": our_pos,
+        "ship_name": our_ship,
+        "sibling_vessel_name": other_ship,
         "sibling_booking_code": occupant.booking_code,
-        "formula": (
-            f"{rule.max_loa_m} − {other_loa} − {sep} = {remaining} m restantes "
-            f"en {position.code}"
-        ),
-        "sum_formula": (
-            f"{our_loa} + {other_loa} + {sep} = {combined} m "
-            f"(esloras + separación)"
-        ),
+        "our_booking_code": our_code,
+        "port_label": port_label,
+        "vessel_lines": vessel_lines,
+        "sum_formula": sum_formula,
+        "formula": remaining_formula,
+        "remaining_formula": remaining_formula,
     }
+    if overhang is not None:
+        detail["overhang_m"] = str(overhang)
 
-    if our_loa > remaining:
-        over = our_loa - remaining
-        issues.append(
-            ValidationIssue(
-                "warning",
-                "loa_recalc_exceeds",
-                (
-                    f"Recálculo de eslora: máx. muelle {rule.max_loa_m} m − "
-                    f"barco en {other} ({other_loa} m) − separación {sep} m "
-                    f"= {remaining} m disponibles en {position.code}. "
-                    f"Este barco mide {our_loa} m → overhang {over} m."
-                ),
-                severity="red",
-                detail={**detail, "overhang_m": str(over)},
-            )
+    level = "info" if code == "loa_recalc_sum_green" else "warning"
+    return [
+        ValidationIssue(
+            level,
+            code,
+            message.strip(),
+            severity=severity,
+            detail=detail,
         )
-
-    yellow = _decimal(rule.yellow_from_m)
-    red = _decimal(rule.red_from_m)
-    sum_parts = f"{our_loa} + {other_loa} + sep. {sep}"
-    if red is not None and combined >= red:
-        issues.append(
-            ValidationIssue(
-                "warning",
-                "loa_recalc_sum_red",
-                (
-                    f"Semáforo rojo: ocupación de muelle {combined} m "
-                    f"({sum_parts} en {other}) ≥ {rule.red_from_m} m. "
-                    f"{detail['sum_formula']}."
-                ),
-                severity="red",
-                detail=detail,
-            )
-        )
-    elif yellow is not None and combined >= yellow:
-        issues.append(
-            ValidationIssue(
-                "warning",
-                "loa_recalc_sum_yellow",
-                (
-                    f"Semáforo amarillo: ocupación de muelle {combined} m "
-                    f"({sum_parts} en {other}) entre "
-                    f"{rule.yellow_from_m} y {rule.red_from_m} m. "
-                    f"{detail['sum_formula']}."
-                ),
-                severity="yellow",
-                detail=detail,
-            )
-        )
-    else:
-        issues.append(
-            ValidationIssue(
-                "info",
-                "loa_recalc_sum_green",
-                (
-                    f"Semáforo verde: ocupación de muelle {combined} m "
-                    f"({sum_parts} en {other}) "
-                    f"por debajo de {rule.yellow_from_m} m. "
-                    f"{detail['sum_formula']}."
-                ),
-                severity="green",
-                detail=detail,
-            )
-        )
-
-    return issues
+    ]
