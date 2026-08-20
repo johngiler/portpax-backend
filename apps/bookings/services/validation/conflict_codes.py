@@ -1,8 +1,9 @@
 """Operational conflict severity (non-blocking).
 
 Paint rules:
-- yellow — default non-blocking aviso (ops can still save)
-- red — very heavy berthing / physical / FILO / semaphore red
+- yellow — default non-blocking aviso (ops can still save); LOA overhang /
+  yellow semaphore (under red_from)
+- red — very heavy berthing / physical / FILO / LOA semaphore red (>= red_from)
 - green — traffic-light OK (LOA recalc sum under yellow)
 """
 
@@ -16,7 +17,7 @@ CONFLICT_SEVERITY_BY_CODE: dict[str, str] = {
     "beam_exceeds_position": "red",
     "draft_too_deep": "red",
     "combined_position_retired": "red",
-    "loa_recalc_exceeds": "red",
+    "loa_recalc_exceeds": "yellow",
     "loa_recalc_sum_red": "red",
     "combined_loa_red": "red",
     "filo_eta_violation": "red",

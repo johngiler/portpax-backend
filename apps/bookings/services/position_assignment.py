@@ -90,9 +90,7 @@ def auto_assign_position(
         red_recalc = sum(
             1
             for i in recalc_issues
-            if i.code == "loa_recalc_sum_red"
-            or i.severity == "red"
-            or (i.detail or {}).get("overhang_m")
+            if i.code == "loa_recalc_sum_red" or i.severity == "red"
         )
 
         rank = (

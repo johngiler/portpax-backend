@@ -131,12 +131,16 @@ def frame_severity(
     conflict_severity: str | None,
     snapshot: list | None,
 ) -> str | None:
+    """Prefer severity from snapshot codes (map wins over stale DB field)."""
     if not has_conflict:
         return None
+    from_snap = max_snapshot_severity(snapshot)
+    if from_snap in {"red", "yellow", "green"}:
+        return from_snap
     direct = conflict_severity
     if direct in {"red", "yellow", "green"}:
         return direct
-    return max_snapshot_severity(snapshot) or "yellow"
+    return "yellow"
 
 
 def conflict_chips_from_snapshot(snapshot: list | None) -> list[dict]:
