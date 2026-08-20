@@ -121,7 +121,7 @@ def validate_loa_recalc(
     """
     Warnings only:
     - remaining sibling space exceeded (overhang on shared pier max)
-    - traffic light on sum of both LOAs (green / yellow / red)
+    - traffic light on both LOAs + separation (green / yellow / red)
     """
     if not position:
         return []
@@ -144,18 +144,24 @@ def validate_loa_recalc(
     issues: list[ValidationIssue] = []
     other = occupant.position.code if occupant.position_id else "?"
     sep = _decimal(rule.separation_m) or Decimal("0")
+    # Same gap as remaining_shared_loa — total pier occupancy for the semaphore.
+    combined = our_loa + other_loa + sep
     detail = {
         "pier_max_m": str(rule.max_loa_m),
         "ship_loa_m": str(our_loa),
         "sibling_loa_m": str(other_loa),
         "separation_m": str(sep),
         "remaining_m": str(remaining),
-        "sum_m": str(our_loa + other_loa),
+        "sum_m": str(combined),
         "sibling_position": other,
         "sibling_booking_code": occupant.booking_code,
         "formula": (
             f"{rule.max_loa_m} − {other_loa} − {sep} = {remaining} m restantes "
             f"en {position.code}"
+        ),
+        "sum_formula": (
+            f"{our_loa} + {other_loa} + {sep} = {combined} m "
+            f"(esloras + separación)"
         ),
     }
 
@@ -176,18 +182,18 @@ def validate_loa_recalc(
             )
         )
 
-    combined = our_loa + other_loa
     yellow = _decimal(rule.yellow_from_m)
     red = _decimal(rule.red_from_m)
+    sum_parts = f"{our_loa} + {other_loa} + sep. {sep}"
     if red is not None and combined >= red:
         issues.append(
             ValidationIssue(
                 "warning",
                 "loa_recalc_sum_red",
                 (
-                    f"Semáforo rojo: suma de esloras {combined} m "
-                    f"({our_loa} + {other_loa} en {other}) ≥ {rule.red_from_m} m. "
-                    f"{detail['formula']}."
+                    f"Semáforo rojo: ocupación de muelle {combined} m "
+                    f"({sum_parts} en {other}) ≥ {rule.red_from_m} m. "
+                    f"{detail['sum_formula']}."
                 ),
                 severity="red",
                 detail=detail,
@@ -199,10 +205,10 @@ def validate_loa_recalc(
                 "warning",
                 "loa_recalc_sum_yellow",
                 (
-                    f"Semáforo amarillo: suma de esloras {combined} m "
-                    f"({our_loa} + {other_loa} en {other}) entre "
+                    f"Semáforo amarillo: ocupación de muelle {combined} m "
+                    f"({sum_parts} en {other}) entre "
                     f"{rule.yellow_from_m} y {rule.red_from_m} m. "
-                    f"{detail['formula']}."
+                    f"{detail['sum_formula']}."
                 ),
                 severity="yellow",
                 detail=detail,
@@ -214,10 +220,10 @@ def validate_loa_recalc(
                 "info",
                 "loa_recalc_sum_green",
                 (
-                    f"Semáforo verde: suma de esloras {combined} m "
-                    f"({our_loa} + {other_loa} en {other}) "
+                    f"Semáforo verde: ocupación de muelle {combined} m "
+                    f"({sum_parts} en {other}) "
                     f"por debajo de {rule.yellow_from_m} m. "
-                    f"{detail['formula']}."
+                    f"{detail['sum_formula']}."
                 ),
                 severity="green",
                 detail=detail,

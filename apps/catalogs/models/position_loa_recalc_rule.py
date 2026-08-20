@@ -13,10 +13,12 @@ class PositionLoaRecalcRule(models.Model):
 
     remaining_sibling = max_loa_m − occupant.loa − separation_m
 
-    Traffic light on sum of both ships (warnings only):
+    Traffic light on occupied pier length (both ships + separation):
     - green: sum < yellow_from_m
     - yellow: yellow_from_m ≤ sum < red_from_m
     - red: sum ≥ red_from_m
+
+    where sum = loa_a + loa_b + separation_m (same gap used in remaining_sibling).
     """
 
     port = models.ForeignKey(
@@ -51,12 +53,12 @@ class PositionLoaRecalcRule(models.Model):
     yellow_from_m = models.DecimalField(
         max_digits=7,
         decimal_places=2,
-        help_text="Sum of both LOAs at or above this is yellow (m).",
+        help_text="Both LOAs + separation at or above this is yellow (m).",
     )
     red_from_m = models.DecimalField(
         max_digits=7,
         decimal_places=2,
-        help_text="Sum of both LOAs at or above this is red (m).",
+        help_text="Both LOAs + separation at or above this is red (m).",
     )
     is_active = models.BooleanField(default=True)
     notes = models.CharField(max_length=255, blank=True)

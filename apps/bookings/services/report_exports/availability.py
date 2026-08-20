@@ -377,8 +377,10 @@ def build_availability_data(
             "conflict_chips": conflict_display["conflict_chips"],
             "conflict_highlights": conflict_display["conflict_highlights"],
             "position_id": booking.position_id or 0,
+            "shipping_line_id": booking.shipping_line_id or 0,
             "shipping_line_name": booking.shipping_line.name,
             "shipping_line_logo": logo,
+            "vessel_id": booking.vessel_id or 0,
             "vessel_name": booking.vessel.name,
             "vessel_logo": vessel_logo,
             "loa_m": (

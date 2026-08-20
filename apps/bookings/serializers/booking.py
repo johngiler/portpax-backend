@@ -96,6 +96,7 @@ class BookingListSerializer(
             "vessel",
             "vessel_name",
             "vessel_loa_m",
+            "shipping_line",
             "shipping_line_code",
             "shipping_line_name",
             "position",
