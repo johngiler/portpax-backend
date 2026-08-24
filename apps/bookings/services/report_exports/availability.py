@@ -345,13 +345,33 @@ def _soft_focus_matching_days(
         return list(
             qs.values_list("call_date", flat=True).distinct().order_by("call_date")
         )
+
+    # Boolean-only conflict filter: stay in SQL (no snapshot walk).
+    if (
+        has_conflict is not None
+        and conflict_severity not in {"yellow", "red", "green"}
+        and not conflict_type
+    ):
+        return list(
+            qs.filter(has_conflict=has_conflict)
+            .values_list("call_date", flat=True)
+            .distinct()
+            .order_by("call_date")
+        )
+
+    # Severity / type may need snapshot; drop select_related before .only().
     days: set[date] = set()
-    for booking in qs.only(
+    conflict_qs = qs.select_related(None).only(
         "call_date",
         "has_conflict",
         "conflict_severity",
         "conflict_snapshot",
-    ).iterator(chunk_size=500):
+    )
+    if has_conflict is True:
+        conflict_qs = conflict_qs.filter(has_conflict=True)
+    elif has_conflict is False:
+        conflict_qs = conflict_qs.filter(has_conflict=False)
+    for booking in conflict_qs.iterator(chunk_size=500):
         if _booking_matches_conflict(
             booking,
             has_conflict=has_conflict,

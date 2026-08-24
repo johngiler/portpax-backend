@@ -12,7 +12,12 @@ from django.db.models import Q
 from apps.bookings.constants import LTA_SOFT_FAIL_CODES
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.validation import validate_booking_params
-from apps.catalogs.models import Port, ShippingLine, ShippingLineGroup, Vessel
+from apps.catalogs.models import Port, Position, ShippingLine, ShippingLineGroup, Vessel
+from apps.catalogs.utils.position_code import (
+    build_position_code,
+    normalize_position_short_code,
+    position_short_code,
+)
 
 BULK_IMPORT_STATUSES = frozenset(
     {
@@ -69,6 +74,26 @@ def resolve_port(port_raw: str) -> Port | None:
     )
     if qs.count() == 1:
         return qs.first()
+    return None
+
+
+def resolve_position_raw(port: Port, position_raw: str) -> Position | None:
+    """Match pasted Position / Posición (P1, E2, full code) within the port."""
+    raw = (position_raw or "").strip()
+    if not raw:
+        return None
+    short = normalize_position_short_code(raw)
+    if not short:
+        return None
+    full = build_position_code(port.code, short)
+    qs = Position.objects.filter(port_id=port.id, is_active=True)
+    exact = qs.filter(Q(code__iexact=full) | Q(code__iexact=raw)).first()
+    if exact is not None:
+        return exact
+    # Short label match (P1 vs puerto_plata-P1).
+    for position in qs.select_related("port"):
+        if position_short_code(port.code, position.code).upper() == short.upper():
+            return position
     return None
 
 
@@ -500,13 +525,28 @@ def resolve_itm_rows(
                 or "no encontrado" in msg
                 for msg in issues
             ):
+                preferred_position_id = _parse_optional_int(raw.get("position_id"))
+                position_raw = (raw.get("position_raw") or "").strip()
+                # Pasted Position wins when resolved; otherwise keep auto-suggest.
+                if preferred_position_id is None and position_raw and port:
+                    matched = resolve_position_raw(port, position_raw)
+                    if matched is not None:
+                        preferred_position_id = matched.id
+                    else:
+                        warn = (
+                            f"Posición «{position_raw}» no encontrada; "
+                            "se usará la sugerida."
+                        )
+                        if warn not in warnings:
+                            warnings.append(warn)
+
                 suggested_status, position_fields = _validate_import_booking(
                     port=port,
                     vessel=vessel,
                     call_date=call_date,
                     eta=eta,
                     etd=etd,
-                    preferred_position_id=_parse_optional_int(raw.get("position_id")),
+                    preferred_position_id=preferred_position_id,
                     claim_lta_space=_claim_lta_space_flag(raw),
                     issues=issues,
                     warnings=warnings,

@@ -121,6 +121,7 @@ def build_vessel_proximity_matrix(
     has_conflict: bool | None = None,
     conflict_severity: str | None = None,
     conflict_type: str | None = None,
+    call_dates: list[date] | None = None,
     page: int | None = None,
     page_size: int = DEFAULT_MATRIX_PAGE_SIZE,
 ) -> dict:
@@ -162,17 +163,19 @@ def build_vessel_proximity_matrix(
     statuses = status_values if status_values else list(ACTIVE_BOOKING_STATUSES)
     qs = apply_booking_status_filters(qs, statuses)
 
+    allow_dates = set(call_dates or [])
+    if allow_dates:
+        qs = qs.filter(call_date__in=allow_dates)
+
     bookings = list(qs.order_by("call_date", "id"))
 
-    port_ids: set[int] = set()
-    if port_id:
-        port_ids.add(port_id)
-    else:
-        port_ids.update(b.port_id for b in bookings if b.port_id)
-
-    ports_qs = Port.objects.filter(id__in=port_ids, is_active=True).order_by("name")
+    # Always expose every accessible port as a column (empty cells if no call).
+    # Filtering by conflict/status only affects cells, not which ports appear.
+    ports_qs = Port.objects.filter(is_active=True).order_by("name")
     if allowed_ports is not None:
         ports_qs = ports_qs.filter(id__in=allowed_ports)
+    if port_id:
+        ports_qs = ports_qs.filter(id=port_id)
     ports = list(ports_qs)
 
     cells = []
@@ -194,12 +197,6 @@ def build_vessel_proximity_matrix(
         ):
             continue
         cells.append(_serialize_cell(booking, request))
-
-    port_ids_from_cells = {cell["port_id"] for cell in cells if cell.get("port_id")}
-    if port_ids_from_cells:
-        ports = [port for port in ports if port.id in port_ids_from_cells]
-        if port_id:
-            ports = [port for port in ports if port.id == port_id]
 
     dates_with_cells = sorted({cell["date"] for cell in cells})
     port_payload = [
@@ -295,6 +292,10 @@ def parse_vessel_proximity_matrix_params(query_params) -> dict:
     if conflict_type not in CONFLICT_TYPES:
         conflict_type = None
 
+    from apps.bookings.utils.call_dates_query import parse_call_dates_param
+
+    call_dates = parse_call_dates_param(query_params.get("call_dates"))
+
     page = None
     page_raw = query_params.get("page")
     if page_raw is not None and str(page_raw).strip() != "":
@@ -320,6 +321,7 @@ def parse_vessel_proximity_matrix_params(query_params) -> dict:
         "has_conflict": has_conflict,
         "conflict_severity": conflict_severity,
         "conflict_type": conflict_type,
+        "call_dates": call_dates or None,
         "page": page,
         "page_size": page_size,
     }

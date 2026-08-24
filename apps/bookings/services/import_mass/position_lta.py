@@ -113,7 +113,11 @@ def resolve_position_and_lta(
     """
     Suggest a pier position and detect a claimable LTA slot for this line.
     When claim_lta_space is set, lock position to the LTA pier.
+    When preferred_position_id is set (paste/edit), it wins over auto-suggest
+    unless LTA claim locks the pier.
     """
+    from apps.catalogs.models import Position
+
     candidate = find_claimable_lta_booking(
         port_id=port_id,
         call_date=call_date,
@@ -128,20 +132,45 @@ def resolve_position_and_lta(
     locking = bool(claim_lta_space and claimable_position_id)
 
     suggestions = suggest_positions(port_id, vessel_id, call_date)
-    picked = pick_suggested_position(
-        suggestions,
-        preferred_id=preferred_position_id,
-        claimable_position_id=claimable_position_id,
-        lock_claimable=locking,
-    )
-    position_id = int(picked["id"]) if picked else None
-    position_code = str(picked["code"]) if picked else None
+    position_id: int | None = None
+    position_code: str | None = None
 
     if locking and candidate is not None and candidate.position_id:
         position_id = candidate.position_id
         position_code = (
-            candidate_payload["position_code"] if candidate_payload else position_code
+            candidate_payload["position_code"] if candidate_payload else None
         )
+    elif preferred_position_id is not None:
+        preferred = (
+            Position.objects.filter(
+                pk=preferred_position_id,
+                port_id=port_id,
+                is_active=True,
+            )
+            .select_related("port")
+            .first()
+        )
+        if preferred is not None:
+            position_id = preferred.id
+            position_code = position_short_code(preferred.port.code, preferred.code)
+        else:
+            picked = pick_suggested_position(
+                suggestions,
+                preferred_id=None,
+                claimable_position_id=claimable_position_id,
+                lock_claimable=False,
+            )
+            position_id = int(picked["id"]) if picked else None
+            position_code = str(picked["code"]) if picked else None
+    else:
+        picked = pick_suggested_position(
+            suggestions,
+            preferred_id=None,
+            claimable_position_id=claimable_position_id,
+            lock_claimable=False,
+        )
+        position_id = int(picked["id"]) if picked else None
+        position_code = str(picked["code"]) if picked else None
 
     extra_lta_count = count_claimable_lta_bookings(
         port_id=port_id,

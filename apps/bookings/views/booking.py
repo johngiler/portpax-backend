@@ -170,6 +170,13 @@ class BookingViewSet(
         call_date_to = self.request.query_params.get("call_date_to")
         if call_date_to:
             qs = qs.filter(call_date__lte=call_date_to)
+        from apps.bookings.utils.call_dates_query import parse_call_dates_param
+
+        call_dates = parse_call_dates_param(
+            self.request.query_params.get("call_dates")
+        )
+        if call_dates:
+            qs = qs.filter(call_date__in=call_dates)
         ordering = self.request.query_params.get("ordering", "call_date_proximity")
         return apply_booking_list_ordering(qs, ordering)
 
@@ -618,6 +625,7 @@ class BookingViewSet(
                 has_conflict=params["has_conflict"],
                 conflict_severity=params["conflict_severity"],
                 conflict_type=params["conflict_type"],
+                call_dates=params.get("call_dates"),
                 page=params["page"],
                 page_size=params["page_size"],
             )
@@ -1074,6 +1082,10 @@ class BookingViewSet(
             or conflict_severity_filter is not None
             or conflict_type_filter is not None
             or occupied_only
+            or line_id is not None
+            or vessel_id is not None
+            or position_id is not None
+            or bool(status_values)
         )
         try:
             data = build_availability_data(

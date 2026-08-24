@@ -50,6 +50,18 @@ def _parse_itm_table(
     dep_i = lower_map["departure"]
     vendor_i = lower_map.get("vendor name")
     call_type_i = lower_map.get("call type")
+    position_i = None
+    for key in (
+        "position",
+        "posición",
+        "posicion",
+        "position code",
+        "berth",
+        "pos",
+    ):
+        if key in lower_map:
+            position_i = lower_map[key]
+            break
 
     parsed: list[dict[str, Any]] = []
     for excel_row, values in body_rows:
@@ -74,6 +86,15 @@ def _parse_itm_table(
             if call_type_i is not None
             else ""
         )
+        position_raw = (
+            _cell_str(
+                values[position_i]
+                if position_i is not None and position_i < len(values)
+                else None
+            )
+            if position_i is not None
+            else ""
+        )
 
         parsed.append(
             {
@@ -84,6 +105,7 @@ def _parse_itm_table(
                 "departure": departure,
                 "vendor_name": vendor,
                 "call_type": call_type,
+                "position_raw": position_raw,
             }
         )
 
@@ -158,8 +180,19 @@ _VERTICAL_ITM_HEADERS = (
     "Departure",
     "Vendor Name",
     "Call Type",
+    "Position",
 )
 _VERTICAL_ITM_KEYS = {h.lower(): h for h in _VERTICAL_ITM_HEADERS}
+# Spanish / aliases for vertical email paste header detection.
+_VERTICAL_ITM_KEYS.update(
+    {
+        "posición": "Position",
+        "posicion": "Position",
+        "position code": "Position",
+        "berth": "Position",
+        "pos": "Position",
+    }
+)
 
 
 def _reshape_vertical_itm_lines(
