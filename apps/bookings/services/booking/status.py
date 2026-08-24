@@ -270,6 +270,30 @@ def update_booking_operational(
         # Operational conflicts are non-blocking; refreshed after save.
         _ = ack
 
+        if position_changed:
+            from apps.bookings.services.lta.matching import find_best_matching_agreement
+
+            old_lta_id = booking.long_term_agreement_id
+            old_lta = getattr(booking, "long_term_agreement", None)
+            old_code = getattr(old_lta, "code", None) if old_lta is not None else None
+            new_agreement = find_best_matching_agreement(
+                port_id=booking.port_id,
+                shipping_line_id=booking.shipping_line_id,
+                vessel=booking.vessel,
+                call_date=booking.call_date,
+                position=booking.position,
+            )
+            new_lta_id = new_agreement.id if new_agreement is not None else None
+            if new_lta_id != old_lta_id:
+                changes["long_term_agreement_id"] = {
+                    "from": old_lta_id,
+                    "to": new_lta_id,
+                    "from_code": old_code,
+                    "to_code": new_agreement.code if new_agreement is not None else None,
+                }
+                booking.long_term_agreement = new_agreement
+                update_fields.append("long_term_agreement")
+
     if len(update_fields) > 1:
         booking.save(update_fields=update_fields)
         summary = "Actualización operativa"

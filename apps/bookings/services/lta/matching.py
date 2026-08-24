@@ -141,7 +141,7 @@ def find_best_matching_agreement(
         ]
         if with_pos:
             matches = with_pos
-    matches.sort(key=lambda a: (a.advance_months_max, a.code))
+    matches.sort(key=lambda a: (a.lta_depth_blocks, a.advance_months_max, a.code))
     return matches[0]
 
 
@@ -163,6 +163,8 @@ def find_foreign_slot_agreements(
     )
     foreign: list[LongTermAgreement] = []
     for agreement in qs.distinct():
+        if not agreement.reserve_foreign_slots:
+            continue
         if not agreement_covers_validity(agreement, call_date):
             continue
         if not agreement_covers_weekday(agreement, call_date):

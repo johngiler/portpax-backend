@@ -7,6 +7,7 @@ from django.utils import timezone
 from apps.audit.services.record import record_booking_audit
 from apps.bookings.models import Booking, BookingStatus, LongTermAgreement
 from apps.bookings.services.lta.matching import (
+    agreement_covers_cadence,
     agreement_covers_position,
     agreement_covers_validity,
     agreement_covers_vessel,
@@ -14,10 +15,13 @@ from apps.bookings.services.lta.matching import (
     find_best_matching_agreement,
 )
 
+
 def agreement_covers_booking(agreement: LongTermAgreement, booking: Booking) -> bool:
     if not agreement_covers_validity(agreement, booking.call_date):
         return False
     if not agreement_covers_weekday(agreement, booking.call_date):
+        return False
+    if not agreement_covers_cadence(agreement, booking.call_date):
         return False
     if not agreement_covers_vessel(agreement, booking.vessel):
         return False
@@ -34,6 +38,7 @@ def link_matching_bookings(
     agreement: LongTermAgreement,
     *,
     user=None,
+    dry_run: bool = False,
 ) -> dict:
     """
     Assign this LTA to existing bookings that match and have no LTA yet.
@@ -42,7 +47,13 @@ def link_matching_bookings(
     that already have an LTA. Only links when this agreement is the best match.
     """
     if not agreement.is_active:
-        return {"linked": 0, "skipped": 0, "detail": "El acuerdo no está activo."}
+        return {
+            "linked": 0,
+            "skipped": 0,
+            "dry_run": dry_run,
+            "detail": "El acuerdo no está activo.",
+            "agreement_code": agreement.code,
+        }
 
     candidates = (
         Booking.objects.filter(
@@ -76,7 +87,7 @@ def link_matching_bookings(
         booking.updated_at = now
         to_update.append(booking)
 
-    if to_update:
+    if to_update and not dry_run:
         Booking.objects.bulk_update(to_update, ["long_term_agreement", "updated_at"])
         for booking in to_update:
             record_booking_audit(
@@ -95,5 +106,6 @@ def link_matching_bookings(
     return {
         "linked": len(to_update),
         "skipped": skipped,
+        "dry_run": dry_run,
         "agreement_code": agreement.code,
     }

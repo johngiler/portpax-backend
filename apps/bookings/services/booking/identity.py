@@ -228,9 +228,29 @@ def update_booking_identity(
             booking.position = None
             update_fields.append("position")
 
-        if old_lta_id is not None:
-            changes["long_term_agreement_id"] = {"from": old_lta_id, "to": None}
-            booking.long_term_agreement = None
+        # Re-match LTA after identity change (clear or assign best agreement).
+        from apps.bookings.services.lta.matching import find_best_matching_agreement
+
+        new_agreement = find_best_matching_agreement(
+            port_id=new_port.id,
+            shipping_line_id=new_line.id,
+            vessel=new_vessel,
+            call_date=new_call_date,
+            position=booking.position,
+        )
+        new_lta_id = new_agreement.id if new_agreement is not None else None
+        if new_lta_id != old_lta_id:
+            old_code = None
+            if old_lta_id is not None:
+                old_lta = getattr(booking, "long_term_agreement", None)
+                old_code = getattr(old_lta, "code", None) if old_lta is not None else None
+            changes["long_term_agreement_id"] = {
+                "from": old_lta_id,
+                "to": new_lta_id,
+                "from_code": old_code,
+                "to_code": new_agreement.code if new_agreement is not None else None,
+            }
+            booking.long_term_agreement = new_agreement
             update_fields.append("long_term_agreement")
 
     booking.save(update_fields=list(dict.fromkeys(update_fields)))

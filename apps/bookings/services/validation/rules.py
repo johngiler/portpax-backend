@@ -742,15 +742,16 @@ def validate_lta(
     Only applies when the port has at least one active LTA agreement.
     Ports without LTAs are open booking for all dates (no LTA horizon/slot rules).
 
-    Windows (Especificaciones LTA — Winter/Summer), when LTAs exist for the port:
-    - Current + general: open market (any carrier).
-    - LTA covered: only matching LTA holders; foreign weekday+position is reserved.
-    - Beyond LTA covered: blocked.
+    Windows (6-month blockcitos), when LTAs exist for the port:
+    - B0 current + B1–B3 open: open market (any carrier).
+    - B4+ LTA zone: only matching LTA holders; foreign weekday+position may be reserved.
+    - Beyond global LTA horizon: blocked.
 
     Cadence (interval_days) is enforced via agreement matching.
     """
     from datetime import date as date_cls
 
+    from apps.bookings.services.lta.policy import agreement_allows_horizon
     from apps.bookings.services.lta.matching import (
         find_best_matching_agreement,
         find_foreign_slot_agreements,
@@ -808,6 +809,31 @@ def validate_lta(
                     "lta_beyond_horizon",
                     f"La fecha supera la ventana LTA cubierta "
                     f"({windows.lta_to.isoformat()}) para el acuerdo {own.code}.",
+                )
+            )
+        elif not agreement_allows_horizon(own, call_date, today):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "lta_policy_denied",
+                    f"La fecha no está permitida por la política del acuerdo {own.code} "
+                    f"(profundidad o alternancia Summer/Winter).",
+                )
+            )
+        elif zone == BookingWindowZone.LTA_COVERED:
+            depth = max(1, int(own.lta_depth_blocks or 2))
+            issues.append(
+                ValidationIssue(
+                    "info",
+                    "lta_agreement_match",
+                    f"Escala cubierta por el acuerdo LTA {own.code} "
+                    f"(zona LTA, profundidad {depth} "
+                    f"{'bloque' if depth == 1 else 'bloques'}).",
+                    severity="green",
+                    detail={
+                        "agreement_code": own.code,
+                        "lta_depth_blocks": depth,
+                    },
                 )
             )
         return issues

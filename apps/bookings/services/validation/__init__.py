@@ -9,6 +9,21 @@ from apps.catalogs.models import Port, Position, Vessel
 from apps.catalogs.utils.position_code import position_short_code
 
 
+def _stamp_call_date(issues: list[dict], call_date: date) -> list[dict]:
+    """Attach call_date to each issue so multi-date UIs can label avisos."""
+    iso = call_date.isoformat()
+    stamped: list[dict] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        item = dict(issue)
+        detail = dict(item.get("detail") or {})
+        detail["call_date"] = iso
+        item["detail"] = detail
+        stamped.append(item)
+    return stamped
+
+
 def validate_booking_instance(
     booking: Booking,
     *,
@@ -83,13 +98,15 @@ def validate_booking_params(
                     }
                 )
 
-        all_errors.extend(result["errors"])
-        all_warnings.extend(result["warnings"])
+        date_errors = _stamp_call_date(result["errors"], call_date)
+        date_warnings = _stamp_call_date(result["warnings"], call_date)
+        all_errors.extend(date_errors)
+        all_warnings.extend(date_warnings)
         by_date[call_date.isoformat()] = {
-            "errors": result["errors"],
-            "warnings": result["warnings"],
+            "errors": date_errors,
+            "warnings": date_warnings,
             "valid": result["valid"],
-            "conflicts": result.get("conflicts") or result["warnings"],
+            "conflicts": date_warnings,
         }
 
     return {

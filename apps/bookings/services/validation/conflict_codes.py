@@ -32,14 +32,16 @@ CONFLICT_SEVERITY_BY_CODE: dict[str, str] = {
     "lta_slot_reserved": "yellow",
     "lta_beyond_horizon": "yellow",
     "lta_horizon_denied": "yellow",
+    "lta_policy_denied": "yellow",
     "multi_port_conflict": "yellow",
     "multi_port_proximity": "yellow",
     "no_position_available": "yellow",
-    # Traffic light OK
+    # Traffic light OK / informational match
     "loa_recalc_sum_green": "green",
+    "lta_agreement_match": "green",
 }
 
-INFO_ONLY_CODES = frozenset({"loa_recalc_sum_green"})
+INFO_ONLY_CODES = frozenset({"loa_recalc_sum_green", "lta_agreement_match"})
 
 
 def severity_for_code(code: str, *, level: str | None = None) -> str:

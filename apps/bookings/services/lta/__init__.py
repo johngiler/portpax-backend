@@ -8,17 +8,20 @@ from apps.bookings.services.lta.matching import (
     port_has_active_agreements,
     system_far_window,
 )
+from apps.bookings.services.lta.policy import agreement_allows_horizon
 from apps.bookings.services.lta.windows import (
     BookingWindowZone,
     compute_seasonal_windows,
     lta_holder_allows,
     open_market_allows,
+    windows_as_dict,
 )
 
 __all__ = [
     "BookingWindowZone",
     "DEFAULT_ADVANCE_MONTHS_MAX",
     "DEFAULT_ADVANCE_MONTHS_MIN",
+    "agreement_allows_horizon",
     "compute_seasonal_windows",
     "find_best_matching_agreement",
     "find_foreign_slot_agreements",
@@ -28,4 +31,5 @@ __all__ = [
     "open_market_allows",
     "port_has_active_agreements",
     "system_far_window",
+    "windows_as_dict",
 ]

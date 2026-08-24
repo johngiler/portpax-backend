@@ -12,6 +12,10 @@ class LongTermAgreement(models.Model):
     slots for a shipping line. Does not materialize calendar bookings.
     """
 
+    class BookingPolicy(models.TextChoices):
+        STANDARD = "standard", "Standard"
+        RCI_STAGGERED = "rci_staggered", "RCI staggered"
+
     code = models.SlugField(max_length=64, unique=True)
     name = models.CharField(max_length=255)
     port = models.ForeignKey(
@@ -67,6 +71,20 @@ class LongTermAgreement(models.Model):
     advance_months_max = models.PositiveSmallIntegerField(
         default=32,
         help_text="Legacy max months ahead hint (seasonal windows are authoritative).",
+    )
+    booking_policy = models.CharField(
+        max_length=32,
+        choices=BookingPolicy.choices,
+        default=BookingPolicy.STANDARD,
+        help_text="Standard = any LTA season in depth; RCI = staggered Summer/Winter.",
+    )
+    lta_depth_blocks = models.PositiveSmallIntegerField(
+        default=2,
+        help_text="How many 6-month LTA blocks (after open booking) this agreement covers.",
+    )
+    reserve_foreign_slots = models.BooleanField(
+        default=True,
+        help_text="When true, blocks other lines on reserved weekday+position in LTA zone.",
     )
     valid_from = models.DateField(null=True, blank=True)
     valid_until = models.DateField(null=True, blank=True)

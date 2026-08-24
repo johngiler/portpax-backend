@@ -4,6 +4,7 @@ from rest_framework import serializers
 import json
 
 from apps.bookings.models import LongTermAgreement
+from apps.bookings.services.lta.identity import build_identity_for_create
 from apps.catalogs.models import Position, Vessel
 from apps.catalogs.utils.position_code import position_short_code
 
@@ -67,6 +68,9 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             "min_packs",
             "advance_months_min",
             "advance_months_max",
+            "booking_policy",
+            "lta_depth_blocks",
+            "reserve_foreign_slots",
             "valid_from",
             "valid_until",
             "is_active",
@@ -79,6 +83,8 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = [
+            "code",
+            "name",
             "created_at",
             "updated_at",
             "contract_file_url",
@@ -236,6 +242,24 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
         vessels = validated_data.pop("vessels", [])
         positions = validated_data.pop("positions", [])
         contract_file = validated_data.pop("contract_file", None)
+        port = validated_data["port"]
+        shipping_line = validated_data["shipping_line"]
+        all_vessels = validated_data.get("all_vessels", True)
+        weekdays = validated_data.get("weekdays") or []
+        interval_days = validated_data.get("interval_days")
+        try:
+            code, name = build_identity_for_create(
+                port=port,
+                shipping_line=shipping_line,
+                all_vessels=all_vessels,
+                vessels=[] if all_vessels else list(vessels),
+                weekdays=weekdays,
+                interval_days=interval_days,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({"non_field_errors": [str(exc)]}) from exc
+        validated_data["code"] = code
+        validated_data["name"] = name
         if contract_file in (None, ""):
             validated_data.pop("contract_file", None)
             agreement = LongTermAgreement.objects.create(**validated_data)

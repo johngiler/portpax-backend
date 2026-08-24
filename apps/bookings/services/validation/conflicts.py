@@ -35,7 +35,9 @@ def conflicts_from_validation(result: dict) -> list[dict]:
     out: list[dict] = []
     for item in raw:
         norm = normalize_issue_dict(item if isinstance(item, dict) else {})
-        key = (norm["code"], norm["message"])
+        detail = norm.get("detail") if isinstance(norm.get("detail"), dict) else {}
+        call_date = str(detail.get("call_date") or "")
+        key = (norm["code"], norm["message"], call_date)
         if key in seen:
             continue
         seen.add(key)

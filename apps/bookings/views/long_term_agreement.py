@@ -10,6 +10,7 @@ from apps.audit.services.record import record_lta_audit
 from apps.bookings.models import LongTermAgreement
 from apps.bookings.serializers.long_term_agreement import LongTermAgreementSerializer
 from apps.bookings.services.lta.link_bookings import link_matching_bookings
+from apps.bookings.services.lta.windows import windows_as_dict
 from apps.bookings.services.lta.lta_activity import build_lta_activity
 from apps.bookings.services.lta.lta_audit import (
     diff_lta_snapshots,
@@ -151,6 +152,11 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
             page_size=page_size,
         )
         return Response(data)
+
+    @action(detail=False, methods=["get"], url_path="windows")
+    def windows(self, request):
+        """Rolling 6-month blockcitos: current, open booking, LTA zone."""
+        return Response(windows_as_dict())
 
     @action(detail=True, methods=["post"], url_path="link-bookings")
     def link_bookings(self, request, pk=None):
