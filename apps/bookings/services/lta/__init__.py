@@ -1,4 +1,8 @@
-from apps.bookings.services.lta.link_bookings import link_matching_bookings
+from apps.bookings.services.lta.link_bookings import (
+    link_matching_bookings,
+    resync_agreement_bookings,
+    unlink_agreement_bookings,
+)
 from apps.bookings.services.lta.matching import (
     DEFAULT_ADVANCE_MONTHS_MAX,
     DEFAULT_ADVANCE_MONTHS_MIN,
@@ -30,6 +34,8 @@ __all__ = [
     "lta_holder_allows",
     "open_market_allows",
     "port_has_active_agreements",
+    "resync_agreement_bookings",
     "system_far_window",
+    "unlink_agreement_bookings",
     "windows_as_dict",
 ]

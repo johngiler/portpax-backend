@@ -9,7 +9,11 @@ from apps.accounts.permissions import DenyViewerWrites, user_port_ids
 from apps.audit.services.record import record_lta_audit
 from apps.bookings.models import LongTermAgreement
 from apps.bookings.serializers.long_term_agreement import LongTermAgreementSerializer
-from apps.bookings.services.lta.link_bookings import link_matching_bookings
+from apps.bookings.services.lta.link_bookings import (
+    link_matching_bookings,
+    resync_agreement_bookings,
+    unlink_agreement_bookings,
+)
 from apps.bookings.services.lta.windows import windows_as_dict
 from apps.bookings.services.lta.lta_activity import build_lta_activity
 from apps.bookings.services.lta.lta_audit import (
@@ -64,11 +68,15 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
             .get(pk=agreement.pk)
         )
         snap = snapshot_lta(agreement)
+        link_result = link_matching_bookings(agreement, user=self.request.user)
         record_lta_audit(
             action="created",
             summary=f"Creó el acuerdo {snap['code']}",
             agreement=agreement,
-            changes={"created": snap},
+            changes={
+                "created": snap,
+                "linked_bookings": int(link_result.get("linked") or 0),
+            },
             actor=self.request.user,
             request=self.request,
             entity=snap,
@@ -84,37 +92,28 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
         )
         after = snapshot_lta(agreement)
         changes = diff_lta_snapshots(before, after)
-        if changes:
-            record_lta_audit(
-                action="updated",
-                summary=f"Modificó el acuerdo {after['code']}",
-                agreement=agreement,
-                changes=changes,
-                actor=self.request.user,
-                request=self.request,
-                entity=after,
-            )
+        # Unlink current FKs, then re-link under the saved rules.
+        sync = resync_agreement_bookings(agreement, user=self.request.user)
+        changes["unlinked_bookings"] = int(sync.get("unlinked") or 0)
+        changes["linked_bookings"] = int(sync.get("linked") or 0)
+        record_lta_audit(
+            action="updated",
+            summary=f"Modificó el acuerdo {after['code']}",
+            agreement=agreement,
+            changes=changes,
+            actor=self.request.user,
+            request=self.request,
+            entity=after,
+        )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        linked = instance.bookings.count()
-        if linked > 0:
-            noun = "reserva" if linked == 1 else "reservas"
-            adj = "vinculada" if linked == 1 else "vinculadas"
-            return Response(
-                {
-                    "detail": (
-                        f"No se puede eliminar el acuerdo porque tiene "
-                        f"{linked} {noun} {adj}. "
-                        "Desactiva el acuerdo o desvincula esas reservas primero."
-                    )
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-        return super().destroy(request, *args, **kwargs)
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def perform_destroy(self, instance):
         snap = snapshot_lta(instance)
+        unlink = unlink_agreement_bookings(instance, user=self.request.user)
         record_lta_audit(
             action="deleted",
             summary=f"Eliminó el acuerdo {snap['code']}",
@@ -124,7 +123,10 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
             port_id=snap.get("port_id"),
             port_code=snap.get("port_code") or "",
             shipping_line_code=snap.get("shipping_line_code") or "",
-            changes={"deleted": snap},
+            changes={
+                "deleted": snap,
+                "unlinked_bookings": int(unlink.get("unlinked") or 0),
+            },
             actor=self.request.user,
             request=self.request,
             entity=snap,

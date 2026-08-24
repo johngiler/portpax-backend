@@ -1,4 +1,4 @@
-"""Link existing bookings to a LongTermAgreement by matching rules."""
+"""Link / unlink bookings to a LongTermAgreement by matching rules."""
 
 from __future__ import annotations
 
@@ -32,6 +32,62 @@ def agreement_covers_booking(agreement: LongTermAgreement, booking: Booking) -> 
     ):
         return False
     return True
+
+
+def unlink_agreement_bookings(
+    agreement: LongTermAgreement,
+    *,
+    user=None,
+    dry_run: bool = False,
+) -> dict:
+    """Clear long_term_agreement FK on all bookings linked to this agreement."""
+    qs = Booking.objects.filter(long_term_agreement_id=agreement.pk).select_related(
+        "vessel",
+        "position",
+        "shipping_line",
+        "port",
+    )
+    bookings = list(qs)
+    if not bookings:
+        return {
+            "unlinked": 0,
+            "dry_run": dry_run,
+            "agreement_code": agreement.code,
+        }
+
+    if dry_run:
+        return {
+            "unlinked": len(bookings),
+            "dry_run": True,
+            "agreement_code": agreement.code,
+        }
+
+    now = timezone.now()
+    code = agreement.code
+    for booking in bookings:
+        booking.long_term_agreement = None
+        booking.updated_at = now
+
+    Booking.objects.bulk_update(bookings, ["long_term_agreement", "updated_at"])
+    for booking in bookings:
+        record_booking_audit(
+            booking,
+            action="lta_unlinked",
+            summary=f"Acuerdo LTA desvinculado: {code}",
+            changes={
+                "long_term_agreement": {
+                    "old": code,
+                    "new": None,
+                }
+            },
+            user=user,
+        )
+
+    return {
+        "unlinked": len(bookings),
+        "dry_run": False,
+        "agreement_code": code,
+    }
 
 
 def link_matching_bookings(
@@ -108,4 +164,25 @@ def link_matching_bookings(
         "skipped": skipped,
         "dry_run": dry_run,
         "agreement_code": agreement.code,
+    }
+
+
+def resync_agreement_bookings(
+    agreement: LongTermAgreement,
+    *,
+    user=None,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Unlink all bookings on this agreement, then re-link matches under current rules.
+    """
+    unlinked = unlink_agreement_bookings(agreement, user=user, dry_run=dry_run)
+    linked = link_matching_bookings(agreement, user=user, dry_run=dry_run)
+    return {
+        "unlinked": int(unlinked.get("unlinked") or 0),
+        "linked": int(linked.get("linked") or 0),
+        "skipped": int(linked.get("skipped") or 0),
+        "dry_run": dry_run,
+        "agreement_code": agreement.code,
+        "detail": linked.get("detail"),
     }
