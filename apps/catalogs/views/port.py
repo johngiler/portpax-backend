@@ -8,7 +8,10 @@ from apps.accounts.permissions import user_port_ids
 from apps.audit.services.record import record_port_audit
 from apps.catalogs.models import Berth, Port, Position
 from apps.catalogs.serializers import PortDetailSerializer, PortSerializer
-from apps.catalogs.services.port_activity import build_port_activity
+from apps.catalogs.services.port_activity import (
+    build_port_activity,
+    list_port_activity_actors,
+)
 from apps.catalogs.services.port_audit import diff_port_snapshots, snapshot_port
 from apps.catalogs.services.port_proximity import recalculate_port_proximity_for_port
 from apps.catalogs.utils.port_scope import filter_qs_for_user_ports
@@ -123,7 +126,17 @@ class PortViewSet(viewsets.ModelViewSet):
             kind=request.query_params.get("kind") or "all",
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
+            actor=request.query_params.get("actor"),
             page=page,
             page_size=page_size,
         )
         return Response(data)
+
+    @action(detail=False, methods=["get"], url_path="activity-actors")
+    def activity_actors(self, request):
+        allowed = user_port_ids(request.user)
+        return Response(
+            list_port_activity_actors(
+                allowed_ports=None if allowed is None else list(allowed),
+            )
+        )

@@ -15,7 +15,10 @@ from apps.bookings.services.lta.link_bookings import (
     unlink_agreement_bookings,
 )
 from apps.bookings.services.lta.windows import windows_as_dict
-from apps.bookings.services.lta.lta_activity import build_lta_activity
+from apps.bookings.services.lta.lta_activity import (
+    build_lta_activity,
+    list_lta_activity_actors,
+)
 from apps.bookings.services.lta.lta_audit import (
     diff_lta_snapshots,
     snapshot_lta,
@@ -150,10 +153,20 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
             kind=request.query_params.get("kind") or "all",
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
+            actor=request.query_params.get("actor"),
             page=page,
             page_size=page_size,
         )
         return Response(data)
+
+    @action(detail=False, methods=["get"], url_path="activity-actors")
+    def activity_actors(self, request):
+        allowed = user_port_ids(request.user)
+        return Response(
+            list_lta_activity_actors(
+                allowed_ports=None if allowed is None else list(allowed),
+            )
+        )
 
     @action(detail=False, methods=["get"], url_path="windows")
     def windows(self, request):

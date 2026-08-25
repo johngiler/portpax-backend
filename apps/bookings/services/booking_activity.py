@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
 from apps.audit.models import BookingAuditEntry
+from apps.audit.utils.activity_actor import actor_options_from_ids, parse_actor_param
 from apps.bookings.models import Booking, BookingImportBatch
 
 SINGLE_ACTIONS = (
@@ -17,6 +19,7 @@ SINGLE_ACTIONS = (
     "identity_update",
     "status_change",
     "lta_linked",
+    "lta_unlinked",
 )
 
 
@@ -90,15 +93,20 @@ def _bulk_item(batch: BookingImportBatch) -> dict[str, Any]:
     }
 
 
-def _audit_queryset(*, allowed_ports: list[int] | None, date_from, date_to):
+def _audit_queryset(
+    *,
+    allowed_ports: list[int] | None,
+    date_from,
+    date_to,
+    actor_system: bool = False,
+    actor_user_id: int | None = None,
+):
     qs = (
         BookingAuditEntry.objects.filter(action__in=SINGLE_ACTIONS)
         .select_related("booking", "user")
         .exclude(changes__has_key="import_batch_id")
     )
     if allowed_ports is not None:
-        from django.db.models import Q
-
         qs = qs.filter(
             Q(port_id__in=allowed_ports) | Q(booking__port_id__in=allowed_ports)
         )
@@ -106,10 +114,22 @@ def _audit_queryset(*, allowed_ports: list[int] | None, date_from, date_to):
         qs = qs.filter(created_at__gte=date_from)
     if date_to is not None:
         qs = qs.filter(created_at__lte=date_to)
+    if actor_system:
+        qs = qs.filter(user__isnull=True)
+    elif actor_user_id is not None:
+        qs = qs.filter(user_id=actor_user_id)
     return qs.order_by("-created_at")
 
 
-def _batch_queryset(*, allowed_ports: list[int] | None, user, date_from, date_to):
+def _batch_queryset(
+    *,
+    allowed_ports: list[int] | None,
+    user,
+    date_from,
+    date_to,
+    actor_system: bool = False,
+    actor_user_id: int | None = None,
+):
     qs = BookingImportBatch.objects.select_related("created_by")
     if allowed_ports is not None:
         qs = qs.filter(created_by=user)
@@ -117,7 +137,45 @@ def _batch_queryset(*, allowed_ports: list[int] | None, user, date_from, date_to
         qs = qs.filter(created_at__gte=date_from)
     if date_to is not None:
         qs = qs.filter(created_at__lte=date_to)
+    if actor_system:
+        qs = qs.filter(created_by__isnull=True)
+    elif actor_user_id is not None:
+        qs = qs.filter(created_by_id=actor_user_id)
     return qs.order_by("-created_at")
+
+
+def list_booking_activity_actors(
+    *,
+    user,
+    allowed_ports: list[int] | None,
+) -> dict[str, Any]:
+    """Users that appear as actors in booking history the caller can see."""
+    audit_qs = BookingAuditEntry.objects.filter(action__in=SINGLE_ACTIONS).exclude(
+        changes__has_key="import_batch_id"
+    )
+    if allowed_ports is not None:
+        audit_qs = audit_qs.filter(
+            Q(port_id__in=allowed_ports) | Q(booking__port_id__in=allowed_ports)
+        )
+    audit_ids = set(
+        audit_qs.exclude(user_id=None).values_list("user_id", flat=True).distinct()
+    )
+    has_system_audit = audit_qs.filter(user_id__isnull=True).exists()
+
+    batch_qs = BookingImportBatch.objects.all()
+    if allowed_ports is not None:
+        batch_qs = batch_qs.filter(created_by=user)
+    batch_ids = set(
+        batch_qs.exclude(created_by_id=None)
+        .values_list("created_by_id", flat=True)
+        .distinct()
+    )
+    has_system_batch = batch_qs.filter(created_by_id__isnull=True).exists()
+
+    return {
+        "results": actor_options_from_ids(audit_ids | batch_ids),
+        "has_system": has_system_audit or has_system_batch,
+    }
 
 
 def build_booking_activity(
@@ -127,6 +185,7 @@ def build_booking_activity(
     kind: str = "all",
     date_from: str | None = None,
     date_to: str | None = None,
+    actor: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
@@ -138,6 +197,7 @@ def build_booking_activity(
     page_size = min(max(1, page_size), 100)
     bound_from = _parse_bound(date_from)
     bound_to = _parse_bound(date_to, end_of_day=True)
+    actor_system, actor_user_id = parse_actor_param(actor)
 
     items: list[dict[str, Any]] = []
 
@@ -146,6 +206,8 @@ def build_booking_activity(
             allowed_ports=allowed_ports,
             date_from=bound_from,
             date_to=bound_to,
+            actor_system=actor_system,
+            actor_user_id=actor_user_id,
         )[:500]:
             items.append(_single_item(entry))
 
@@ -155,6 +217,8 @@ def build_booking_activity(
             user=user,
             date_from=bound_from,
             date_to=bound_to,
+            actor_system=actor_system,
+            actor_user_id=actor_user_id,
         )[:500]:
             items.append(_bulk_item(batch))
 

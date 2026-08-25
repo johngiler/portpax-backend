@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
 from apps.audit.models import ShippingLineAuditEntry
+from apps.audit.utils.activity_actor import actor_options_from_ids, parse_actor_param
 
 CRUD_ACTIONS = ("created", "updated", "deleted")
 
@@ -55,11 +56,29 @@ def _item(entry: ShippingLineAuditEntry) -> dict[str, Any]:
     }
 
 
+def _base_qs(*, kind: str):
+    qs = ShippingLineAuditEntry.objects.select_related("actor", "shipping_line")
+    if kind == "crud":
+        qs = qs.filter(action__in=CRUD_ACTIONS)
+    return qs
+
+
+def list_shipping_line_activity_actors() -> dict[str, Any]:
+    qs = _base_qs(kind="all")
+    user_ids = qs.exclude(actor_id=None).values_list("actor_id", flat=True).distinct()
+    has_system = qs.filter(actor_id__isnull=True).exists()
+    return {
+        "results": actor_options_from_ids(user_ids),
+        "has_system": has_system,
+    }
+
+
 def build_shipping_line_activity(
     *,
     kind: str = "all",
     date_from: str | None = None,
     date_to: str | None = None,
+    actor: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
@@ -70,9 +89,7 @@ def build_shipping_line_activity(
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
 
-    qs = ShippingLineAuditEntry.objects.select_related("actor", "shipping_line")
-    if kind == "crud":
-        qs = qs.filter(action__in=CRUD_ACTIONS)
+    qs = _base_qs(kind=kind)
 
     bound_from = _parse_bound(date_from, end_of_day=False)
     bound_to = _parse_bound(date_to, end_of_day=True)
@@ -80,6 +97,12 @@ def build_shipping_line_activity(
         qs = qs.filter(created_at__gte=bound_from)
     if bound_to is not None:
         qs = qs.filter(created_at__lte=bound_to)
+
+    actor_system, actor_user_id = parse_actor_param(actor)
+    if actor_system:
+        qs = qs.filter(actor_id__isnull=True)
+    elif actor_user_id is not None:
+        qs = qs.filter(actor_id=actor_user_id)
 
     qs = qs.order_by("-created_at")
     count = qs.count()

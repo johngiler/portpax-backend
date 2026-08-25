@@ -8,7 +8,10 @@ from rest_framework.response import Response
 from apps.audit.services.record import record_shipping_line_audit
 from apps.catalogs.models import ShippingLine, Vessel
 from apps.catalogs.serializers import ShippingLineDetailSerializer, ShippingLineSerializer
-from apps.catalogs.services.shipping_line_activity import build_shipping_line_activity
+from apps.catalogs.services.shipping_line_activity import (
+    build_shipping_line_activity,
+    list_shipping_line_activity_actors,
+)
 from apps.catalogs.services.shipping_line_audit import (
     diff_shipping_line_snapshots,
     snapshot_shipping_line,
@@ -132,7 +135,12 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
             kind=request.query_params.get("kind") or "all",
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
+            actor=request.query_params.get("actor"),
             page=page,
             page_size=page_size,
         )
         return Response(data)
+
+    @action(detail=False, methods=["get"], url_path="activity-actors")
+    def activity_actors(self, request):
+        return Response(list_shipping_line_activity_actors())

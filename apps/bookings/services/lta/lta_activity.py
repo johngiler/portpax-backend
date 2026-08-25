@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
 from apps.audit.models import LtaAuditEntry
+from apps.audit.utils.activity_actor import actor_options_from_ids, parse_actor_param
 
 CRUD_ACTIONS = ("created", "updated", "deleted")
 LINK_ACTIONS = ("link_bookings",)
@@ -58,12 +59,37 @@ def _item(entry: LtaAuditEntry) -> dict[str, Any]:
     }
 
 
+def _base_qs(*, allowed_ports: list[int] | None, kind: str):
+    qs = LtaAuditEntry.objects.select_related("actor", "agreement")
+    if kind == "crud":
+        qs = qs.filter(action__in=CRUD_ACTIONS)
+    elif kind == "link":
+        qs = qs.filter(action__in=LINK_ACTIONS)
+    if allowed_ports is not None:
+        qs = qs.filter(port_id__in=allowed_ports)
+    return qs
+
+
+def list_lta_activity_actors(
+    *,
+    allowed_ports: list[int] | None,
+) -> dict[str, Any]:
+    qs = _base_qs(allowed_ports=allowed_ports, kind="all")
+    user_ids = qs.exclude(actor_id=None).values_list("actor_id", flat=True).distinct()
+    has_system = qs.filter(actor_id__isnull=True).exists()
+    return {
+        "results": actor_options_from_ids(user_ids),
+        "has_system": has_system,
+    }
+
+
 def build_lta_activity(
     *,
     allowed_ports: list[int] | None,
     kind: str = "all",
     date_from: str | None = None,
     date_to: str | None = None,
+    actor: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
@@ -74,14 +100,7 @@ def build_lta_activity(
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
 
-    qs = LtaAuditEntry.objects.select_related("actor", "agreement")
-    if kind == "crud":
-        qs = qs.filter(action__in=CRUD_ACTIONS)
-    elif kind == "link":
-        qs = qs.filter(action__in=LINK_ACTIONS)
-
-    if allowed_ports is not None:
-        qs = qs.filter(port_id__in=allowed_ports)
+    qs = _base_qs(allowed_ports=allowed_ports, kind=kind)
 
     bound_from = _parse_bound(date_from, end_of_day=False)
     bound_to = _parse_bound(date_to, end_of_day=True)
@@ -89,6 +108,12 @@ def build_lta_activity(
         qs = qs.filter(created_at__gte=bound_from)
     if bound_to is not None:
         qs = qs.filter(created_at__lte=bound_to)
+
+    actor_system, actor_user_id = parse_actor_param(actor)
+    if actor_system:
+        qs = qs.filter(actor_id__isnull=True)
+    elif actor_user_id is not None:
+        qs = qs.filter(actor_id=actor_user_id)
 
     qs = qs.order_by("-created_at")
     count = qs.count()

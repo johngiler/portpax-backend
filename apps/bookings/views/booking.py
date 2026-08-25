@@ -41,6 +41,7 @@ from apps.bookings.services.booking.bulk_edit import (
 from apps.bookings.services.booking_activity import (
     build_booking_activity,
     build_import_batch_detail,
+    list_booking_activity_actors,
 )
 from apps.bookings.services.booking_export import build_bookings_csv, build_bookings_xlsx
 from apps.bookings.services.calendar_export import (
@@ -478,8 +479,18 @@ class BookingViewSet(
             kind=request.query_params.get("kind") or "all",
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
+            actor=request.query_params.get("actor"),
             page=page,
             page_size=page_size,
+        )
+        return Response(data)
+
+    @action(detail=False, methods=["get"], url_path="activity-actors")
+    def activity_actors(self, request):
+        """Authors that appear in booking history (for the Autor filter)."""
+        data = list_booking_activity_actors(
+            user=request.user,
+            allowed_ports=user_port_ids(request.user),
         )
         return Response(data)
 

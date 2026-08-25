@@ -13,7 +13,10 @@ from apps.accounts.serializers.users import (
     ManagedUserWriteSerializer,
     MeProfileSerializer,
 )
-from apps.accounts.services.user_activity import build_user_activity
+from apps.accounts.services.user_activity import (
+    build_user_activity,
+    list_user_activity_actors,
+)
 from apps.accounts.services.user_audit import (
     diff_user_snapshots,
     snapshot_user,
@@ -134,10 +137,15 @@ class ManagedUserViewSet(viewsets.ModelViewSet):
             is_active=request.query_params.get("is_active"),
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
+            actor=request.query_params.get("actor"),
             page=page,
             page_size=page_size,
         )
         return Response(data)
+
+    @action(detail=False, methods=["get"], url_path="activity-actors")
+    def activity_actors(self, request):
+        return Response(list_user_activity_actors())
 
 
 class MeProfileView(APIView):
