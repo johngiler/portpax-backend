@@ -159,10 +159,11 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="export")
     def export(self, request):
-        """Download navieras + barcos (xlsx two sheets, or csv zip).
+        """Download grupos + navieras + barcos (xlsx three sheets, or csv zip).
 
         Query param is `export_format` (not `format`) — DRF reserves `format`.
-        Applies the same list filters (search, group).
+        Applies the same list filters (search, group) to navieras/barcos;
+        the Grupos sheet is always the full group catalog.
         """
         fmt = (request.query_params.get("export_format") or "xlsx").lower()
         if fmt not in ("xlsx", "csv"):
@@ -207,7 +208,7 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
         parser_classes=[MultiPartParser, FormParser],
     )
     def import_catalog(self, request):
-        """Upsert navieras + barcos from the exported Excel workbook."""
+        """Upsert grupos + navieras + barcos from the exported Excel workbook."""
         upload = request.FILES.get("file")
         if upload is None:
             return Response(

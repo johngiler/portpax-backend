@@ -15,7 +15,11 @@ from apps.catalogs.services.shipping_line_audit import (
     diff_shipping_line_snapshots,
     snapshot_shipping_line,
 )
-from apps.catalogs.services.shipping_line_export import LINE_SHEET, VESSEL_SHEET
+from apps.catalogs.services.shipping_line_export import (
+    GROUP_SHEET,
+    LINE_SHEET,
+    VESSEL_SHEET,
+)
 
 
 class ShippingLineImportError(Exception):
@@ -87,7 +91,9 @@ def _load_named_sheet(
     workbook,
     preferred_names: tuple[str, ...],
     fallback_index: int | None,
-) -> tuple[dict[str, int], list[tuple[int, list[Any]]]]:
+    *,
+    required: bool = True,
+) -> tuple[dict[str, int], list[tuple[int, list[Any]]]] | tuple[None, None]:
     sheet = None
     lower_names = {n.lower() for n in preferred_names}
     for name in workbook.sheetnames:
@@ -99,9 +105,11 @@ def _load_named_sheet(
     ):
         sheet = workbook[workbook.sheetnames[fallback_index]]
     if sheet is None:
-        raise ShippingLineImportError(
-            f"No se encontró la hoja «{preferred_names[0]}»."
-        )
+        if required:
+            raise ShippingLineImportError(
+                f"No se encontró la hoja «{preferred_names[0]}»."
+            )
+        return None, None
 
     rows_iter = sheet.iter_rows(values_only=True)
     try:
@@ -152,7 +160,9 @@ def _resolve_group(
     *,
     group_id_raw: str,
     group_code: str,
+    created_groups_by_code: dict[str, int] | None = None,
 ) -> tuple[ShippingLineGroup | None, str | None]:
+    created_groups_by_code = created_groups_by_code or {}
     group_id = _parse_optional_int(group_id_raw)
     if group_id is not None:
         group = ShippingLineGroup.objects.filter(pk=group_id).first()
@@ -160,11 +170,141 @@ def _resolve_group(
             return None, f"group_id {group_id} no existe."
         return group, None
     if group_code:
+        mapped = created_groups_by_code.get(group_code.lower())
+        if mapped is not None:
+            group = ShippingLineGroup.objects.filter(pk=mapped).first()
+            if group is not None:
+                return group, None
         group = ShippingLineGroup.objects.filter(code__iexact=group_code).first()
         if group is None:
             return None, f"group_code «{group_code}» no existe."
         return group, None
     return None, "Indica group_id o group_code."
+
+
+def _upsert_groups(
+    hmap: dict[str, int],
+    body: list[tuple[int, list[Any]]],
+) -> tuple[dict[str, Any], dict[str, int]]:
+    bucket = _empty_result_bucket()
+    created_by_code: dict[str, int] = {}
+
+    for excel_row, cells in body:
+        pk_raw = _get(cells, hmap, "id")
+        code = _get(cells, hmap, "code", "código", "codigo")
+        name = _get(cells, hmap, "name", "nombre")
+        if not pk_raw and not code and not name:
+            continue
+
+        label = code or name or f"fila {excel_row}"
+        errors: list[str] = []
+        pk = _parse_optional_int(pk_raw) if pk_raw else None
+        if pk_raw and pk is None:
+            errors.append(f"id inválido: {pk_raw}")
+        if not code:
+            errors.append("code es obligatorio.")
+        if not name:
+            errors.append("name es obligatorio.")
+
+        active_raw = _get(cells, hmap, "is_active", "activa", "activo")
+        is_active = _parse_bool(active_raw, default=True)
+        if is_active is None:
+            errors.append(f"is_active inválido: {active_raw}")
+
+        if errors:
+            bucket["invalid_count"] += 1
+            bucket["invalid"].append(
+                {
+                    "kind": "group",
+                    "row": excel_row,
+                    "id": pk,
+                    "code": code,
+                    "name": name,
+                    "label": label,
+                    "errors": errors,
+                }
+            )
+            continue
+
+        try:
+            with transaction.atomic():
+                if pk is None:
+                    if ShippingLineGroup.objects.filter(code__iexact=code).exists():
+                        raise ValueError(f"Ya existe un grupo con code «{code}».")
+                    if ShippingLineGroup.objects.filter(name__iexact=name).exists():
+                        raise ValueError(f"Ya existe un grupo con name «{name}».")
+                    group = ShippingLineGroup(
+                        code=code,
+                        name=name,
+                        is_active=bool(is_active),
+                    )
+                    group.full_clean()
+                    group.save()
+                    created_by_code[code.lower()] = group.pk
+                    bucket["created_count"] += 1
+                    bucket["created"].append(
+                        {
+                            "kind": "group",
+                            "row": excel_row,
+                            "id": group.pk,
+                            "code": group.code,
+                            "name": group.name,
+                            "label": f"{group.code} — {group.name}",
+                        }
+                    )
+                else:
+                    group = ShippingLineGroup.objects.filter(pk=pk).first()
+                    if group is None:
+                        raise ValueError(f"Grupo id={pk} no existe.")
+                    if (
+                        ShippingLineGroup.objects.filter(code__iexact=code)
+                        .exclude(pk=pk)
+                        .exists()
+                    ):
+                        raise ValueError(f"Ya existe otro grupo con code «{code}».")
+                    if (
+                        ShippingLineGroup.objects.filter(name__iexact=name)
+                        .exclude(pk=pk)
+                        .exists()
+                    ):
+                        raise ValueError(f"Ya existe otro grupo con name «{name}».")
+                    group.code = code
+                    group.name = name
+                    group.is_active = bool(is_active)
+                    group.full_clean()
+                    group.save()
+                    created_by_code[code.lower()] = group.pk
+                    bucket["updated_count"] += 1
+                    bucket["updated"].append(
+                        {
+                            "kind": "group",
+                            "row": excel_row,
+                            "id": group.pk,
+                            "code": group.code,
+                            "name": group.name,
+                            "label": f"{group.code} — {group.name}",
+                        }
+                    )
+        except (ValueError, IntegrityError, ValidationError) as exc:
+            msgs = (
+                _validation_messages(exc)
+                if isinstance(exc, ValidationError)
+                else [str(exc)]
+            )
+            bucket["invalid_count"] += 1
+            bucket["invalid"].append(
+                {
+                    "kind": "group",
+                    "row": excel_row,
+                    "id": pk,
+                    "code": code,
+                    "name": name,
+                    "label": label,
+                    "errors": msgs,
+                }
+            )
+
+    return bucket, created_by_code
 
 
 def _upsert_shipping_lines(
@@ -173,6 +313,7 @@ def _upsert_shipping_lines(
     *,
     actor,
     request,
+    created_groups_by_code: dict[str, int] | None = None,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     bucket = _empty_result_bucket()
     created_by_code: dict[str, int] = {}
@@ -194,6 +335,7 @@ def _upsert_shipping_lines(
         group, group_err = _resolve_group(
             group_id_raw=_get(cells, hmap, "group_id"),
             group_code=_get(cells, hmap, "group_code"),
+            created_groups_by_code=created_groups_by_code,
         )
         if group_err:
             errors.append(group_err)
@@ -510,11 +652,12 @@ def _upsert_vessels(
 
 def import_shipping_lines_workbook(file_obj, *, actor=None, request=None) -> dict[str, Any]:
     """
-    Update-or-create from Excel with sheets Navieras + Barcos.
+    Update-or-create from Excel with sheets Grupos + Navieras + Barcos.
 
     - Empty ``id`` → create
     - Numeric ``id`` → update that PK
-    - ``logo`` / timestamps are ignored on import
+    - Procesa Grupos primero para que nuevas navieras puedan usar group_code
+    - ``logo`` / ``created_at`` / ``updated_at`` no forman parte del export
     """
     try:
         workbook = load_workbook(file_obj, read_only=True, data_only=True)
@@ -523,47 +666,102 @@ def import_shipping_lines_workbook(file_obj, *, actor=None, request=None) -> dic
             "No se pudo leer el Excel. Usa el archivo exportado (.xlsx)."
         ) from exc
 
+    group_hmap, group_body = _load_named_sheet(
+        workbook,
+        (GROUP_SHEET, "groups", "shipping_line_groups"),
+        fallback_index=None,
+        required=False,
+    )
+
+    # Prefer named sheets; fall back by position only for older 2-sheet files.
+    has_groups_sheet = group_hmap is not None
+    line_fallback = 1 if has_groups_sheet else 0
+    vessel_fallback = 2 if has_groups_sheet else (1 if len(workbook.sheetnames) > 1 else None)
+
     line_hmap, line_body = _load_named_sheet(
         workbook,
         (LINE_SHEET, "shipping_lines", "shipping lines", "lines"),
-        fallback_index=0,
+        fallback_index=line_fallback,
     )
     if "code" not in line_hmap and "código" not in line_hmap and "codigo" not in line_hmap:
         raise ShippingLineImportError(
-            f"La hoja de navieras debe incluir la columna «code»."
+            "La hoja de navieras debe incluir la columna «code»."
         )
     if "name" not in line_hmap and "nombre" not in line_hmap:
         raise ShippingLineImportError(
-            f"La hoja de navieras debe incluir la columna «name»."
+            "La hoja de navieras debe incluir la columna «name»."
         )
 
     vessel_hmap, vessel_body = _load_named_sheet(
         workbook,
         (VESSEL_SHEET, "vessels", "ships", "barcos"),
-        fallback_index=1 if len(workbook.sheetnames) > 1 else None,
+        fallback_index=vessel_fallback,
     )
     if "name" not in vessel_hmap and "nombre" not in vessel_hmap:
         raise ShippingLineImportError(
             "La hoja de barcos debe incluir la columna «name»."
         )
 
+    if group_hmap is not None and group_body is not None:
+        if (
+            "code" not in group_hmap
+            and "código" not in group_hmap
+            and "codigo" not in group_hmap
+        ):
+            raise ShippingLineImportError(
+                "La hoja de grupos debe incluir la columna «code»."
+            )
+        if "name" not in group_hmap and "nombre" not in group_hmap:
+            raise ShippingLineImportError(
+                "La hoja de grupos debe incluir la columna «name»."
+            )
+        groups_bucket, created_groups_by_code = _upsert_groups(group_hmap, group_body)
+    else:
+        groups_bucket = _empty_result_bucket()
+        created_groups_by_code = {}
+
     lines_bucket, created_by_code = _upsert_shipping_lines(
-        line_hmap, line_body, actor=actor, request=request
+        line_hmap,
+        line_body,
+        actor=actor,
+        request=request,
+        created_groups_by_code=created_groups_by_code,
     )
     vessels_bucket = _upsert_vessels(
         vessel_hmap, vessel_body, created_by_code=created_by_code
     )
 
-    updated_count = lines_bucket["updated_count"] + vessels_bucket["updated_count"]
-    created_count = lines_bucket["created_count"] + vessels_bucket["created_count"]
-    invalid_count = lines_bucket["invalid_count"] + vessels_bucket["invalid_count"]
+    updated_count = (
+        groups_bucket["updated_count"]
+        + lines_bucket["updated_count"]
+        + vessels_bucket["updated_count"]
+    )
+    created_count = (
+        groups_bucket["created_count"]
+        + lines_bucket["created_count"]
+        + vessels_bucket["created_count"]
+    )
+    invalid_count = (
+        groups_bucket["invalid_count"]
+        + lines_bucket["invalid_count"]
+        + vessels_bucket["invalid_count"]
+    )
 
     return {
         "updated_count": updated_count,
         "created_count": created_count,
         "invalid_count": invalid_count,
+        "groups": groups_bucket,
         "shipping_lines": lines_bucket,
         "vessels": vessels_bucket,
-        "created": lines_bucket["created"] + vessels_bucket["created"],
-        "invalid": lines_bucket["invalid"] + vessels_bucket["invalid"],
+        "created": (
+            groups_bucket["created"]
+            + lines_bucket["created"]
+            + vessels_bucket["created"]
+        ),
+        "invalid": (
+            groups_bucket["invalid"]
+            + lines_bucket["invalid"]
+            + vessels_bucket["invalid"]
+        ),
     }
