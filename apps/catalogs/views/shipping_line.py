@@ -1,10 +1,14 @@
 from django.db.models import Count, Prefetch
 from django.db.models.deletion import ProtectedError
+from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.accounts.permissions import DenyViewerWrites, IsFrontendAppUser
 from apps.audit.services.record import record_shipping_line_audit
 from apps.catalogs.models import ShippingLine, Vessel
 from apps.catalogs.serializers import ShippingLineDetailSerializer, ShippingLineSerializer
@@ -15,6 +19,14 @@ from apps.catalogs.services.shipping_line_activity import (
 from apps.catalogs.services.shipping_line_audit import (
     diff_shipping_line_snapshots,
     snapshot_shipping_line,
+)
+from apps.catalogs.services.shipping_line_export import (
+    build_shipping_lines_csv_zip,
+    build_shipping_lines_xlsx,
+)
+from apps.catalogs.services.shipping_line_import import (
+    ShippingLineImportError,
+    import_shipping_lines_workbook,
 )
 
 
@@ -144,3 +156,78 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path="activity-actors")
     def activity_actors(self, request):
         return Response(list_shipping_line_activity_actors())
+
+    @action(detail=False, methods=["get"], url_path="export")
+    def export(self, request):
+        """Download navieras + barcos (xlsx two sheets, or csv zip).
+
+        Query param is `export_format` (not `format`) — DRF reserves `format`.
+        Applies the same list filters (search, group).
+        """
+        fmt = (request.query_params.get("export_format") or "xlsx").lower()
+        if fmt not in ("xlsx", "csv"):
+            return Response(
+                {"detail": "export_format debe ser xlsx o csv."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        lines_qs = self.filter_queryset(self.get_queryset())
+        if not lines_qs.exists():
+            return Response(
+                {"detail": "No hay navieras para exportar con los filtros aplicados."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        stamp = timezone.localdate().isoformat()
+        if fmt == "csv":
+            content = build_shipping_lines_csv_zip(lines_qs)
+            response = HttpResponse(content, content_type="application/zip")
+            response["Content-Disposition"] = (
+                f'attachment; filename="navieras_barcos_{stamp}.zip"'
+            )
+            return response
+
+        content = build_shipping_lines_xlsx(lines_qs)
+        response = HttpResponse(
+            content,
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        )
+        response["Content-Disposition"] = (
+            f'attachment; filename="navieras_barcos_{stamp}.xlsx"'
+        )
+        return response
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="import",
+        permission_classes=[IsAuthenticated, IsFrontendAppUser, DenyViewerWrites],
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def import_catalog(self, request):
+        """Upsert navieras + barcos from the exported Excel workbook."""
+        upload = request.FILES.get("file")
+        if upload is None:
+            return Response(
+                {"detail": "Adjunta un archivo Excel (.xlsx) en el campo «file»."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        name = (getattr(upload, "name", "") or "").lower()
+        if not (name.endswith(".xlsx") or name.endswith(".xlsm")):
+            return Response(
+                {"detail": "Solo se acepta Excel (.xlsx). Usa el archivo exportado."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            result = import_shipping_lines_workbook(
+                upload,
+                actor=request.user,
+                request=request,
+            )
+        except ShippingLineImportError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(result)
