@@ -5,17 +5,24 @@ ITM seasons:
 - Winter: 1 Nov → 30 Apr (next calendar year)
 
 Rolling blockcito model (Herman / Fernanda):
-- B0: current 6-month block (contains today)
-- B1–B3: open booking (all carriers, no LTA preference)
-- B4+: LTA zone (LTA holders only; slot preference applies)
+- Current period: 2 blocks (the block containing today + the previous one)
+- Next 3 blocks: open booking (all carriers, no LTA preference)
+- Following blocks: LTA zone (LTA holders only; slot preference applies)
+
+Example if today is in Summer 2026:
+- Current: Winter 2025/2026 + Summer 2026
+- Open: Winter 2026/2027 … (3 blocks)
+- LTA: from the block after open onward
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from enum import Enum
 
+# Período actual spans this many consecutive 6-month blocks ending at today's block.
+CURRENT_BLOCKS = 2
 OPEN_BLOCKS_AFTER_CURRENT = 3
 DEFAULT_LTA_BLOCKS = 4
 
@@ -79,6 +86,26 @@ def next_block(
     return SeasonKind.SUMMER, date(y, 5, 1), date(y, 10, 31)
 
 
+def previous_block(
+    season: SeasonKind,
+    block_start: date,
+) -> tuple[SeasonKind, date, date]:
+    """Block immediately before the one starting at ``block_start``."""
+    if season == SeasonKind.WINTER:
+        y = block_start.year
+        return SeasonKind.SUMMER, date(y, 5, 1), date(y, 10, 31)
+    y = block_start.year
+    return SeasonKind.WINTER, date(y - 1, 11, 1), date(y, 4, 30)
+
+
+def window_start_block(today: date) -> tuple[SeasonKind, date, date]:
+    """First block of the current period (``CURRENT_BLOCKS`` wide, ending at today)."""
+    season, start, end = block_containing(today)
+    for _ in range(max(0, CURRENT_BLOCKS - 1)):
+        season, start, end = previous_block(season, start)
+    return season, start, end
+
+
 def season_block_label(season: SeasonKind, block_start: date) -> str:
     if season == SeasonKind.SUMMER:
         return f"Summer {block_start.year}"
@@ -86,29 +113,37 @@ def season_block_label(season: SeasonKind, block_start: date) -> str:
     return f"Winter {y}/{y + 1}"
 
 
+def first_open_block_index() -> int:
+    return CURRENT_BLOCKS
+
+
+def first_lta_block_index(*, open_blocks: int = OPEN_BLOCKS_AFTER_CURRENT) -> int:
+    return CURRENT_BLOCKS + open_blocks
+
+
 def zone_for_block_index(
     index: int,
     *,
     lta_blocks: int = DEFAULT_LTA_BLOCKS,
+    open_blocks: int = OPEN_BLOCKS_AFTER_CURRENT,
 ) -> BookingWindowZone:
     if index < 0:
         return BookingWindowZone.CURRENT
-    if index == 0:
+    if index < CURRENT_BLOCKS:
         return BookingWindowZone.CURRENT
-    if index <= OPEN_BLOCKS_AFTER_CURRENT:
+    if index < CURRENT_BLOCKS + open_blocks:
         return BookingWindowZone.GENERAL
-    if index <= OPEN_BLOCKS_AFTER_CURRENT + lta_blocks:
+    if index < CURRENT_BLOCKS + open_blocks + lta_blocks:
         return BookingWindowZone.LTA_COVERED
     return BookingWindowZone.BEYOND
 
 
 def block_index_for_date(call_date: date, today: date | None = None) -> int:
-    """Block index relative to today's block (0 = current). Returns 999 if far future."""
+    """Block index relative to the current-period window start (0 = first current)."""
     today = today or date.today()
-    _, start, end = block_containing(today)
+    season, start, end = window_start_block(today)
     if call_date < start:
         return -1
-    season, start, end = block_containing(today)
     idx = 0
     while idx <= 120:
         if start <= call_date <= end:
@@ -127,14 +162,21 @@ def list_season_blocks(
     *,
     count: int | None = None,
     lta_blocks: int = DEFAULT_LTA_BLOCKS,
+    open_blocks: int = OPEN_BLOCKS_AFTER_CURRENT,
 ) -> list[SeasonBlock]:
-    """Enumerate blocks starting at today's block."""
+    """Enumerate blocks starting at the first current-period block."""
     today = today or date.today()
-    total = count if count is not None else OPEN_BLOCKS_AFTER_CURRENT + lta_blocks + 1
-    season, start, end = block_containing(today)
+    total = (
+        count
+        if count is not None
+        else CURRENT_BLOCKS + open_blocks + lta_blocks
+    )
+    season, start, end = window_start_block(today)
     blocks: list[SeasonBlock] = []
     for idx in range(total):
-        zone = zone_for_block_index(idx, lta_blocks=lta_blocks)
+        zone = zone_for_block_index(
+            idx, lta_blocks=lta_blocks, open_blocks=open_blocks
+        )
         blocks.append(
             SeasonBlock(
                 index=idx,
@@ -156,17 +198,19 @@ def compute_seasonal_windows(
     lta_blocks: int = DEFAULT_LTA_BLOCKS,
 ) -> SeasonalWindows:
     today = today or date.today()
-    block_count = open_blocks + lta_blocks + 1
-    blocks = list_season_blocks(today, count=block_count, lta_blocks=lta_blocks)
-    current = blocks[0]
-    open_last = blocks[open_blocks]
-    lta_first = blocks[open_blocks + 1]
-    lta_last = blocks[open_blocks + lta_blocks]
+    block_count = CURRENT_BLOCKS + open_blocks + lta_blocks
+    blocks = list_season_blocks(
+        today, count=block_count, lta_blocks=lta_blocks, open_blocks=open_blocks
+    )
+    current_last = blocks[CURRENT_BLOCKS - 1]
+    open_last = blocks[CURRENT_BLOCKS + open_blocks - 1]
+    lta_first = blocks[CURRENT_BLOCKS + open_blocks]
+    lta_last = blocks[CURRENT_BLOCKS + open_blocks + lta_blocks - 1]
     return SeasonalWindows(
         reference_date=today,
-        current_from=current.date_from,
-        current_to=current.date_to,
-        general_from=blocks[1].date_from,
+        current_from=blocks[0].date_from,
+        current_to=current_last.date_to,
+        general_from=blocks[CURRENT_BLOCKS].date_from,
         general_to=open_last.date_to,
         lta_from=lta_first.date_from,
         lta_to=lta_last.date_to,
@@ -186,6 +230,7 @@ def windows_as_dict(today: date | None = None) -> dict:
         "general_to": windows.general_to.isoformat(),
         "lta_from": windows.lta_from.isoformat(),
         "lta_to": windows.lta_to.isoformat(),
+        "current_blocks": CURRENT_BLOCKS,
         "open_blocks": OPEN_BLOCKS_AFTER_CURRENT,
         "blocks": [
             {
@@ -232,7 +277,7 @@ def summer_bounds(summer_year: int) -> tuple[date, date]:
 
 
 def current_period_bounds(today: date | None = None) -> tuple[date, date]:
-    """Current 6-month block (B0)."""
+    """Current period span (``CURRENT_BLOCKS`` consecutive seasons)."""
     today = today or date.today()
-    _, start, end = block_containing(today)
-    return start, end
+    windows = compute_seasonal_windows(today)
+    return windows.current_from, windows.current_to

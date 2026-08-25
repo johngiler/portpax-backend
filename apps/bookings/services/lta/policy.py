@@ -6,11 +6,11 @@ from datetime import date
 
 from apps.bookings.models import LongTermAgreement
 from apps.bookings.services.lta.windows import (
-    OPEN_BLOCKS_AFTER_CURRENT,
-    SeasonKind,
     block_containing,
     block_index_for_date,
+    first_lta_block_index,
     season_for_date,
+    SeasonKind,
 )
 
 
@@ -22,15 +22,16 @@ def agreement_allows_horizon(
     """
     Whether ``call_date`` falls within this agreement's bookable blockcito horizon.
 
-    Current + open blocks (B0–B3) are always allowed when other match rules pass.
+    Current + open blocks are always allowed when other match rules pass.
     In the LTA zone, depth and booking_policy apply.
     """
     today = today or date.today()
     idx = block_index_for_date(call_date, today)
-    if idx <= OPEN_BLOCKS_AFTER_CURRENT:
+    first_lta = first_lta_block_index()
+    if idx < first_lta:
         return True
 
-    lta_slot = idx - OPEN_BLOCKS_AFTER_CURRENT - 1
+    lta_slot = idx - first_lta
     depth = max(1, int(agreement.lta_depth_blocks or 2))
     if lta_slot >= depth:
         return False
@@ -49,16 +50,16 @@ def _rci_staggered_allows(
     block_idx: int,
 ) -> bool:
     """RCI-style: stabilization year then Summer↔Winter alternation in LTA zone."""
-    if block_idx <= OPEN_BLOCKS_AFTER_CURRENT:
+    first_lta = first_lta_block_index()
+    if block_idx < first_lta:
         return True
 
     call_season = season_for_date(call_date)
     today_season = season_for_date(today)
 
     if _in_stabilization_year(agreement, today):
-        # First year: may take up to 3 consecutive LTA blocks (B4–B6).
-        first_lta_idx = OPEN_BLOCKS_AFTER_CURRENT + 1
-        return first_lta_idx <= block_idx <= first_lta_idx + 2
+        # First year: may take up to 3 consecutive LTA blocks.
+        return first_lta <= block_idx <= first_lta + 2
 
     if today_season == SeasonKind.SUMMER:
         return call_season == SeasonKind.WINTER

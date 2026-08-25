@@ -743,8 +743,8 @@ def validate_lta(
     Ports without LTAs are open booking for all dates (no LTA horizon/slot rules).
 
     Windows (6-month blockcitos), when LTAs exist for the port:
-    - B0 current + B1–B3 open: open market (any carrier).
-    - B4+ LTA zone: only matching LTA holders; foreign weekday+position may be reserved.
+    - Current period (2 blocks) + next 3 open: open market (any carrier).
+    - Following blocks = LTA zone: only matching LTA holders; foreign weekday+position may be reserved.
     - Beyond global LTA horizon: blocked.
 
     Cadence (interval_days) is enforced via agreement matching.
