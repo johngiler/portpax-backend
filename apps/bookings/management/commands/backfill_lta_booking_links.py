@@ -8,9 +8,9 @@ importing historical bookings or creating LTAs late.
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db.models import Count
+from django.db.models import Count, Q
 
-from apps.bookings.models import LongTermAgreement
+from apps.bookings.models import BookingStatus, LongTermAgreement
 from apps.bookings.services.lta.link_bookings import link_matching_bookings
 
 
@@ -94,7 +94,13 @@ class Command(BaseCommand):
         # Live counts after write (or current counts on dry-run).
         counts = (
             LongTermAgreement.objects.filter(id__in=[a.id for a in agreements])
-            .annotate(linked_bookings_count=Count("bookings", distinct=True))
+            .annotate(
+                linked_bookings_count=Count(
+                    "bookings",
+                    filter=~Q(bookings__status=BookingStatus.C),
+                    distinct=True,
+                )
+            )
             .order_by("code")
             .values_list("code", "linked_bookings_count")
         )

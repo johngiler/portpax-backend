@@ -118,12 +118,25 @@ def record_lta_audit(
         if not shipping_line_code:
             line = getattr(agreement, "shipping_line", None)
             shipping_line_code = getattr(line, "code", "") or ""
+    port = getattr(agreement, "port", None) if agreement is not None else None
+    line = getattr(agreement, "shipping_line", None) if agreement is not None else None
+    port_name = getattr(port, "name", "") or ""
+    shipping_line_name = getattr(line, "name", "") or ""
     entity_payload = entity or {
         "code": code,
         "name": name,
         "port_code": port_code,
+        "port_name": port_name,
         "shipping_line_code": shipping_line_code,
+        "shipping_line_name": shipping_line_name,
     }
+    if "port_name" not in entity_payload and port_name:
+        entity_payload = {**entity_payload, "port_name": port_name}
+    if "shipping_line_name" not in entity_payload and shipping_line_name:
+        entity_payload = {
+            **entity_payload,
+            "shipping_line_name": shipping_line_name,
+        }
     return LtaAuditEntry.objects.create(
         agreement=agreement,
         agreement_code=code,

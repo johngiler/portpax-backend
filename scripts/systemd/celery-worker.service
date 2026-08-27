@@ -1,0 +1,17 @@
+[Unit]
+Description=PortPax Celery worker (LTA link jobs, later mail, …)
+After=network.target redis-server.service postgresql.service
+Wants=redis-server.service
+
+[Service]
+User=git
+Group=git
+WorkingDirectory=/home/git/backend
+Environment="PATH=/home/git/backend/.venv/bin"
+# Loads broker from backend/.env via local_settings + dotenv
+ExecStart=/home/git/backend/.venv/bin/celery -A config worker -l info --concurrency=2
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

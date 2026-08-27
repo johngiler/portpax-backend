@@ -118,14 +118,23 @@ def update_booking_status(
             booking.long_term_agreement = agreement
 
     old_status = booking.status
+    cleared_lta_code: str | None = None
     booking.status = new_status
 
     update_fields = ["status", "updated_at"]
     if new_status in (BookingStatus.LTA, BookingStatus.CL) and booking.long_term_agreement_id:
         update_fields.append("long_term_agreement")
-    if new_status == BookingStatus.C and cancellation_reason:
-        booking.cancellation_reason = cancellation_reason
-        update_fields.append("cancellation_reason")
+    if new_status == BookingStatus.C:
+        if booking.long_term_agreement_id:
+            old_lta = getattr(booking, "long_term_agreement", None)
+            cleared_lta_code = (
+                getattr(old_lta, "code", None) or str(booking.long_term_agreement_id)
+            )
+            booking.long_term_agreement = None
+            update_fields.append("long_term_agreement")
+        if cancellation_reason:
+            booking.cancellation_reason = cancellation_reason
+            update_fields.append("cancellation_reason")
     if cancellation_evidence:
         booking.cancellation_evidence = cancellation_evidence
         update_fields.append("cancellation_evidence")
@@ -149,11 +158,17 @@ def update_booking_status(
 
     refresh_related_booking_conflicts(booking, user=user, request=request)
 
+    status_changes: dict = {"status": {"from": old_status, "to": new_status}}
+    if cleared_lta_code is not None:
+        status_changes["long_term_agreement"] = {
+            "from": cleared_lta_code,
+            "to": None,
+        }
     record_booking_audit(
         booking,
         action="status_change",
         summary=f"Estado: {dict(BookingStatus.choices).get(new_status, new_status)}",
-        changes={"status": {"from": old_status, "to": new_status}},
+        changes=status_changes,
         user=user,
         request=request,
     )

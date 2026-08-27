@@ -10,6 +10,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 
 from apps.audit.models import UserAuditEntry
 from apps.audit.utils.activity_actor import actor_options_from_ids, parse_actor_param
+from apps.audit.utils.friendly_changes import enrich_user_audit_changes
 
 CRUD_ACTIONS = ("created", "updated", "deleted")
 LOGIN_ACTIONS = ("login",)
@@ -63,7 +64,10 @@ def _item(entry: UserAuditEntry) -> dict[str, Any]:
         "subject_display": entry.subject_display or entry.subject_username,
         "subject_role": entry.subject_role or None,
         "subject_is_active": entry.subject_is_active,
-        "changes": entry.changes or {},
+        "changes": enrich_user_audit_changes(
+            entry.changes if isinstance(entry.changes, dict) else {}
+        )
+        or {},
     }
 
 

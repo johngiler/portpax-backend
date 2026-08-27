@@ -5,6 +5,8 @@ djangorestframework-simplejwt
 drf-spectacular
 djoser
 gunicorn
+celery[redis]
+redis
 psycopg[binary]
 PyJWT
 python-dotenv

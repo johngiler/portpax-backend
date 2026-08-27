@@ -34,7 +34,14 @@ def snapshot_user(user) -> dict[str, Any]:
         role = user.profile.role
     except UserProfile.DoesNotExist:
         role = ""
-    port_ids = sorted(user.port_access.values_list("port_id", flat=True))
+    ports = list(
+        user.port_access.select_related("port").order_by("port__name", "port_id")
+    )
+    port_ids = [row.port_id for row in ports]
+    port_labels = [
+        ((row.port.name if row.port_id else None) or (row.port.code if row.port else None) or f"#{row.port_id}")
+        for row in ports
+    ]
     return {
         "id": user.pk,
         "username": user.get_username(),
@@ -44,7 +51,9 @@ def snapshot_user(user) -> dict[str, Any]:
         "last_name": user.last_name or "",
         "is_active": bool(user.is_active),
         "role": role or "",
+        "role_label": role_label(role),
         "port_ids": port_ids,
+        "port_labels": port_labels,
     }
 
 
@@ -67,12 +76,29 @@ def diff_user_snapshots(
         "first_name",
         "last_name",
         "is_active",
-        "role",
-        "port_ids",
     ):
         delta = _field_change(before.get(key), after.get(key))
         if delta is not None:
             changes[key] = delta
+
+    if before.get("role") != after.get("role"):
+        changes["role"] = {
+            "from": before.get("role") or "",
+            "to": after.get("role") or "",
+            "from_label": before.get("role_label") or role_label(before.get("role")),
+            "to_label": after.get("role_label") or role_label(after.get("role")),
+        }
+
+    before_ports = before.get("port_ids") or []
+    after_ports = after.get("port_ids") or []
+    if before_ports != after_ports:
+        changes["port_ids"] = {
+            "from": before_ports,
+            "to": after_ports,
+            "from_labels": before.get("port_labels") or [],
+            "to_labels": after.get("port_labels") or [],
+        }
+
     if password_changed:
         changes["password"] = {"changed": True}
     return changes

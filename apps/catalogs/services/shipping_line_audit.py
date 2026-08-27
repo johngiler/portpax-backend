@@ -30,12 +30,22 @@ def diff_shipping_line_snapshots(
     for key in (
         "code",
         "name",
-        "group_id",
-        "group_name",
         "is_active",
         "has_logo",
     ):
         delta = _field_change(before.get(key), after.get(key))
         if delta is not None:
             changes[key] = delta
+
+    if before.get("group_id") != after.get("group_id"):
+        changes["group_id"] = {
+            "from": before.get("group_id"),
+            "to": after.get("group_id"),
+            "from_name": before.get("group_name") or "",
+            "to_name": after.get("group_name") or "",
+        }
+    elif before.get("group_name") != after.get("group_name"):
+        delta = _field_change(before.get("group_name"), after.get("group_name"))
+        if delta is not None:
+            changes["group_name"] = delta
     return changes

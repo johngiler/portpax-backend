@@ -73,4 +73,19 @@ else
   echo "systemctl start gunicorn.service"
 fi
 
+# Celery worker — optional restart (default: no)
+read -r -p "[deploy] ¿Reiniciar celery? [y/N] " RESTART_CELERY
+if [[ "${RESTART_CELERY}" =~ ^[yY]$ ]]; then
+  echo "[deploy] Restarting celery-worker.service..."
+  if ssh "$REMOTE_HOST" "systemctl is-enabled celery-worker.service >/dev/null 2>&1"; then
+    ssh "$REMOTE_HOST" "systemctl restart celery-worker.service"
+  else
+    echo "[deploy] WARN: celery-worker.service not installed. On server run:"
+    echo "cp scripts/systemd/celery-worker.service /etc/systemd/system/celery-worker.service"
+    echo "systemctl daemon-reload && systemctl enable --now celery-worker.service"
+  fi
+else
+  echo "[deploy] Celery worker left running (no restart)."
+fi
+
 echo "[deploy] Done. https://api.portpax.com/api/health/"

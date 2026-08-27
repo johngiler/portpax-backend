@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.audit.services.record import record_booking_audit
@@ -39,14 +40,17 @@ def unlink_agreement_bookings(
     *,
     user=None,
     dry_run: bool = False,
+    booking_ids: set[int] | None = None,
 ) -> dict:
-    """Clear long_term_agreement FK on all bookings linked to this agreement."""
+    """Clear long_term_agreement FK on linked bookings (all or a subset)."""
     qs = Booking.objects.filter(long_term_agreement_id=agreement.pk).select_related(
         "vessel",
         "position",
         "shipping_line",
         "port",
     )
+    if booking_ids is not None:
+        qs = qs.filter(pk__in=booking_ids)
     bookings = list(qs)
     if not bookings:
         return {
@@ -90,11 +94,46 @@ def unlink_agreement_bookings(
     }
 
 
+def _desired_booking_ids(agreement: LongTermAgreement) -> set[int]:
+    """Bookings that should be linked to this agreement under current rules."""
+    if not agreement.is_active:
+        return set()
+
+    candidates = (
+        Booking.objects.filter(
+            port_id=agreement.port_id,
+            shipping_line_id=agreement.shipping_line_id,
+        )
+        .filter(
+            Q(long_term_agreement__isnull=True)
+            | Q(long_term_agreement_id=agreement.pk)
+        )
+        .exclude(status=BookingStatus.C)
+        .select_related("vessel", "position", "shipping_line", "port")
+    )
+
+    desired: set[int] = set()
+    for booking in candidates:
+        if not agreement_covers_booking(agreement, booking):
+            continue
+        best = find_best_matching_agreement(
+            port_id=booking.port_id,
+            shipping_line_id=booking.shipping_line_id,
+            vessel=booking.vessel,
+            call_date=booking.call_date,
+            position=booking.position,
+        )
+        if best is not None and best.pk == agreement.pk:
+            desired.add(booking.pk)
+    return desired
+
+
 def link_matching_bookings(
     agreement: LongTermAgreement,
     *,
     user=None,
     dry_run: bool = False,
+    booking_ids: set[int] | None = None,
 ) -> dict:
     """
     Assign this LTA to existing bookings that match and have no LTA yet.
@@ -120,6 +159,8 @@ def link_matching_bookings(
         .exclude(status=BookingStatus.C)
         .select_related("vessel", "position", "shipping_line", "port")
     )
+    if booking_ids is not None:
+        candidates = candidates.filter(pk__in=booking_ids)
 
     to_update: list[Booking] = []
     skipped = 0
@@ -174,14 +215,36 @@ def resync_agreement_bookings(
     dry_run: bool = False,
 ) -> dict:
     """
-    Unlink all bookings on this agreement, then re-link matches under current rules.
+    Set-diff rematch: unlink = antes − deseado, link = deseado − antes.
+    Intersection (keep) is left untouched.
     """
-    unlinked = unlink_agreement_bookings(agreement, user=user, dry_run=dry_run)
-    linked = link_matching_bookings(agreement, user=user, dry_run=dry_run)
+    antes = set(
+        Booking.objects.filter(long_term_agreement_id=agreement.pk).values_list(
+            "pk",
+            flat=True,
+        )
+    )
+    deseado = _desired_booking_ids(agreement)
+    to_unlink = antes - deseado
+    to_link = deseado - antes
+
+    unlinked = unlink_agreement_bookings(
+        agreement,
+        user=user,
+        dry_run=dry_run,
+        booking_ids=to_unlink,
+    )
+    linked = link_matching_bookings(
+        agreement,
+        user=user,
+        dry_run=dry_run,
+        booking_ids=to_link,
+    )
     return {
         "unlinked": int(unlinked.get("unlinked") or 0),
         "linked": int(linked.get("linked") or 0),
         "skipped": int(linked.get("skipped") or 0),
+        "kept": len(antes & deseado),
         "dry_run": dry_run,
         "agreement_code": agreement.code,
         "detail": linked.get("detail"),

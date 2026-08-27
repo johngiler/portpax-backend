@@ -10,6 +10,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 
 from apps.audit.models import ShippingLineAuditEntry
 from apps.audit.utils.activity_actor import actor_options_from_ids, parse_actor_param
+from apps.audit.utils.friendly_changes import enrich_shipping_line_audit_changes
 
 CRUD_ACTIONS = ("created", "updated", "deleted")
 
@@ -39,7 +40,12 @@ def _parse_bound(value: str | None, *, end_of_day: bool = False):
 
 
 def _item(entry: ShippingLineAuditEntry) -> dict[str, Any]:
-    changes = entry.changes or {}
+    changes = (
+        enrich_shipping_line_audit_changes(
+            entry.changes if isinstance(entry.changes, dict) else {}
+        )
+        or {}
+    )
     entity = changes.get("entity") if isinstance(changes, dict) else None
     return {
         "kind": "crud",

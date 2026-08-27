@@ -1,4 +1,4 @@
-from django.db.models import Count
+from django.db.models import Count, Q
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -7,13 +7,8 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import DenyViewerWrites, user_port_ids
 from apps.audit.services.record import record_lta_audit
-from apps.bookings.models import LongTermAgreement
+from apps.bookings.models import BookingStatus, LongTermAgreement
 from apps.bookings.serializers.long_term_agreement import LongTermAgreementSerializer
-from apps.bookings.services.lta.link_bookings import (
-    link_matching_bookings,
-    resync_agreement_bookings,
-    unlink_agreement_bookings,
-)
 from apps.bookings.services.lta.windows import windows_as_dict
 from apps.bookings.services.lta.lta_activity import (
     build_lta_activity,
@@ -23,7 +18,19 @@ from apps.bookings.services.lta.lta_audit import (
     diff_lta_snapshots,
     snapshot_lta,
 )
+from apps.bookings.tasks_lta import (
+    lta_destroy_agreement,
+    lta_link_matching,
+    lta_resync_agreement,
+)
 from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
+
+
+def _enqueue_user_id(request) -> int | None:
+    user = getattr(request, "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return None
+    return user.pk
 
 
 class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSet):
@@ -50,7 +57,11 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
 
     def get_queryset(self):
         qs = super().get_queryset().annotate(
-            linked_bookings_count=Count("bookings", distinct=True),
+            linked_bookings_count=Count(
+                "bookings",
+                filter=~Q(bookings__status=BookingStatus.C),
+                distinct=True,
+            ),
         )
         port_id = self.request.query_params.get("port")
         if port_id:
@@ -71,14 +82,19 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
             .get(pk=agreement.pk)
         )
         snap = snapshot_lta(agreement)
-        link_result = link_matching_bookings(agreement, user=self.request.user)
+        async_result = lta_link_matching.delay(
+            agreement.pk,
+            _enqueue_user_id(self.request),
+        )
         record_lta_audit(
             action="created",
-            summary=f"Creó el acuerdo {snap['code']}",
+            summary=f"Creó el acuerdo {snap['code']} (vinculación en cola)",
             agreement=agreement,
             changes={
                 "created": snap,
-                "linked_bookings": int(link_result.get("linked") or 0),
+                "job_status": "queued",
+                "job_kind": "link",
+                "task_id": async_result.id,
             },
             actor=self.request.user,
             request=self.request,
@@ -95,13 +111,16 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
         )
         after = snapshot_lta(agreement)
         changes = diff_lta_snapshots(before, after)
-        # Unlink current FKs, then re-link under the saved rules.
-        sync = resync_agreement_bookings(agreement, user=self.request.user)
-        changes["unlinked_bookings"] = int(sync.get("unlinked") or 0)
-        changes["linked_bookings"] = int(sync.get("linked") or 0)
+        async_result = lta_resync_agreement.delay(
+            agreement.pk,
+            _enqueue_user_id(self.request),
+        )
+        changes["job_status"] = "queued"
+        changes["job_kind"] = "resync"
+        changes["task_id"] = async_result.id
         record_lta_audit(
             action="updated",
-            summary=f"Modificó el acuerdo {after['code']}",
+            summary=f"Modificó el acuerdo {after['code']} (re-sincronización en cola)",
             agreement=agreement,
             changes=changes,
             actor=self.request.user,
@@ -111,16 +130,15 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        self.perform_destroy(instance)
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-    def perform_destroy(self, instance):
         snap = snapshot_lta(instance)
-        unlink = unlink_agreement_bookings(instance, user=self.request.user)
+        async_result = lta_destroy_agreement.delay(
+            instance.pk,
+            _enqueue_user_id(request),
+        )
         record_lta_audit(
             action="deleted",
-            summary=f"Eliminó el acuerdo {snap['code']}",
-            agreement=None,
+            summary=f"Eliminación en cola: {snap['code']}",
+            agreement=instance,
             agreement_code=snap["code"],
             agreement_name=snap["name"],
             port_id=snap.get("port_id"),
@@ -128,13 +146,22 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
             shipping_line_code=snap.get("shipping_line_code") or "",
             changes={
                 "deleted": snap,
-                "unlinked_bookings": int(unlink.get("unlinked") or 0),
+                "job_status": "queued",
+                "job_kind": "destroy",
+                "task_id": async_result.id,
             },
-            actor=self.request.user,
-            request=self.request,
+            actor=request.user,
+            request=request,
             entity=snap,
         )
-        instance.delete()
+        return Response(
+            {
+                "detail": "Eliminación en cola; la desvinculación corre en segundo plano.",
+                "task_id": async_result.id,
+                "agreement_id": instance.pk,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @action(detail=False, methods=["get"], url_path="activity")
     def activity(self, request):
@@ -175,25 +202,31 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
 
     @action(detail=True, methods=["post"], url_path="link-bookings")
     def link_bookings(self, request, pk=None):
-        """Link existing unmatched bookings that this LTA covers."""
+        """Enqueue linking of unmatched bookings that this LTA covers."""
         agreement = self.get_object()
-        result = link_matching_bookings(agreement, user=request.user)
-        linked = int(result.get("linked") or 0)
-        skipped = int(result.get("skipped") or 0)
+        async_result = lta_link_matching.delay(
+            agreement.pk,
+            _enqueue_user_id(request),
+        )
         record_lta_audit(
             action="link_bookings",
-            summary=(
-                f"Vinculó reservas al acuerdo {agreement.code}: "
-                f"{linked} vinculadas, {skipped} omitidas"
-            ),
+            summary=f"Vinculación en cola para {agreement.code}",
             agreement=agreement,
             changes={
-                "linked": linked,
-                "skipped": skipped,
-                "agreement_code": result.get("agreement_code") or agreement.code,
+                "job_status": "queued",
+                "job_kind": "link",
+                "task_id": async_result.id,
+                "agreement_code": agreement.code,
             },
             actor=request.user,
             request=request,
             entity=snapshot_lta(agreement),
         )
-        return Response(result, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "detail": "Vinculación en cola.",
+                "task_id": async_result.id,
+                "agreement_code": agreement.code,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
