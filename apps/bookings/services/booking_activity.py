@@ -22,6 +22,19 @@ SINGLE_ACTIONS = (
     "lta_unlinked",
 )
 
+# Structural kinds + creation-origin filters (Tipo dropdown).
+ACTIVITY_KINDS = (
+    "all",
+    "single",
+    "bulk",
+    "wizard",
+    "mass_import",
+    "berthing_import",
+    "lta_generate",
+)
+
+MASS_IMPORT_SOURCES = ("mass_import", "import_file", "import_paste")
+
 
 def _user_display(user) -> str | None:
     if user is None:
@@ -100,12 +113,18 @@ def _audit_queryset(
     date_to,
     actor_system: bool = False,
     actor_user_id: int | None = None,
+    source: str | None = None,
 ):
     qs = (
         BookingAuditEntry.objects.filter(action__in=SINGLE_ACTIONS)
         .select_related("booking", "user")
         .exclude(changes__has_key="import_batch_id")
     )
+    if source:
+        if source == "mass_import":
+            qs = qs.filter(changes__source__in=MASS_IMPORT_SOURCES)
+        else:
+            qs = qs.filter(changes__source=source)
     if allowed_ports is not None:
         qs = qs.filter(
             Q(port_id__in=allowed_ports) | Q(booking__port_id__in=allowed_ports)
@@ -190,7 +209,7 @@ def build_booking_activity(
     page_size: int = 20,
 ) -> dict[str, Any]:
     kind = (kind or "all").lower()
-    if kind not in ("all", "single", "bulk"):
+    if kind not in ACTIVITY_KINDS:
         kind = "all"
 
     page = max(1, page)
@@ -200,18 +219,24 @@ def build_booking_activity(
     actor_system, actor_user_id = parse_actor_param(actor)
 
     items: list[dict[str, Any]] = []
+    include_single = kind in ("all", "single", "wizard", "berthing_import", "lta_generate")
+    include_bulk = kind in ("all", "bulk", "mass_import")
+    source_filter = (
+        kind if kind in ("wizard", "berthing_import", "lta_generate") else None
+    )
 
-    if kind in ("all", "single"):
+    if include_single:
         for entry in _audit_queryset(
             allowed_ports=allowed_ports,
             date_from=bound_from,
             date_to=bound_to,
             actor_system=actor_system,
             actor_user_id=actor_user_id,
+            source=source_filter,
         )[:500]:
             items.append(_single_item(entry))
 
-    if kind in ("all", "bulk"):
+    if include_bulk:
         for batch in _batch_queryset(
             allowed_ports=allowed_ports,
             user=user,

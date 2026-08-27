@@ -308,7 +308,10 @@ def create_from_resolved_rows(
     failures: list[dict[str, Any]] = []
     created_booking_ids: list[int] = []
     retry_rows: list[dict[str, Any]] = []
-    audit_changes = {"import_batch_id": batch.id}
+    audit_changes = {
+        "import_batch_id": batch.id,
+        "source": "mass_import",
+    }
 
     for row in deferred:
         if isinstance(row, dict):

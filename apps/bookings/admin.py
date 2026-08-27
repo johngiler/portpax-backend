@@ -49,14 +49,13 @@ class LongTermAgreementAdmin(admin.ModelAdmin):
         "port",
         "shipping_line",
         "all_vessels",
-        "advance_months_min",
-        "advance_months_max",
+        "bookings_generated",
         "is_active",
     ]
-    list_filter = ["is_active", "port", "shipping_line", "all_vessels"]
+    list_filter = ["is_active", "bookings_generated", "port", "shipping_line", "all_vessels"]
     search_fields = ["code", "name", "port__code", "shipping_line__code"]
     filter_horizontal = ["vessels", "positions"]
-    readonly_fields = ["created_at", "updated_at"]
+    readonly_fields = ["created_at", "updated_at", "bookings_generated"]
     fields = [
         "code",
         "name",
@@ -75,6 +74,7 @@ class LongTermAgreementAdmin(admin.ModelAdmin):
         "valid_until",
         "contract_file",
         "is_active",
+        "bookings_generated",
         "notes",
         "created_at",
         "updated_at",

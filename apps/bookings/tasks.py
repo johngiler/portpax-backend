@@ -2,6 +2,8 @@
 
 from apps.bookings.tasks_lta import (  # noqa: F401
     lta_destroy_agreement,
+    lta_generate_bookings,
     lta_link_matching,
+    lta_regenerate_bookings,
     lta_resync_agreement,
 )

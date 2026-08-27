@@ -20,8 +20,14 @@ from apps.bookings.services.lta.lta_audit import (
 )
 from apps.bookings.tasks_lta import (
     lta_destroy_agreement,
+    lta_generate_bookings,
     lta_link_matching,
+    lta_regenerate_bookings,
     lta_resync_agreement,
+)
+from apps.bookings.services.lta.generate_bookings import (
+    LtaGenerateError,
+    validate_generate_prerequisites,
 )
 from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
 
@@ -230,3 +236,47 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
+    def _enqueue_generate(self, request, *, regenerate: bool):
+        agreement = self.get_object()
+        try:
+            validate_generate_prerequisites(agreement)
+        except LtaGenerateError as exc:
+            return Response({"detail": exc.message}, status=status.HTTP_400_BAD_REQUEST)
+
+        task = lta_regenerate_bookings if regenerate else lta_generate_bookings
+        job_kind = "regenerate" if regenerate else "generate"
+        label = "Regeneración" if regenerate else "Generación"
+        async_result = task.delay(agreement.pk, _enqueue_user_id(request))
+        record_lta_audit(
+            action="generate_bookings",
+            summary=f"{label} en cola para {agreement.code}",
+            agreement=agreement,
+            changes={
+                "job_status": "queued",
+                "job_kind": job_kind,
+                "task_id": async_result.id,
+                "agreement_code": agreement.code,
+            },
+            actor=request.user,
+            request=request,
+            entity=snapshot_lta(agreement),
+        )
+        return Response(
+            {
+                "detail": f"{label} en cola; corre en segundo plano.",
+                "task_id": async_result.id,
+                "agreement_code": agreement.code,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=True, methods=["post"], url_path="generate-bookings")
+    def generate_bookings(self, request, pk=None):
+        """Enqueue materialization of LTA-status bookings (A1 dates × positions)."""
+        return self._enqueue_generate(request, regenerate=False)
+
+    @action(detail=True, methods=["post"], url_path="regenerate-bookings")
+    def regenerate_bookings(self, request, pk=None):
+        """Enqueue resync set-diff + materialize missing LTA slots."""
+        return self._enqueue_generate(request, regenerate=True)

@@ -74,6 +74,7 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             "valid_from",
             "valid_until",
             "is_active",
+            "bookings_generated",
             "notes",
             "linked_bookings_count",
             "contract_file",
@@ -90,6 +91,7 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             "contract_file_url",
             "contract_file_name",
             "linked_bookings_count",
+            "bookings_generated",
         ]
         extra_kwargs = {
             "contract_file": {"write_only": True},

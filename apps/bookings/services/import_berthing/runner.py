@@ -9,6 +9,7 @@ from typing import Any
 
 from django.db import transaction
 
+from apps.audit.services.record import record_booking_audit
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.booking.code import resolve_unique_booking_code
 from apps.bookings.services.confirmation_pdf import generate_confirmation_pdfs
@@ -20,6 +21,8 @@ from apps.bookings.services.import_berthing.match import (
     resolve_vessel,
 )
 from apps.bookings.services.import_berthing.parse import parse_berthing_folder
+
+BERTHING_IMPORT_SOURCE = "berthing_import"
 
 
 def _parse_time(value: str | None) -> time | None:
@@ -139,6 +142,13 @@ def import_berthing_rows(
                     setattr(existing, key, value)
                 existing.save()
                 updated += 1
+                record_booking_audit(
+                    existing,
+                    action="operational_update",
+                    summary="Reserva actualizada desde BERTHING PAPERS",
+                    changes={"source": BERTHING_IMPORT_SOURCE},
+                    user=None,
+                )
             else:
                 code = resolve_unique_booking_code(
                     port,
@@ -148,7 +158,7 @@ def import_berthing_rows(
                     existing_codes,
                 )
                 existing_codes.add(code)
-                Booking.objects.create(
+                booking = Booking.objects.create(
                     port=port,
                     vessel=vessel,
                     call_date=call_date,
@@ -156,6 +166,13 @@ def import_berthing_rows(
                     **defaults,
                 )
                 created += 1
+                record_booking_audit(
+                    booking,
+                    action="created",
+                    summary="Reserva importada desde BERTHING PAPERS",
+                    changes={"source": BERTHING_IMPORT_SOURCE},
+                    user=None,
+                )
 
     if dry_run:
         # Resolve matches without writing bookings / catalog creates still happen

@@ -267,11 +267,13 @@ def create_booking_batch(
             save_confirmation_pdf(booking)
             booking.save(update_fields=["confirmation_pdf", "updated_at"])
         refresh_related_booking_conflicts(booking, user=created_by)
+        changes = dict(audit_changes or {})
+        changes.setdefault("source", "wizard")
         record_booking_audit(
             booking,
             action="created",
             summary=summary,
-            changes=audit_changes,
+            changes=changes,
             user=created_by,
         )
 

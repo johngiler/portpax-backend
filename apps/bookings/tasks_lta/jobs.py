@@ -14,6 +14,11 @@ from apps.bookings.services.lta.link_bookings import (
     resync_agreement_bookings,
     unlink_agreement_bookings,
 )
+from apps.bookings.services.lta.generate_bookings import (
+    LtaGenerateError,
+    materialize_agreement_bookings,
+    regenerate_agreement_bookings,
+)
 from apps.bookings.services.lta.lta_audit import snapshot_lta
 
 logger = logging.getLogger(__name__)
@@ -261,5 +266,179 @@ def lta_destroy_agreement(self, agreement_id: int, user_id: int | None = None):
             },
             actor=actor,
             entity=snap,
+        )
+        raise
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(ConnectionError, TimeoutError, OSError),
+    retry_kwargs={"max_retries": 3},
+    retry_backoff=True,
+    name="bookings.lta_generate_bookings",
+)
+def lta_generate_bookings(self, agreement_id: int, user_id: int | None = None):
+    """Materialize missing LTA-status bookings for A1 dates × positions."""
+    task_id = self.request.id or ""
+    actor = _actor(user_id)
+    agreement = _load_agreement(agreement_id)
+    if agreement is None:
+        record_lta_audit(
+            action="generate_bookings",
+            summary="Generación LTA fallida: acuerdo no encontrado",
+            agreement=None,
+            changes={
+                "job_status": "failed",
+                "job_kind": "generate",
+                "task_id": task_id,
+                "error": f"Acuerdo id={agreement_id} no existe.",
+            },
+            actor=actor,
+        )
+        return {"ok": False, "error": "missing_agreement"}
+
+    try:
+        result = materialize_agreement_bookings(agreement, user=actor)
+        created = int(result.get("created") or 0)
+        skipped = int(result.get("skipped") or 0)
+        record_lta_audit(
+            action="generate_bookings",
+            summary=(
+                f"Generación LTA completada ({agreement.code}): "
+                f"{created} creadas, {skipped} ya existían"
+            ),
+            agreement=agreement,
+            changes={
+                "job_status": "success",
+                "job_kind": "generate",
+                "task_id": task_id,
+                "created": created,
+                "skipped": skipped,
+                "candidates": result.get("candidates"),
+                "dates": result.get("dates"),
+                "vessel_name": result.get("vessel_name"),
+                "agreement_code": agreement.code,
+            },
+            actor=actor,
+            entity=snapshot_lta(agreement),
+        )
+        return {"ok": True, **result}
+    except LtaGenerateError as exc:
+        record_lta_audit(
+            action="generate_bookings",
+            summary=f"Generación LTA bloqueada ({agreement.code})",
+            agreement=agreement,
+            changes={
+                "job_status": "failed",
+                "job_kind": "generate",
+                "task_id": task_id,
+                "error": exc.message,
+            },
+            actor=actor,
+            entity=snapshot_lta(agreement),
+        )
+        return {"ok": False, "error": exc.message}
+    except Exception as exc:
+        logger.exception("lta_generate_bookings failed agreement_id=%s", agreement_id)
+        record_lta_audit(
+            action="generate_bookings",
+            summary=f"Generación LTA fallida ({agreement.code})",
+            agreement=agreement,
+            changes={
+                "job_status": "failed",
+                "job_kind": "generate",
+                "task_id": task_id,
+                "error": str(exc)[:500],
+            },
+            actor=actor,
+            entity=snapshot_lta(agreement),
+        )
+        raise
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(ConnectionError, TimeoutError, OSError),
+    retry_kwargs={"max_retries": 3},
+    retry_backoff=True,
+    name="bookings.lta_regenerate_bookings",
+)
+def lta_regenerate_bookings(self, agreement_id: int, user_id: int | None = None):
+    """Resync FK set-diff then materialize missing LTA slots."""
+    task_id = self.request.id or ""
+    actor = _actor(user_id)
+    agreement = _load_agreement(agreement_id)
+    if agreement is None:
+        record_lta_audit(
+            action="generate_bookings",
+            summary="Regeneración LTA fallida: acuerdo no encontrado",
+            agreement=None,
+            changes={
+                "job_status": "failed",
+                "job_kind": "regenerate",
+                "task_id": task_id,
+                "error": f"Acuerdo id={agreement_id} no existe.",
+            },
+            actor=actor,
+        )
+        return {"ok": False, "error": "missing_agreement"}
+
+    try:
+        result = regenerate_agreement_bookings(agreement, user=actor)
+        created = int(result.get("created") or 0)
+        linked = int(result.get("linked") or 0)
+        unlinked = int(result.get("unlinked") or 0)
+        record_lta_audit(
+            action="generate_bookings",
+            summary=(
+                f"Regeneración LTA completada ({agreement.code}): "
+                f"+{created} creadas, {linked} vinculadas, −{unlinked} desvinculadas"
+            ),
+            agreement=agreement,
+            changes={
+                "job_status": "success",
+                "job_kind": "regenerate",
+                "task_id": task_id,
+                "created": created,
+                "linked": linked,
+                "unlinked": unlinked,
+                "kept": result.get("kept"),
+                "skipped": result.get("skipped"),
+                "vessel_name": result.get("vessel_name"),
+                "agreement_code": agreement.code,
+            },
+            actor=actor,
+            entity=snapshot_lta(agreement),
+        )
+        return {"ok": True, **result}
+    except LtaGenerateError as exc:
+        record_lta_audit(
+            action="generate_bookings",
+            summary=f"Regeneración LTA bloqueada ({agreement.code})",
+            agreement=agreement,
+            changes={
+                "job_status": "failed",
+                "job_kind": "regenerate",
+                "task_id": task_id,
+                "error": exc.message,
+            },
+            actor=actor,
+            entity=snapshot_lta(agreement),
+        )
+        return {"ok": False, "error": exc.message}
+    except Exception as exc:
+        logger.exception("lta_regenerate_bookings failed agreement_id=%s", agreement_id)
+        record_lta_audit(
+            action="generate_bookings",
+            summary=f"Regeneración LTA fallida ({agreement.code})",
+            agreement=agreement,
+            changes={
+                "job_status": "failed",
+                "job_kind": "regenerate",
+                "task_id": task_id,
+                "error": str(exc)[:500],
+            },
+            actor=actor,
+            entity=snapshot_lta(agreement),
         )
         raise

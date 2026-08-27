@@ -16,6 +16,8 @@ from apps.catalogs.models import Port, ShippingLine
 
 CRUD_ACTIONS = ("created", "updated", "deleted")
 LINK_ACTIONS = ("link_bookings",)
+GENERATE_ACTIONS = ("generate_bookings",)
+ACTIVITY_KINDS = ("all", "crud", "link", "generate")
 
 
 def _actor_display(entry: LtaAuditEntry) -> str | None:
@@ -43,19 +45,26 @@ def _parse_bound(value: str | None, *, end_of_day: bool = False):
 
 
 def _item_kind(entry: LtaAuditEntry) -> str:
-    """CRUD vs vinculación; async job completions use link_bookings or job_kind."""
+    """CRUD vs vinculación vs generación (async jobs via action or job_kind)."""
+    if entry.action in GENERATE_ACTIONS:
+        return "generate"
     if entry.action in LINK_ACTIONS:
         return "link"
     changes = entry.changes if isinstance(entry.changes, dict) else {}
     job_kind = changes.get("job_kind")
-    if job_kind in ("link", "resync", "destroy") and changes.get("job_status") in (
-        "success",
-        "failed",
-        "queued",
-    ):
-        # Queued create/update/delete stay CRUD; completion of link/resync is link.
-        if entry.action in CRUD_ACTIONS and changes.get("job_status") == "queued":
+    job_status = changes.get("job_status")
+    if job_kind in (
+        "link",
+        "resync",
+        "destroy",
+        "generate",
+        "regenerate",
+    ) and job_status in ("success", "failed", "queued"):
+        # Queued create/update/delete stay CRUD; job completions get their own kind.
+        if entry.action in CRUD_ACTIONS and job_status == "queued":
             return "crud"
+        if job_kind in ("generate", "regenerate"):
+            return "generate"
         if job_kind in ("link", "resync"):
             return "link"
     return "crud"
@@ -142,8 +151,9 @@ def _base_qs(*, allowed_ports: list[int] | None, kind: str):
     if kind == "crud":
         qs = qs.filter(action__in=CRUD_ACTIONS)
     elif kind == "link":
-        # Include async link/resync completions (action=link_bookings).
         qs = qs.filter(action__in=LINK_ACTIONS)
+    elif kind == "generate":
+        qs = qs.filter(action__in=GENERATE_ACTIONS)
     if allowed_ports is not None:
         qs = qs.filter(port_id__in=allowed_ports)
     return qs
@@ -173,7 +183,7 @@ def build_lta_activity(
     page_size: int = 20,
 ) -> dict[str, Any]:
     kind = (kind or "all").lower()
-    if kind not in ("all", "crud", "link"):
+    if kind not in ACTIVITY_KINDS:
         kind = "all"
 
     page = max(1, page)

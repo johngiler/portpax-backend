@@ -9,7 +9,7 @@ class LongTermAgreement(models.Model):
     Long-term berthing agreement (LTA).
 
     Grants early booking windows and strategically reserves weekday/position
-    slots for a shipping line. Does not materialize calendar bookings.
+    slots for a shipping line. Generar/Regenerar may materialize LTA bookings.
     """
 
     class BookingPolicy(models.TextChoices):
@@ -89,6 +89,10 @@ class LongTermAgreement(models.Model):
     valid_from = models.DateField(null=True, blank=True)
     valid_until = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    bookings_generated = models.BooleanField(
+        default=False,
+        help_text="True after the first successful Generar (or Regenerar) run.",
+    )
     notes = models.TextField(blank=True)
     contract_file = models.FileField(
         upload_to="bookings/lta_contracts/",
