@@ -1,4 +1,9 @@
-from datetime import date
+"""Create multiple bookings for the same port / line / vessel."""
+
+from __future__ import annotations
+
+from datetime import date, time
+from typing import Any
 
 from django.db import transaction
 
@@ -29,12 +34,66 @@ class BookingBatchCreateError(Exception):
         self.field = field
 
 
+def _normalize_entries(
+    *,
+    call_dates: list[date] | None,
+    entries: list[dict[str, Any]] | None,
+    default_eta: time | None,
+    default_etd: time | None,
+    default_planned_pax: int | None,
+    default_position_id: int | None,
+    default_status: str,
+) -> list[dict[str, Any]]:
+    """Build one spec per call date (entries win over shared defaults)."""
+    if entries:
+        by_date: dict[date, dict[str, Any]] = {}
+        for raw in entries:
+            call_date = raw["call_date"]
+            if call_date in by_date:
+                raise BookingBatchCreateError("Las fechas deben ser únicas.", "entries")
+            status = raw.get("status") or default_status
+            if status not in BULK_CREATE_STATUSES:
+                raise BookingBatchCreateError("Estado inicial no válido.", "status")
+            by_date[call_date] = {
+                "call_date": call_date,
+                "eta": raw.get("eta", default_eta),
+                "etd": raw.get("etd", default_etd),
+                "planned_pax": raw.get("planned_pax", default_planned_pax),
+                "position_id": raw.get("position", default_position_id),
+                "status": status,
+            }
+        return [by_date[d] for d in sorted(by_date)]
+
+    if not call_dates:
+        raise BookingBatchCreateError(
+            "Selecciona al menos una fecha.",
+            "call_dates",
+        )
+    if default_status not in BULK_CREATE_STATUSES:
+        raise BookingBatchCreateError("Estado inicial no válido.", "status")
+    unique_dates = sorted({d for d in call_dates})
+    if len(unique_dates) != len(call_dates):
+        raise BookingBatchCreateError("Las fechas deben ser únicas.", "call_dates")
+    return [
+        {
+            "call_date": call_date,
+            "eta": default_eta,
+            "etd": default_etd,
+            "planned_pax": default_planned_pax,
+            "position_id": default_position_id,
+            "status": default_status,
+        }
+        for call_date in unique_dates
+    ]
+
+
 def create_booking_batch(
     *,
     port_id: int,
     shipping_line_id: int,
     vessel_id: int,
-    call_dates: list[date],
+    call_dates: list[date] | None = None,
+    entries: list[dict[str, Any]] | None = None,
     notes: str = "",
     created_by=None,
     eta=None,
@@ -44,15 +103,16 @@ def create_booking_batch(
     audit_changes: dict | None = None,
     status: str = BookingStatus.H,
 ) -> list[Booking]:
-    if not call_dates:
-        raise BookingBatchCreateError("Selecciona al menos una fecha.", "call_dates")
-
-    if status not in BULK_CREATE_STATUSES:
-        raise BookingBatchCreateError("Estado inicial no válido.", "status")
-
-    unique_dates = sorted({d for d in call_dates})
-    if len(unique_dates) != len(call_dates):
-        raise BookingBatchCreateError("Las fechas deben ser únicas.", "call_dates")
+    specs = _normalize_entries(
+        call_dates=call_dates,
+        entries=entries,
+        default_eta=eta,
+        default_etd=etd,
+        default_planned_pax=planned_pax,
+        default_position_id=preferred_position_id,
+        default_status=status,
+    )
+    unique_dates = [spec["call_date"] for spec in specs]
 
     try:
         port = Port.objects.get(pk=port_id, is_active=True)
@@ -105,21 +165,22 @@ def create_booking_batch(
         refresh_related_booking_conflicts,
     )
 
-    if status in {BookingStatus.LTA, BookingStatus.CL}:
-        for call_date in unique_dates:
-            agreement = find_best_matching_agreement(
-                port_id=port.id,
-                shipping_line_id=shipping_line.id,
-                vessel=vessel,
-                call_date=call_date,
-                position=None,
+    for spec in specs:
+        if spec["status"] not in {BookingStatus.LTA, BookingStatus.CL}:
+            continue
+        agreement = find_best_matching_agreement(
+            port_id=port.id,
+            shipping_line_id=shipping_line.id,
+            vessel=vessel,
+            call_date=spec["call_date"],
+            position=None,
+        )
+        if agreement is None:
+            raise BookingBatchCreateError(
+                "No hay un acuerdo LTA vigente que cubra esta reserva "
+                f"({spec['call_date'].isoformat()}: puerto, naviera, barco y día).",
+                "status",
             )
-            if agreement is None:
-                raise BookingBatchCreateError(
-                    "No hay un acuerdo LTA vigente que cubra esta reserva "
-                    "(puerto, naviera, barco y día).",
-                    "status",
-                )
 
     existing_codes = set(
         Booking.objects.filter(booking_code__startswith=port.code.upper()).values_list(
@@ -132,13 +193,14 @@ def create_booking_batch(
     reserved_by_date: dict[date, set[int]] = {}
 
     with transaction.atomic():
-        for call_date in unique_dates:
+        for spec in specs:
+            call_date = spec["call_date"]
             reserved = reserved_by_date.setdefault(call_date, set())
             position = resolve_booking_position(
                 port,
                 vessel,
                 call_date,
-                preferred_position_id=preferred_position_id,
+                preferred_position_id=spec.get("position_id"),
                 reserved_position_ids=reserved,
             )
             if position:
@@ -160,11 +222,11 @@ def create_booking_batch(
                     position=position,
                     call_date=call_date,
                     booking_code=code,
-                    status=status,
+                    status=spec["status"],
                     notes=notes,
-                    eta=eta,
-                    etd=etd,
-                    planned_pax=planned_pax,
+                    eta=spec.get("eta"),
+                    etd=spec.get("etd"),
+                    planned_pax=spec.get("planned_pax"),
                     created_by=created_by,
                     long_term_agreement=None,
                 )

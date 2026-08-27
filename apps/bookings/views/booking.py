@@ -134,9 +134,21 @@ class BookingViewSet(
         allowed_ports = user_port_ids(self.request.user)
         if allowed_ports is not None:
             qs = qs.filter(port_id__in=allowed_ports)
-        port_id = self.request.query_params.get("port")
-        if port_id:
-            qs = qs.filter(port_id=port_id)
+        port_raw = self.request.query_params.get("port")
+        if port_raw:
+            port_ids: list[int] = []
+            for part in str(port_raw).split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    port_ids.append(int(part))
+                except (TypeError, ValueError):
+                    continue
+            if len(port_ids) == 1:
+                qs = qs.filter(port_id=port_ids[0])
+            elif port_ids:
+                qs = qs.filter(port_id__in=port_ids)
         position_id = self.request.query_params.get("position")
         if position_id:
             qs = qs.filter(position_id=position_id)
@@ -227,7 +239,8 @@ class BookingViewSet(
                 port_id=data["port"],
                 shipping_line_id=data["shipping_line"],
                 vessel_id=data["vessel"],
-                call_dates=data["call_dates"],
+                call_dates=data.get("call_dates"),
+                entries=data.get("entries"),
                 notes=data.get("notes", ""),
                 created_by=request.user,
                 eta=data.get("eta"),

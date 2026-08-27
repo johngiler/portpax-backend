@@ -425,6 +425,19 @@ class BookingValidateSerializer(serializers.Serializer):
         )
 
 
+class BookingBatchEntrySerializer(serializers.Serializer):
+    call_date = serializers.DateField()
+    eta = serializers.TimeField(required=False, allow_null=True)
+    etd = serializers.TimeField(required=False, allow_null=True)
+    planned_pax = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    position = serializers.IntegerField(required=False, allow_null=True)
+    status = serializers.ChoiceField(
+        choices=[(s, s) for s in sorted(BULK_CREATE_STATUSES)],
+        required=False,
+        allow_null=True,
+    )
+
+
 class BookingBatchCreateSerializer(serializers.Serializer):
     port = serializers.IntegerField()
     shipping_line = serializers.IntegerField()
@@ -433,7 +446,9 @@ class BookingBatchCreateSerializer(serializers.Serializer):
         child=serializers.DateField(),
         allow_empty=False,
         max_length=60,
+        required=False,
     )
+    entries = BookingBatchEntrySerializer(many=True, required=False)
     notes = serializers.CharField(required=False, allow_blank=True, default="")
     eta = serializers.TimeField(required=False, allow_null=True)
     etd = serializers.TimeField(required=False, allow_null=True)
@@ -445,9 +460,28 @@ class BookingBatchCreateSerializer(serializers.Serializer):
         default=BookingStatus.H,
     )
 
+    def validate(self, attrs):
+        entries = attrs.get("entries") or []
+        call_dates = attrs.get("call_dates") or []
+        if not entries and not call_dates:
+            raise serializers.ValidationError(
+                {"call_dates": ["Selecciona al menos una fecha."]}
+            )
+        if entries:
+            dates = [row["call_date"] for row in entries]
+            if len(dates) != len(set(dates)):
+                raise serializers.ValidationError(
+                    {"entries": ["Las fechas deben ser únicas."]}
+                )
+            if len(dates) > 60:
+                raise serializers.ValidationError(
+                    {"entries": ["Máximo 60 fechas por lote."]}
+                )
+        return attrs
+
     def validate_call_dates(self, value):
         if not value:
-            raise serializers.ValidationError("Selecciona al menos una fecha.")
+            return value
         unique = sorted({d for d in value})
         if len(unique) != len(value):
             raise serializers.ValidationError("Las fechas deben ser únicas.")
