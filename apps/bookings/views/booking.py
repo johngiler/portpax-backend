@@ -49,27 +49,22 @@ from apps.bookings.services.calendar_export import (
     build_calendar_xlsx,
     calendar_export_filename,
 )
-from apps.bookings.services.operational_reports import (
-    build_booking_totals,
-    build_weekly_movements,
-)
 from apps.bookings.services.report_exports import (
     availability_filename,
     build_availability_chart_csv,
     build_availability_chart_xlsx,
     build_availability_data,
-    build_carrier_panorama,
-    build_carrier_panorama_csv,
-    build_carrier_panorama_xlsx,
-    build_cumplimiento_real,
-    build_cumplimiento_real_csv,
-    build_cumplimiento_real_xlsx,
-    build_week_workbook_xlsx,
-    carrier_panorama_filename,
-    cumplimiento_real_filename,
-    week_workbook_filename,
+    build_port_carrier_matrix,
+    build_port_carrier_matrix_xlsx,
+    build_port_trends,
+    build_port_trends_xlsx,
+    build_ports_totals_matrix,
+    build_ports_totals_matrix_xlsx,
+    port_carrier_matrix_filename,
+    port_trends_filename,
+    ports_totals_matrix_filename,
 )
-from apps.catalogs.models import Port, ShippingLine
+from apps.catalogs.models import Port
 from apps.bookings.services.validation import suggest_positions
 from apps.bookings.services.validation.conflict_type_filters import (
     CONFLICT_TYPES,
@@ -925,75 +920,6 @@ class BookingViewSet(
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
 
-    @action(detail=False, methods=["get"], url_path="report-totals")
-    def report_totals(self, request):
-        date_from, err = self._parse_iso_date_param("date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("date_to")
-        if err:
-            return err
-
-        def optional_int(key: str) -> int | None:
-            raw = request.query_params.get(key)
-            if not raw:
-                return None
-            try:
-                return int(raw)
-            except (TypeError, ValueError):
-                return None
-
-        without_lta = (request.query_params.get("without_lta") or "").lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-        port_id = optional_int("port")
-        if port_id is not None:
-            self._ensure_port_access(port_id)
-
-        return Response(
-            build_booking_totals(
-                date_from=date_from,
-                date_to=date_to,
-                port_id=port_id,
-                shipping_line_id=optional_int("shipping_line"),
-                without_lta=without_lta,
-                allowed_ports=user_port_ids(request.user),
-                request=request,
-            )
-        )
-
-    @action(detail=False, methods=["get"], url_path="report-movements")
-    def report_movements(self, request):
-        date_from, err = self._parse_iso_date_param("date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("date_to")
-        if err:
-            return err
-
-        port_id = None
-        raw_port = request.query_params.get("port")
-        if raw_port:
-            try:
-                port_id = int(raw_port)
-            except (TypeError, ValueError):
-                return Response(
-                    {"detail": "port inválido."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            self._ensure_port_access(port_id)
-
-        return Response(
-            build_weekly_movements(
-                date_from=date_from,
-                date_to=date_to,
-                port_id=port_id,
-                allowed_ports=user_port_ids(request.user),
-            )
-        )
-
     def _optional_int_param(self, key: str) -> int | None | Response:
         raw = self.request.query_params.get(key)
         if not raw:
@@ -1005,36 +931,6 @@ class BookingViewSet(
                 {"detail": f"{key} inválido."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-    @action(detail=False, methods=["get"], url_path="report-carrier-panorama")
-    def report_carrier_panorama(self, request):
-        date_from, err = self._parse_iso_date_param("date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("date_to")
-        if err:
-            return err
-        line_id = self._optional_int_param("shipping_line")
-        if isinstance(line_id, Response):
-            return line_id
-        if not line_id:
-            return Response(
-                {"detail": "shipping_line es obligatorio."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if not ShippingLine.objects.filter(pk=line_id).exists():
-            return Response(
-                {"detail": "Naviera no encontrada."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        return Response(
-            build_carrier_panorama(
-                shipping_line_id=line_id,
-                date_from=date_from,
-                date_to=date_to,
-                allowed_ports=user_port_ids(request.user),
-            )
-        )
 
     @action(detail=False, methods=["get"], url_path="report-availability")
     def report_availability(self, request):
@@ -1139,8 +1035,45 @@ class BookingViewSet(
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(data)
 
-    @action(detail=False, methods=["get"], url_path="report-cumplimiento-real")
-    def report_cumplimiento_real(self, request):
+    def _report_without_lta(self, request) -> bool:
+        return (request.query_params.get("without_lta") or "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+
+    def _report_pagination_params(self, request) -> tuple[int, int]:
+        page = self._optional_int_param("page")
+        if isinstance(page, Response):
+            page = 1
+        page_size = self._optional_int_param("page_size")
+        if isinstance(page_size, Response):
+            page_size = None
+        return page or 1, page_size
+
+    @action(detail=False, methods=["get"], url_path="report-ports-totals-matrix")
+    def report_ports_totals_matrix(self, request):
+        date_from, err = self._parse_iso_date_param("date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("date_to")
+        if err:
+            return err
+        page, page_size = self._report_pagination_params(request)
+        return Response(
+            build_ports_totals_matrix(
+                date_from=date_from,
+                date_to=date_to,
+                without_lta=self._report_without_lta(request),
+                allowed_ports=user_port_ids(request.user),
+                request=request,
+                page=page,
+                page_size=page_size,
+            )
+        )
+
+    @action(detail=False, methods=["get"], url_path="report-port-carrier-matrix")
+    def report_port_carrier_matrix(self, request):
         date_from, err = self._parse_iso_date_param("date_from")
         if err:
             return err
@@ -1150,33 +1083,73 @@ class BookingViewSet(
         port_id = self._optional_int_param("port")
         if isinstance(port_id, Response):
             return port_id
-        if port_id is not None:
-            self._ensure_port_access(port_id)
+        if not port_id:
+            return Response(
+                {"detail": "port es obligatorio."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        self._ensure_port_access(port_id)
+        page, page_size = self._report_pagination_params(request)
         return Response(
-            build_cumplimiento_real(
+            build_port_carrier_matrix(
                 date_from=date_from,
                 date_to=date_to,
                 port_id=port_id,
+                without_lta=self._report_without_lta(request),
                 allowed_ports=user_port_ids(request.user),
+                request=request,
+                page=page,
+                page_size=page_size,
+            )
+        )
+
+    @action(detail=False, methods=["get"], url_path="report-port-trends")
+    def report_port_trends(self, request):
+        date_from, err = self._parse_iso_date_param("date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("date_to")
+        if err:
+            return err
+        port_id = self._optional_int_param("port")
+        if isinstance(port_id, Response):
+            return port_id
+        if not port_id:
+            return Response(
+                {"detail": "port es obligatorio."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        self._ensure_port_access(port_id)
+        page, page_size = self._report_pagination_params(request)
+        return Response(
+            build_port_trends(
+                date_from=date_from,
+                date_to=date_to,
+                port_id=port_id,
+                without_lta=self._report_without_lta(request),
+                allowed_ports=user_port_ids(request.user),
+                request=request,
+                page=page,
+                page_size=page_size,
             )
         )
 
     @action(detail=False, methods=["get"], url_path="report-export")
     def report_export(self, request):
-        """Structured operational exports (Availability / WEEK / panorama / REAL)."""
+        """Structured operational exports (Availability + matrix reports)."""
         report_type = (request.query_params.get("report_type") or "").strip().lower()
         allowed = {
             "availability",
-            "week",
-            "carrier_panorama",
-            "cumplimiento_real",
+            "ports_totals_matrix",
+            "port_carrier_matrix",
+            "port_trends",
         }
         if report_type not in allowed:
             return Response(
                 {
                     "detail": (
-                        "report_type debe ser availability, week, "
-                        "carrier_panorama o cumplimiento_real."
+                        "report_type debe ser availability, ports_totals_matrix, "
+                        "port_carrier_matrix o port_trends."
                     ),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1188,12 +1161,18 @@ class BookingViewSet(
                 {"detail": "export_format debe ser xlsx o csv."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if report_type == "week" and fmt == "csv":
+        matrix_types = {
+            "ports_totals_matrix",
+            "port_carrier_matrix",
+            "port_trends",
+        }
+        if report_type in matrix_types and fmt != "xlsx":
             return Response(
-                {"detail": "El reporte WEEK solo se exporta a Excel (.xlsx)."},
+                {"detail": "Los reportes matriciales solo se exportan a Excel (.xlsx)."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        without_lta = self._report_without_lta(request)
         date_from, err = self._parse_iso_date_param("date_from")
         if err:
             return err
@@ -1246,57 +1225,54 @@ class BookingViewSet(
                 )
                 port = Port.objects.get(pk=port_id)
                 filename = availability_filename(port.code, date_from, date_to, fmt)
-            elif report_type == "week":
-                content = build_week_workbook_xlsx(
+            elif report_type == "ports_totals_matrix":
+                content = build_ports_totals_matrix_xlsx(
                     date_from=date_from,
                     date_to=date_to,
-                    port_id=port_id,
-                    shipping_line_id=line_id,
+                    without_lta=without_lta,
                     allowed_ports=allowed_ports,
                 )
-                filename = week_workbook_filename(date_from, date_to)
-            elif report_type == "carrier_panorama":
-                if not line_id:
+                filename = ports_totals_matrix_filename(date_from, date_to)
+            elif report_type == "port_carrier_matrix":
+                if not port_id:
                     return Response(
-                        {"detail": "shipping_line es obligatorio para panorama."},
+                        {"detail": "port es obligatorio."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                builder = (
-                    build_carrier_panorama_csv
-                    if fmt == "csv"
-                    else build_carrier_panorama_xlsx
-                )
-                content = builder(
-                    shipping_line_id=line_id,
-                    date_from=date_from,
-                    date_to=date_to,
-                    allowed_ports=allowed_ports,
-                )
-                line = ShippingLine.objects.get(pk=line_id)
-                filename = carrier_panorama_filename(
-                    line.code or line.name, date_from, date_to, fmt
-                )
-            else:
-                builder = (
-                    build_cumplimiento_real_csv
-                    if fmt == "csv"
-                    else build_cumplimiento_real_xlsx
-                )
-                content = builder(
+                content = build_port_carrier_matrix_xlsx(
                     date_from=date_from,
                     date_to=date_to,
                     port_id=port_id,
+                    without_lta=without_lta,
                     allowed_ports=allowed_ports,
                 )
-                filename = cumplimiento_real_filename(date_from, date_to, fmt)
+                port = Port.objects.get(pk=port_id)
+                filename = port_carrier_matrix_filename(
+                    port.code, date_from, date_to
+                )
+            elif report_type == "port_trends":
+                if not port_id:
+                    return Response(
+                        {"detail": "port es obligatorio."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                content = build_port_trends_xlsx(
+                    date_from=date_from,
+                    date_to=date_to,
+                    port_id=port_id,
+                    without_lta=without_lta,
+                    allowed_ports=allowed_ports,
+                )
+                port = Port.objects.get(pk=port_id)
+                filename = port_trends_filename(port.code, date_from, date_to)
+            else:
+                return Response(
+                    {"detail": "report_type no soportado."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         except Port.DoesNotExist:
             return Response(
                 {"detail": "Puerto no encontrado."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        except ShippingLine.DoesNotExist:
-            return Response(
-                {"detail": "Naviera no encontrada."},
                 status=status.HTTP_404_NOT_FOUND,
             )
         except ValueError as exc:

@@ -33,6 +33,7 @@ def scheduled_bookings_qs(
     position_id: int | None = None,
     allowed_ports: set[int] | None = None,
     status: str | None = None,
+    without_lta: bool = False,
 ):
     """Bookings for occupancy / availability reports.
 
@@ -70,6 +71,10 @@ def scheduled_bookings_qs(
         qs = qs.filter(vessel_id=vessel_id)
     if position_id:
         qs = qs.filter(position_id=position_id)
+    if without_lta:
+        qs = qs.exclude(
+            status__in=[BookingStatus.LTA, BookingStatus.CL, BookingStatus.LTD],
+        )
     return qs
 
 
