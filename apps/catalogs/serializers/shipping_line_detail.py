@@ -1,15 +1,22 @@
 from rest_framework import serializers
 
+from apps.audit.serializers import ShippingLineAuditEntrySerializer
 from apps.catalogs.serializers.shipping_line import ShippingLineSerializer
 from apps.catalogs.serializers.vessel import VesselSerializer
 
 
 class ShippingLineDetailSerializer(ShippingLineSerializer):
     vessels = VesselSerializer(many=True, read_only=True)
+    audit_entries = ShippingLineAuditEntrySerializer(many=True, read_only=True)
 
     class Meta(ShippingLineSerializer.Meta):
-        fields = ShippingLineSerializer.Meta.fields + ["vessel_count", "vessels"]
+        fields = ShippingLineSerializer.Meta.fields + [
+            "vessel_count",
+            "vessels",
+            "audit_entries",
+        ]
         read_only_fields = ShippingLineSerializer.Meta.read_only_fields + [
             "vessel_count",
             "vessels",
+            "audit_entries",
         ]

@@ -130,6 +130,7 @@ def _item(
     entity = changes.get("entity") if isinstance(changes, dict) else None
     return {
         "kind": kind,
+        "audit_id": entry.id,
         "action": entry.action,
         "occurred_at": entry.created_at,
         "actor_display": _actor_display(entry),
@@ -146,8 +147,15 @@ def _item(
     }
 
 
-def _base_qs(*, allowed_ports: list[int] | None, kind: str):
+def _base_qs(
+    *,
+    allowed_ports: list[int] | None,
+    kind: str,
+    agreement_id: int | None = None,
+):
     qs = LtaAuditEntry.objects.select_related("actor", "agreement")
+    if agreement_id is not None:
+        qs = qs.filter(agreement_id=agreement_id)
     if kind == "crud":
         qs = qs.filter(action__in=CRUD_ACTIONS)
     elif kind == "link":
@@ -179,6 +187,7 @@ def build_lta_activity(
     date_from: str | None = None,
     date_to: str | None = None,
     actor: str | None = None,
+    agreement_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
@@ -189,7 +198,11 @@ def build_lta_activity(
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
 
-    qs = _base_qs(allowed_ports=allowed_ports, kind=kind)
+    qs = _base_qs(
+        allowed_ports=allowed_ports,
+        kind=kind,
+        agreement_id=agreement_id,
+    )
 
     bound_from = _parse_bound(date_from, end_of_day=False)
     bound_to = _parse_bound(date_to, end_of_day=True)

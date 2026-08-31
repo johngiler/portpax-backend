@@ -5,6 +5,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from apps.accounts.permissions import user_port_ids
+from apps.audit.models import PortAuditEntry
 from apps.audit.services.record import record_port_audit
 from apps.catalogs.models import Berth, Port, Position
 from apps.catalogs.serializers import PortDetailSerializer, PortSerializer
@@ -48,6 +49,12 @@ class PortViewSet(viewsets.ModelViewSet):
                 "bollards",
                 "fenders",
                 "images",
+                Prefetch(
+                    "audit_entries",
+                    queryset=PortAuditEntry.objects.select_related("actor").order_by(
+                        "-created_at"
+                    ),
+                ),
             )
         return base.prefetch_related("positions")
 
@@ -121,12 +128,20 @@ class PortViewSet(viewsets.ModelViewSet):
             page_size = 20
 
         allowed = user_port_ids(request.user)
+        port_id_raw = request.query_params.get("port_id")
+        port_id = None
+        if port_id_raw not in (None, ""):
+            try:
+                port_id = int(port_id_raw)
+            except (TypeError, ValueError):
+                port_id = None
         data = build_port_activity(
             allowed_ports=None if allowed is None else list(allowed),
             kind=request.query_params.get("kind") or "all",
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
             actor=request.query_params.get("actor"),
+            port_id=port_id,
             page=page,
             page_size=page_size,
         )

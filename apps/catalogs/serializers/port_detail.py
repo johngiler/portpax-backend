@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.audit.serializers import PortAuditEntrySerializer
 from apps.catalogs.models import Port
 from apps.catalogs.serializers.berth import BerthSerializer
 from apps.catalogs.serializers.port import PortSerializer
@@ -54,6 +55,7 @@ class PortDetailSerializer(PortSerializer):
     bollards = PortBollardSerializer(many=True, read_only=True)
     fenders = PortFenderSerializer(many=True, read_only=True)
     images = PortImageSerializer(many=True, read_only=True)
+    audit_entries = PortAuditEntrySerializer(many=True, read_only=True)
     bollard_total = serializers.SerializerMethodField()
     fender_total = serializers.SerializerMethodField()
 
@@ -66,6 +68,7 @@ class PortDetailSerializer(PortSerializer):
             "bollard_total",
             "fender_total",
             "images",
+            "audit_entries",
         ]
         read_only_fields = PortSerializer.Meta.read_only_fields + [
             "berths",
@@ -75,6 +78,7 @@ class PortDetailSerializer(PortSerializer):
             "bollard_total",
             "fender_total",
             "images",
+            "audit_entries",
         ]
 
     def get_bollard_total(self, obj: Port) -> int:

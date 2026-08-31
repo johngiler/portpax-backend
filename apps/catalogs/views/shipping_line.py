@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import DenyViewerWrites, IsFrontendAppUser
+from apps.audit.models import ShippingLineAuditEntry
 from apps.audit.services.record import record_shipping_line_audit
 from apps.catalogs.models import ShippingLine, Vessel
 from apps.catalogs.serializers import ShippingLineDetailSerializer, ShippingLineSerializer
@@ -52,7 +53,15 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
         if group_id:
             base = base.filter(group_id=group_id)
         if self.action == "retrieve":
-            return base.prefetch_related(Prefetch("vessels", queryset=vessels_qs))
+            return base.prefetch_related(
+                Prefetch("vessels", queryset=vessels_qs),
+                Prefetch(
+                    "audit_entries",
+                    queryset=ShippingLineAuditEntry.objects.select_related(
+                        "actor"
+                    ).order_by("-created_at"),
+                ),
+            )
         return base
 
     def perform_create(self, serializer):
@@ -143,11 +152,20 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
         except (TypeError, ValueError):
             page_size = 20
 
+        shipping_line_id_raw = request.query_params.get("shipping_line_id")
+        shipping_line_id = None
+        if shipping_line_id_raw not in (None, ""):
+            try:
+                shipping_line_id = int(shipping_line_id_raw)
+            except (TypeError, ValueError):
+                shipping_line_id = None
+
         data = build_shipping_line_activity(
             kind=request.query_params.get("kind") or "all",
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
             actor=request.query_params.get("actor"),
+            shipping_line_id=shipping_line_id,
             page=page,
             page_size=page_size,
         )

@@ -5,6 +5,7 @@ import json
 
 from apps.bookings.models import LongTermAgreement
 from apps.bookings.services.lta.identity import build_identity_for_create
+from apps.audit.serializers import LtaAuditEntrySerializer
 from apps.catalogs.models import Position, Vessel
 from apps.catalogs.utils.position_code import position_short_code
 
@@ -295,3 +296,10 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
         if positions is not None:
             instance.positions.set(positions)
         return instance
+
+
+class LongTermAgreementDetailSerializer(LongTermAgreementSerializer):
+    audit_entries = LtaAuditEntrySerializer(many=True, read_only=True)
+
+    class Meta(LongTermAgreementSerializer.Meta):
+        fields = LongTermAgreementSerializer.Meta.fields + ["audit_entries"]

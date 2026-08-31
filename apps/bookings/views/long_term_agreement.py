@@ -1,4 +1,4 @@
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -6,9 +6,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import DenyViewerWrites, user_port_ids
+from apps.audit.models import LtaAuditEntry
 from apps.audit.services.record import record_lta_audit
 from apps.bookings.models import BookingStatus, LongTermAgreement
-from apps.bookings.serializers.long_term_agreement import LongTermAgreementSerializer
+from apps.bookings.serializers.long_term_agreement import (
+    LongTermAgreementDetailSerializer,
+    LongTermAgreementSerializer,
+)
 from apps.bookings.services.lta.windows import windows_as_dict
 from apps.bookings.services.lta.lta_activity import (
     build_lta_activity,
@@ -56,6 +60,11 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
     ordering_fields = ["code", "name", "created_at", "valid_from", "linked_bookings_count"]
     ordering = ["port__name", "shipping_line__name", "code"]
 
+    def get_serializer_class(self):
+        if self.action == "retrieve":
+            return LongTermAgreementDetailSerializer
+        return LongTermAgreementSerializer
+
     queryset = LongTermAgreement.objects.select_related(
         "port",
         "shipping_line",
@@ -78,6 +87,15 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
         active = self.request.query_params.get("is_active")
         if active is not None and active != "":
             qs = qs.filter(is_active=active.lower() in ("1", "true", "yes"))
+        if self.action == "retrieve":
+            qs = qs.prefetch_related(
+                Prefetch(
+                    "audit_entries",
+                    queryset=LtaAuditEntry.objects.select_related("actor").order_by(
+                        "-created_at"
+                    ),
+                ),
+            )
         return qs
 
     def perform_create(self, serializer):
@@ -181,12 +199,20 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
             page_size = 20
 
         allowed = user_port_ids(request.user)
+        agreement_id_raw = request.query_params.get("agreement_id")
+        agreement_id = None
+        if agreement_id_raw not in (None, ""):
+            try:
+                agreement_id = int(agreement_id_raw)
+            except (TypeError, ValueError):
+                agreement_id = None
         data = build_lta_activity(
             allowed_ports=None if allowed is None else list(allowed),
             kind=request.query_params.get("kind") or "all",
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
             actor=request.query_params.get("actor"),
+            agreement_id=agreement_id,
             page=page,
             page_size=page_size,
         )

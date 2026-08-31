@@ -68,6 +68,7 @@ def _single_item(entry: BookingAuditEntry) -> dict[str, Any]:
     entity = changes.get("entity") if isinstance(changes, dict) else None
     return {
         "kind": "single",
+        "audit_id": entry.id,
         "action": entry.action,
         "occurred_at": entry.created_at,
         "user_display": _user_display(entry.user),
@@ -114,12 +115,15 @@ def _audit_queryset(
     actor_system: bool = False,
     actor_user_id: int | None = None,
     source: str | None = None,
+    booking_id: int | None = None,
 ):
     qs = (
         BookingAuditEntry.objects.filter(action__in=SINGLE_ACTIONS)
         .select_related("booking", "user")
         .exclude(changes__has_key="import_batch_id")
     )
+    if booking_id is not None:
+        qs = qs.filter(booking_id=booking_id)
     if source:
         if source == "mass_import":
             qs = qs.filter(changes__source__in=MASS_IMPORT_SOURCES)
@@ -205,6 +209,7 @@ def build_booking_activity(
     date_from: str | None = None,
     date_to: str | None = None,
     actor: str | None = None,
+    booking_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
@@ -217,6 +222,25 @@ def build_booking_activity(
     bound_from = _parse_bound(date_from)
     bound_to = _parse_bound(date_to, end_of_day=True)
     actor_system, actor_user_id = parse_actor_param(actor)
+
+    if booking_id is not None:
+        qs = _audit_queryset(
+            allowed_ports=allowed_ports,
+            date_from=bound_from,
+            date_to=bound_to,
+            actor_system=actor_system,
+            actor_user_id=actor_user_id,
+            booking_id=booking_id,
+        )
+        count = qs.count()
+        start = (page - 1) * page_size
+        rows = list(qs[start : start + page_size])
+        return {
+            "count": count,
+            "page": page,
+            "page_size": page_size,
+            "results": [_single_item(entry) for entry in rows],
+        }
 
     items: list[dict[str, Any]] = []
     include_single = kind in ("all", "single", "wizard", "berthing_import", "lta_generate")

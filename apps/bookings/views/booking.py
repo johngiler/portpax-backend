@@ -481,6 +481,14 @@ class BookingViewSet(
         except (TypeError, ValueError):
             page_size = 20
 
+        booking_id_raw = request.query_params.get("booking_id")
+        booking_id = None
+        if booking_id_raw not in (None, ""):
+            try:
+                booking_id = int(booking_id_raw)
+            except (TypeError, ValueError):
+                booking_id = None
+
         data = build_booking_activity(
             user=request.user,
             allowed_ports=user_port_ids(request.user),
@@ -488,6 +496,7 @@ class BookingViewSet(
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
             actor=request.query_params.get("actor"),
+            booking_id=booking_id,
             page=page,
             page_size=page_size,
         )

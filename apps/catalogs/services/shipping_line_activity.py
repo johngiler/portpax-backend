@@ -12,7 +12,14 @@ from apps.audit.models import ShippingLineAuditEntry
 from apps.audit.utils.activity_actor import actor_options_from_ids, parse_actor_param
 from apps.audit.utils.friendly_changes import enrich_shipping_line_audit_changes
 
-CRUD_ACTIONS = ("created", "updated", "deleted")
+CRUD_ACTIONS = (
+    "created",
+    "updated",
+    "deleted",
+    "vessel_created",
+    "vessel_updated",
+    "vessel_deleted",
+)
 
 
 def _actor_display(entry: ShippingLineAuditEntry) -> str | None:
@@ -49,6 +56,7 @@ def _item(entry: ShippingLineAuditEntry) -> dict[str, Any]:
     entity = changes.get("entity") if isinstance(changes, dict) else None
     return {
         "kind": "crud",
+        "audit_id": entry.id,
         "action": entry.action,
         "occurred_at": entry.created_at,
         "actor_display": _actor_display(entry),
@@ -62,8 +70,10 @@ def _item(entry: ShippingLineAuditEntry) -> dict[str, Any]:
     }
 
 
-def _base_qs(*, kind: str):
+def _base_qs(*, kind: str, shipping_line_id: int | None = None):
     qs = ShippingLineAuditEntry.objects.select_related("actor", "shipping_line")
+    if shipping_line_id is not None:
+        qs = qs.filter(shipping_line_id=shipping_line_id)
     if kind == "crud":
         qs = qs.filter(action__in=CRUD_ACTIONS)
     return qs
@@ -85,6 +95,7 @@ def build_shipping_line_activity(
     date_from: str | None = None,
     date_to: str | None = None,
     actor: str | None = None,
+    shipping_line_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
@@ -95,7 +106,7 @@ def build_shipping_line_activity(
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
 
-    qs = _base_qs(kind=kind)
+    qs = _base_qs(kind=kind, shipping_line_id=shipping_line_id)
 
     bound_from = _parse_bound(date_from, end_of_day=False)
     bound_to = _parse_bound(date_to, end_of_day=True)
