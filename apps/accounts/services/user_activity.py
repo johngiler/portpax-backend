@@ -55,6 +55,7 @@ def _item(entry: UserAuditEntry) -> dict[str, Any]:
     kind = "login" if entry.action == "login" else "crud"
     return {
         "kind": kind,
+        "audit_id": entry.id,
         "action": entry.action,
         "occurred_at": entry.created_at,
         "actor_display": _actor_display(entry),
@@ -71,8 +72,10 @@ def _item(entry: UserAuditEntry) -> dict[str, Any]:
     }
 
 
-def _base_qs(*, kind: str):
+def _base_qs(*, kind: str, user_id: int | None = None):
     qs = UserAuditEntry.objects.select_related("actor", "subject")
+    if user_id is not None:
+        qs = qs.filter(subject_id=user_id)
     if kind == "crud":
         qs = qs.filter(action__in=CRUD_ACTIONS)
     elif kind == "login":
@@ -98,6 +101,7 @@ def build_user_activity(
     date_from: str | None = None,
     date_to: str | None = None,
     actor: str | None = None,
+    user_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
@@ -108,7 +112,7 @@ def build_user_activity(
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
 
-    qs = _base_qs(kind=kind)
+    qs = _base_qs(kind=kind, user_id=user_id)
 
     if role:
         qs = qs.filter(subject_role=role)

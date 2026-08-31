@@ -131,6 +131,13 @@ class ManagedUserViewSet(viewsets.ModelViewSet):
         except (TypeError, ValueError):
             page_size = 20
 
+        user_id_raw = request.query_params.get("user_id")
+        user_id = None
+        if user_id_raw not in (None, ""):
+            try:
+                user_id = int(user_id_raw)
+            except (TypeError, ValueError):
+                user_id = None
         data = build_user_activity(
             kind=request.query_params.get("kind") or "all",
             role=request.query_params.get("role") or None,
@@ -138,6 +145,7 @@ class ManagedUserViewSet(viewsets.ModelViewSet):
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
             actor=request.query_params.get("actor"),
+            user_id=user_id,
             page=page,
             page_size=page_size,
         )

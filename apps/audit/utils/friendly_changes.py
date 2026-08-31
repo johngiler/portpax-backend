@@ -209,6 +209,13 @@ def enrich_user_audit_changes(changes: dict[str, Any] | None) -> dict[str, Any] 
             out["port_ids"],
             resolve=_port_labels,
         )
+    if "is_active" in out and isinstance(out["is_active"], dict):
+        active = dict(out["is_active"])
+        for side, label_key in (("from", "from_label"), ("to", "to_label")):
+            raw = active.get(side, active.get("old" if side == "from" else "new"))
+            if isinstance(raw, bool):
+                active.setdefault(label_key, "Activo" if raw else "Inactivo")
+        out["is_active"] = active
     return out
 
 
