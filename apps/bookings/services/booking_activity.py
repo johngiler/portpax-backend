@@ -152,8 +152,13 @@ def _batch_queryset(
     date_to,
     actor_system: bool = False,
     actor_user_id: int | None = None,
+    kind: str | None = None,
 ):
     qs = BookingImportBatch.objects.select_related("created_by")
+    if kind == "berthing_import":
+        qs = qs.filter(label__startswith="BERTHING PAPERS")
+    elif kind == "mass_import":
+        qs = qs.exclude(label__startswith="BERTHING PAPERS")
     if allowed_ports is not None:
         qs = qs.filter(created_by=user)
     if date_from is not None:
@@ -244,9 +249,14 @@ def build_booking_activity(
 
     items: list[dict[str, Any]] = []
     include_single = kind in ("all", "single", "wizard", "berthing_import", "lta_generate")
-    include_bulk = kind in ("all", "bulk", "mass_import")
+    include_bulk = kind in ("all", "bulk", "mass_import", "berthing_import")
     source_filter = (
         kind if kind in ("wizard", "berthing_import", "lta_generate") else None
+    )
+    batch_kind = (
+        "berthing_import"
+        if kind == "berthing_import"
+        else ("mass_import" if kind == "mass_import" else None)
     )
 
     if include_single:
@@ -268,6 +278,7 @@ def build_booking_activity(
             date_to=bound_to,
             actor_system=actor_system,
             actor_user_id=actor_user_id,
+            kind=batch_kind,
         )[:500]:
             items.append(_bulk_item(batch))
 

@@ -148,14 +148,24 @@ class Command(BaseCommand):
             encoding="utf-8",
         )
 
-        printable = {k: v for k, v in report.items() if k != "invalid_rows"}
+        printable = {k: v for k, v in report.items() if k not in ("invalid_rows", "failure_rows", "unmatched_rows")}
         self.stdout.write(json.dumps(printable, indent=2))
         self.stdout.write(self.style.SUCCESS(f"Report → {DEFAULT_REPORT}"))
+        if report.get("batch_id"):
+            self.stdout.write(self.style.SUCCESS(f"Import batch id: {report['batch_id']}"))
 
         if not dry_run:
-            valid = report["parsed"] - report["invalid"]
+            valid = report["parsed"] - report.get("failed", report.get("invalid", 0))
             done = report["created"] + report["updated"]
-            if done != valid:
+            failed = report.get("failed", 0)
+            if failed:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"Imported {done} rows; {failed} filas sin match en catálogo "
+                        f"(ver failure_rows en el reporte e historial batch {report.get('batch_id')})."
+                    )
+                )
+            elif done != valid:
                 self.stdout.write(
                     self.style.WARNING(
                         f"Coverage mismatch: created+updated={done} valid={valid}"
