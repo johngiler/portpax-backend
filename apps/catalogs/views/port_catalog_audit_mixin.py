@@ -33,6 +33,11 @@ class PortCatalogAuditMixin:
     def _port_audit_action(self, verb: str) -> str:
         return f"{self.port_audit_resource}_{verb}"
 
+    def _port_audit_port_label(self, snap: dict) -> str:
+        name = (snap.get("port_name") or "").strip()
+        code = (snap.get("port_code") or "").strip()
+        return name or code
+
     def _port_audit_summary(self, verb: str, snap: dict) -> str:
         identifier = self.get_port_audit_identifier(snap)
         labels = {
@@ -41,7 +46,11 @@ class PortCatalogAuditMixin:
             "deleted": "Eliminó",
         }
         prefix = labels.get(verb, verb)
-        return f"{prefix} {self.port_audit_label} {identifier}"
+        base = f"{prefix} {self.port_audit_label} {identifier}"
+        port_label = self._port_audit_port_label(snap)
+        if port_label:
+            return f"{base} en {port_label}"
+        return base
 
     def perform_create(self, serializer):
         instance = serializer.save()
