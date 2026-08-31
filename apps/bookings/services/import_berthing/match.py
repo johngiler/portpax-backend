@@ -16,7 +16,57 @@ from apps.catalogs.models import Port, Position, ShippingLine, Vessel
 def normalize_ship_name(raw: str) -> str:
     text = re.sub(r"\([^)]*\)", "", raw or "").strip()
     text = re.sub(r"\s+", " ", text)
-    return text
+    return text.strip()
+
+
+def ship_name_candidates(
+    ship_raw: str,
+    *,
+    brand: str | None = None,
+    corp: str | None = None,
+) -> list[str]:
+    """Return ordered unique ship names to try against the vessel catalog."""
+    base = normalize_ship_name(ship_raw)
+    if not base:
+        return []
+
+    candidates: list[str] = [base]
+
+    # Bidirectional OTS ↔ "of the Seas" (catalog may use either form).
+    if re.search(r"\s+OTS$", base, flags=re.IGNORECASE):
+        candidates.append(
+            re.sub(r"\s+OTS$", " of the Seas", base, flags=re.IGNORECASE).strip()
+        )
+    elif re.search(r"\s+of the Seas$", base, flags=re.IGNORECASE):
+        candidates.append(
+            re.sub(r"\s+of the Seas$", " OTS", base, flags=re.IGNORECASE).strip()
+        )
+
+    # Strip brand/corp prefix when Excel still has "USCG Mohawk" but catalog is "Mohawk".
+    prefixes = [
+        (brand or "").strip(),
+        (corp or "").strip(),
+        "USCG",
+        "USCGC",
+    ]
+    for prefix in prefixes:
+        if not prefix:
+            continue
+        pattern = re.compile(rf"^{re.escape(prefix)}\s+", re.IGNORECASE)
+        for source in list(candidates):
+            stripped = pattern.sub("", source).strip()
+            if stripped and stripped.casefold() != source.casefold():
+                candidates.append(stripped)
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for name in candidates:
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(name)
+    return ordered
 
 
 def resolve_port(port_key: str) -> Port:
@@ -60,41 +110,40 @@ def _as_loa(value: object) -> Decimal | None:
     return num if num > 0 else None
 
 
+def _apply_loa_if_missing(vessel: Vessel, loa: Decimal | None) -> Vessel:
+    if loa is not None and vessel.loa_m is None:
+        vessel.loa_m = loa
+        vessel.save(update_fields=["loa_m", "updated_at"])
+    return vessel
+
+
 def resolve_vessel(
     ship_raw: str,
     shipping_line: ShippingLine,
     *,
     loa_m: object = None,
+    brand: str | None = None,
+    corp: str | None = None,
 ) -> Vessel | None:
-    name = normalize_ship_name(ship_raw)
-    if not name:
+    candidates = ship_name_candidates(ship_raw, brand=brand, corp=corp)
+    if not candidates:
         return None
 
     qs = Vessel.objects.filter(shipping_line=shipping_line, is_active=True)
     loa = _as_loa(loa_m)
 
-    exact = qs.filter(name__iexact=name).first()
-    if exact:
-        if loa is not None and exact.loa_m is None:
-            exact.loa_m = loa
-            exact.save(update_fields=["loa_m", "updated_at"])
-        return exact
+    for name in candidates:
+        exact = qs.filter(name__iexact=name).first()
+        if exact:
+            return _apply_loa_if_missing(exact, loa)
 
-    starts = list(qs.filter(name__istartswith=name).order_by("name")[:5])
-    if len(starts) == 1:
-        vessel = starts[0]
-        if loa is not None and vessel.loa_m is None:
-            vessel.loa_m = loa
-            vessel.save(update_fields=["loa_m", "updated_at"])
-        return vessel
+        starts = list(qs.filter(name__istartswith=name).order_by("name")[:5])
+        if len(starts) == 1:
+            return _apply_loa_if_missing(starts[0], loa)
 
-    contains = list(qs.filter(name__icontains=name).order_by("name")[:5])
-    if len(contains) == 1:
-        vessel = contains[0]
-        if loa is not None and vessel.loa_m is None:
-            vessel.loa_m = loa
-            vessel.save(update_fields=["loa_m", "updated_at"])
-        return vessel
+        contains = list(qs.filter(name__icontains=name).order_by("name")[:5])
+        if len(contains) == 1:
+            return _apply_loa_if_missing(contains[0], loa)
 
     return None
 

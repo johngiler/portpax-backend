@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-# Excel file stem / port_key → Port.code
+# Excel port_key → Port.code
 PORT_BY_KEY: dict[str, str] = {
     "pop": "puerto_plata",
     "rtb": "roatan",
@@ -10,20 +10,29 @@ PORT_BY_KEY: dict[str, str] = {
     "paz": "la_paz",
     "sam": "samana",
     "mel": "melilla",
+    "ens": "ensenada",
 }
 
-# BERTHING PAPERS «BERTH ASSIG» → Position short suffix (catalog uses {port}-{suffix}).
-# Papers use legacy P1/P2/P3 labels; PortPax layouts use port-specific codes (E1/N1/…).
+# BERTHING «BERTH ASSIG» → Position short suffix (catalog uses {port}-{suffix}).
+# Papers use legacy P1/P2/P3; PortPax layouts use port-specific codes (E1/N1/…).
+# POP: Fernanda sheet may write E3 by mistake — ops confirm E3 ≡ W3.
 BERTH_ALIAS_BY_PORT_CODE: dict[str, dict[str, str]] = {
-    "puerto_plata": {"P1": "E1", "P2": "E2", "P3": "W3"},
+    "puerto_plata": {
+        "P1": "E1",
+        "P2": "E2",
+        "P3": "W3",
+        "E3": "W3",
+    },
     "cabo_rojo": {"P1": "N1", "P2": "S2"},
     "samana": {"P1": "S1", "P2": "N2"},
     "melilla": {"N3": "NE3", "P1": "NE2"},
     "la_paz": {"P1": "P1", "P2": "P2"},
     "roatan": {"P1": "P1", "P2": "P2", "A1": "A1", "A2": "A2"},
+    "ensenada": {},
 }
 
 # (filename substring upper, sheet name, port_key, c_means_confirmed)
+# Legacy multi-file BERTHING PAPERS folder.
 FILE_SPECS: list[tuple[str, str, str, bool]] = [
     ("BERTHING POP", "TB BOOKING", "pop", False),
     ("BERTHING ROATAN", "RT BOOKING", "rtb", False),
@@ -31,6 +40,17 @@ FILE_SPECS: list[tuple[str, str, str, bool]] = [
     ("BERTHING LA PAZ", "PZ BOOKING", "paz", False),
     ("BERTHING SAMANA", "SM BOOKING", "sam", False),
     ("BERTHING MELILLA", "MEL BOOKING", "mel", True),
+]
+
+# (sheet name, port_key, c_means_confirmed) — single workbook (one tab per port).
+# EN BOOKING (Ensenada) omitted per ops (Fernanda): no PortPax position layout yet.
+SHEET_SPECS: list[tuple[str, str, bool]] = [
+    ("TB BOOKING", "pop", False),
+    ("RT BOOKING", "rtb", False),
+    ("CBR BOOKING", "cbr", True),
+    ("PZ BOOKING", "paz", False),
+    ("SM BOOKING", "sam", False),
+    ("MEL BOOKING", "mel", True),
 ]
 
 # Brand / corp codes from Excel → ShippingLine.code (catalog)
@@ -67,6 +87,8 @@ BRAND_TO_LINE_CODE: dict[str, str] = {
     "HLY": "hapag-lloyd_cruises",
     "WS": "windstar_cruises",
     "CUN": "cunard",
+    "USCG": "uscgc",
+    "USCGC": "uscgc",
 }
 
 STATUS_MAP: dict[str, str] = {

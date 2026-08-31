@@ -44,7 +44,11 @@ class Command(BaseCommand):
             nargs="?",
             const=str(DEFAULT_XLSX),
             default=None,
-            help="Parse BERTHING PAPERS folder and write JSON before import",
+            help=(
+                "Parse Excel before import. Pass a multi-port .xlsx file "
+                "(e.g. Fernanda matrix) or a BERTHING PAPERS folder. "
+                "Without a path, uses the default BERTHING PAPERS folder."
+            ),
         )
         parser.add_argument(
             "--delete-data",
@@ -118,11 +122,11 @@ class Command(BaseCommand):
         skip_confirmation = options["skip_confirmation"]
 
         if xlsx_folder or parse_only:
-            folder = Path(xlsx_folder or DEFAULT_XLSX)
-            if not folder.is_dir():
-                raise CommandError(f"Excel folder not found: {folder}")
-            self.stdout.write(f"Parsing Excel from {folder} …")
-            rows = parse_and_write_json(folder, data_path)
+            source = Path(xlsx_folder or DEFAULT_XLSX)
+            if not source.exists():
+                raise CommandError(f"Excel source not found: {source}")
+            self.stdout.write(f"Parsing Excel from {source} …")
+            rows = parse_and_write_json(source, data_path)
             self.stdout.write(self.style.SUCCESS(f"Wrote {len(rows)} rows → {data_path}"))
             if parse_only:
                 return
@@ -130,7 +134,7 @@ class Command(BaseCommand):
             if not data_path.is_file():
                 raise CommandError(
                     f"Data file not found: {data_path}. "
-                    "Run with --from-xlsx to generate it from BERTHING PAPERS."
+                    "Run with --from-xlsx <file.xlsx|folder> to generate it."
                 )
             rows = load_rows_from_json(data_path)
             self.stdout.write(f"Loaded {len(rows)} rows from {data_path}")

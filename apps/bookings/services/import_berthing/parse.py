@@ -9,7 +9,11 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from apps.bookings.services.import_berthing.aliases import FILE_SPECS, STATUS_MAP
+from apps.bookings.services.import_berthing.aliases import (
+    FILE_SPECS,
+    SHEET_SPECS,
+    STATUS_MAP,
+)
 
 
 HEADER_ALIASES = {
@@ -192,6 +196,35 @@ def parse_workbook(
     return out
 
 
+def parse_berthing_workbook(path: Path) -> list[dict[str, Any]]:
+    """Parse a single multi-port workbook (one sheet per port, e.g. Fernanda matrix)."""
+    if not path.is_file():
+        raise FileNotFoundError(f"Workbook not found: {path}")
+    all_rows: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for sheet, port_key, c_confirmed in SHEET_SPECS:
+        try:
+            all_rows.extend(
+                parse_workbook(
+                    path,
+                    sheet_name=sheet,
+                    port_key=port_key,
+                    c_means_confirmed=c_confirmed,
+                )
+            )
+        except ValueError as exc:
+            if "not found" in str(exc).lower():
+                missing.append(sheet)
+                continue
+            raise
+    if not all_rows and missing:
+        raise ValueError(
+            f"No booking sheets found in {path.name}. Expected one of: "
+            + ", ".join(spec[0] for spec in SHEET_SPECS)
+        )
+    return all_rows
+
+
 def parse_berthing_folder(folder: Path) -> list[dict[str, Any]]:
     files = {p.name.upper(): p for p in folder.glob("*.xlsx")}
     all_rows: list[dict[str, Any]] = []
@@ -211,3 +244,12 @@ def parse_berthing_folder(folder: Path) -> list[dict[str, Any]]:
             )
         )
     return all_rows
+
+
+def parse_berthing_source(path: Path) -> list[dict[str, Any]]:
+    """Accept either a multi-port .xlsx file or a legacy BERTHING PAPERS folder."""
+    if path.is_file():
+        return parse_berthing_workbook(path)
+    if path.is_dir():
+        return parse_berthing_folder(path)
+    raise FileNotFoundError(f"Excel source not found: {path}")

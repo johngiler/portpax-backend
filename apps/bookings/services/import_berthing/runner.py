@@ -20,7 +20,7 @@ from apps.bookings.services.import_berthing.match import (
     resolve_shipping_line,
     resolve_vessel,
 )
-from apps.bookings.services.import_berthing.parse import parse_berthing_folder
+from apps.bookings.services.import_berthing.parse import parse_berthing_source
 from apps.catalogs.models import Port
 
 BERTHING_IMPORT_SOURCE = "berthing_import"
@@ -97,7 +97,13 @@ def _resolve_row_catalog(row: dict[str, Any]) -> tuple[dict[str, Any] | None, st
         )
 
     ship = row.get("ship") or ""
-    vessel = resolve_vessel(ship, line, loa_m=row.get("loa_m"))
+    vessel = resolve_vessel(
+        ship,
+        line,
+        loa_m=row.get("loa_m"),
+        brand=row.get("brand"),
+        corp=row.get("corp"),
+    )
     if vessel is None:
         return (
             None,
@@ -424,7 +430,7 @@ def import_berthing_rows(
     }
 
 
-def parse_and_write_json(xlsx_folder: Path, json_path: Path) -> list[dict[str, Any]]:
-    rows = parse_berthing_folder(xlsx_folder)
+def parse_and_write_json(xlsx_source: Path, json_path: Path) -> list[dict[str, Any]]:
+    rows = parse_berthing_source(xlsx_source)
     write_parsed_json(rows, json_path)
     return rows
