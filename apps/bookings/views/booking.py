@@ -212,6 +212,9 @@ class BookingViewSet(
         serializer = self.get_serializer(booking, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
+        from apps.notifications.services.booking import notify_booking_updated_detail
+
+        notify_booking_updated_detail(booking, actor=request.user)
         return Response(BookingSerializer(booking, context={"request": request}).data)
 
     def destroy(self, request, *args, **kwargs):
@@ -254,6 +257,11 @@ class BookingViewSet(
             if exc.field:
                 payload = {exc.field: [str(exc)]}
             return Response(payload, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.notifications.services.booking import notify_booking_created_wizard
+
+        for booking in bookings:
+            notify_booking_created_wizard(booking, actor=request.user)
 
         return Response(
             BookingListSerializer(bookings, many=True, context={"request": request}).data,

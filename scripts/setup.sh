@@ -27,6 +27,7 @@ apt-get update -qq
 echo "[setup] Installing system packages..."
 apt-get install -y \
   postgresql postgresql-contrib \
+  redis-server \
   nginx \
   certbot python3-certbot-nginx \
   python3 python3-venv python3-dev python3-pip \

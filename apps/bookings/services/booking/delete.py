@@ -15,6 +15,8 @@ def delete_cancelled_booking(
     if booking.status != BookingStatus.C:
         raise BookingDeleteError("Solo se pueden eliminar reservas canceladas.")
     code = booking.booking_code or str(booking.pk)
+    port_id = booking.port_id
+    booking_id = booking.id
     record_booking_audit(
         booking,
         action="deleted",
@@ -22,5 +24,13 @@ def delete_cancelled_booking(
         changes={"deleted": True},
         user=user,
         request=request,
+    )
+    from apps.notifications.services.booking import notify_booking_deleted
+
+    notify_booking_deleted(
+        booking_code=code,
+        booking_id=booking_id,
+        port_id=port_id,
+        actor=user,
     )
     booking.delete()

@@ -412,6 +412,29 @@ def import_berthing_rows(
         )
         confirmation_report["skipped"] = False
 
+    if not dry_run:
+        from apps.notifications.models import Notification
+        from apps.notifications.services.booking import (
+            notify_bookings_bulk_created,
+            notify_bookings_bulk_updated,
+        )
+
+        if created > 0:
+            notify_bookings_bulk_created(
+                count=created,
+                port_id=None,
+                batch_id=batch_id,
+                artifact=Notification.Artifact.BERTHING_IMPORT,
+                actor=created_by,
+            )
+        elif updated > 0:
+            notify_bookings_bulk_updated(
+                count=updated,
+                port_id=None,
+                artifact=Notification.Artifact.BERTHING_IMPORT,
+                actor=created_by,
+            )
+
     return {
         "batch_id": batch_id,
         "parsed": len(rows),

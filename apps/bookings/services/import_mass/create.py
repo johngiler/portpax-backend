@@ -307,6 +307,7 @@ def create_from_resolved_rows(
     created: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     created_booking_ids: list[int] = []
+    created_port_ids: set[int] = set()
     retry_rows: list[dict[str, Any]] = []
     audit_changes = {
         "import_batch_id": batch.id,
@@ -381,6 +382,7 @@ def create_from_resolved_rows(
                     booking = bookings[0]
 
             created_booking_ids.append(booking.id)
+            created_port_ids.add(port_id)
             created.append(
                 {
                     "id": row_id,
@@ -411,6 +413,20 @@ def create_from_resolved_rows(
             "requested_count",
         ]
     )
+
+    if created:
+        from apps.notifications.models import Notification
+        from apps.notifications.services.booking import notify_bookings_bulk_created
+
+        port_id = next(iter(created_port_ids)) if len(created_port_ids) == 1 else None
+        notify_bookings_bulk_created(
+            count=len(created),
+            port_id=port_id,
+            port_ids=created_port_ids if len(created_port_ids) > 1 else None,
+            batch_id=batch.id,
+            artifact=Notification.Artifact.MASS_IMPORT,
+            actor=created_by,
+        )
 
     return {
         "batch_id": batch.id,

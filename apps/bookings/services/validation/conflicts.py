@@ -151,6 +151,9 @@ def refresh_booking_conflicts(
     )
 
     if snapshot_changed:
+        from apps.notifications.models import Notification
+        from apps.notifications.services.booking import notify_booking_conflict
+
         if next_flag and not prev_flag:
             record_booking_audit(
                 booking,
@@ -164,6 +167,11 @@ def refresh_booking_conflicts(
                 user=user,
                 request=request,
             )
+            notify_booking_conflict(
+                booking,
+                event=Notification.Event.CONFLICT_DETECTED,
+                actor=user,
+            )
         elif prev_flag and not next_flag:
             record_booking_audit(
                 booking,
@@ -176,6 +184,11 @@ def refresh_booking_conflicts(
                 },
                 user=user,
                 request=request,
+            )
+            notify_booking_conflict(
+                booking,
+                event=Notification.Event.CONFLICT_RESOLVED,
+                actor=user,
             )
         elif next_flag and prev_flag and (
             prev_codes != next_codes or prev_severity != next_severity
@@ -195,6 +208,11 @@ def refresh_booking_conflicts(
                 },
                 user=user,
                 request=request,
+            )
+            notify_booking_conflict(
+                booking,
+                event=Notification.Event.CONFLICT_UPDATED,
+                actor=user,
             )
 
     return snapshot

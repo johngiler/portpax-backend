@@ -2,7 +2,7 @@
 #
 # Deploy PortPax backend to api.portpax.com (portpax-api).
 # Requires: rsync, SSH config Host portpax-api -> api.portpax.com, root on remote.
-# Target: /home/git/backend (gunicorn via systemd unit gunicorn.service).
+# Target: /home/git/backend (gunicorn :8000 HTTP, daphne :8001 WebSockets).
 #
 # Server-only files (never overwritten by rsync):
 #   .env, config/settings/local_settings.py, .venv, db.sqlite3, media/, data/, staticfiles/
@@ -64,13 +64,28 @@ ssh "$REMOTE_HOST" "$REMOTE_SETUP"
 echo "[deploy] Restarting gunicorn.service..."
 if ssh "$REMOTE_HOST" "systemctl is-enabled gunicorn.service >/dev/null 2>&1"; then
   ssh "$REMOTE_HOST" "sudo bash $REMOTE_PATH/scripts/ensure_gunicorn_logs.sh"
-  ssh "$REMOTE_HOST" "systemctl restart gunicorn.service && systemctl reload nginx"
+  ssh "$REMOTE_HOST" "systemctl restart gunicorn.service"
 else
   echo "[deploy] WARN: gunicorn.service systemd unit not installed. On server run:"
   echo "cp scripts/systemd/gunicorn.service /etc/systemd/system/gunicorn.service"
   echo "systemctl daemon-reload"
   echo "systemctl enable gunicorn.service"
   echo "systemctl start gunicorn.service"
+fi
+
+echo "[deploy] Restarting daphne.service (WebSockets)..."
+if ssh "$REMOTE_HOST" "systemctl is-enabled daphne.service >/dev/null 2>&1"; then
+  ssh "$REMOTE_HOST" "sudo bash $REMOTE_PATH/scripts/ensure_daphne_logs.sh"
+  ssh "$REMOTE_HOST" "systemctl restart daphne.service"
+else
+  echo "[deploy] WARN: daphne.service not installed. On server run:"
+  echo "cp scripts/systemd/daphne.service /etc/systemd/system/daphne.service"
+  echo "systemctl daemon-reload && systemctl enable --now daphne.service"
+  echo "Update nginx site from scripts/nginx/api.portpax.com.conf (location /ws/) and reload nginx."
+fi
+
+if ssh "$REMOTE_HOST" "systemctl is-active nginx >/dev/null 2>&1"; then
+  ssh "$REMOTE_HOST" "systemctl reload nginx"
 fi
 
 # Celery worker — optional restart (default: no)

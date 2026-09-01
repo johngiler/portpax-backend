@@ -25,6 +25,18 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
+def _notify_lta_job(agreement, *, event: str, count: int, artifact: str, actor) -> None:
+    from apps.notifications.services.booking import notify_lta_job
+
+    notify_lta_job(
+        port_id=agreement.port_id,
+        event=event,
+        count=count,
+        artifact=artifact,
+        actor=actor,
+    )
+
+
 def _actor(user_id: int | None):
     if user_id is None:
         return None
@@ -95,6 +107,16 @@ def lta_link_matching(self, agreement_id: int, user_id: int | None = None):
             actor=actor,
             entity=snapshot_lta(agreement),
         )
+        if linked > 0:
+            from apps.notifications.models import Notification
+
+            _notify_lta_job(
+                agreement,
+                event=Notification.Event.UPDATED,
+                count=linked,
+                artifact=Notification.Artifact.LTA_AGREEMENT,
+                actor=actor,
+            )
         return {"ok": True, "linked": linked, "no_match": no_match}
     except Exception as exc:
         logger.exception("lta_link_matching failed agreement_id=%s", agreement_id)
@@ -168,6 +190,17 @@ def lta_resync_agreement(self, agreement_id: int, user_id: int | None = None):
             actor=actor,
             entity=snapshot_lta(agreement),
         )
+        affected = linked + unlinked
+        if affected > 0:
+            from apps.notifications.models import Notification
+
+            _notify_lta_job(
+                agreement,
+                event=Notification.Event.UPDATED,
+                count=affected,
+                artifact=Notification.Artifact.LTA_AGREEMENT,
+                actor=actor,
+            )
         return {
             "ok": True,
             "linked": linked,
@@ -322,6 +355,16 @@ def lta_generate_bookings(self, agreement_id: int, user_id: int | None = None):
             actor=actor,
             entity=snapshot_lta(agreement),
         )
+        if created > 0:
+            from apps.notifications.models import Notification
+
+            _notify_lta_job(
+                agreement,
+                event=Notification.Event.CREATED,
+                count=created,
+                artifact=Notification.Artifact.LTA_GENERATE,
+                actor=actor,
+            )
         return {"ok": True, **result}
     except LtaGenerateError as exc:
         record_lta_audit(
@@ -410,6 +453,17 @@ def lta_regenerate_bookings(self, agreement_id: int, user_id: int | None = None)
             actor=actor,
             entity=snapshot_lta(agreement),
         )
+        affected = created + linked + unlinked
+        if affected > 0:
+            from apps.notifications.models import Notification
+
+            _notify_lta_job(
+                agreement,
+                event=Notification.Event.UPDATED,
+                count=affected,
+                artifact=Notification.Artifact.LTA_AGREEMENT,
+                actor=actor,
+            )
         return {"ok": True, **result}
     except LtaGenerateError as exc:
         record_lta_audit(

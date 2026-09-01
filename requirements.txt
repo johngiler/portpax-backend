@@ -5,6 +5,9 @@ djangorestframework-simplejwt
 drf-spectacular
 djoser
 gunicorn
+daphne
+channels
+channels-redis
 celery[redis]
 redis
 psycopg[binary]

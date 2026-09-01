@@ -289,6 +289,7 @@ def apply_bulk_edit_rows(
 ) -> dict:
     updated: list[dict] = []
     failed: list[dict] = []
+    updated_port_ids: set[int] = set()
 
     for payload in rows:
         booking_id = payload.get("booking_id")
@@ -387,6 +388,8 @@ def apply_bulk_edit_rows(
                     "booking_code": booking.booking_code,
                 }
             )
+            if booking.port_id:
+                updated_port_ids.add(int(booking.port_id))
         except BookingValidationError as exc:
             msg = str(exc)
             if exc.errors:
@@ -398,6 +401,19 @@ def apply_bulk_edit_rows(
             failed.append({"booking_id": booking_id, "detail": str(exc)})
         except Exception as exc:  # noqa: BLE001 — per-row isolation
             failed.append({"booking_id": booking_id, "detail": str(exc)})
+
+    if updated:
+        from apps.notifications.models import Notification
+        from apps.notifications.services.booking import notify_bookings_bulk_updated
+
+        port_id = next(iter(updated_port_ids)) if len(updated_port_ids) == 1 else None
+        notify_bookings_bulk_updated(
+            count=len(updated),
+            port_id=port_id,
+            port_ids=updated_port_ids if len(updated_port_ids) > 1 else None,
+            artifact=Notification.Artifact.MASS_UPDATE,
+            actor=user,
+        )
 
     return {
         "updated_count": len(updated),
