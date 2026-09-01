@@ -139,7 +139,8 @@ class ManagedUserViewSet(viewsets.ModelViewSet):
             except (TypeError, ValueError):
                 user_id = None
         data = build_user_activity(
-            kind=request.query_params.get("kind") or "all",
+            operation=request.query_params.get("operation") or "all",
+            kind=request.query_params.get("kind"),
             role=request.query_params.get("role") or None,
             is_active=request.query_params.get("is_active"),
             date_from=request.query_params.get("date_from"),

@@ -10,6 +10,10 @@ from django.utils.dateparse import parse_date, parse_datetime
 
 from apps.audit.models import ShippingLineAuditEntry
 from apps.audit.utils.activity_actor import actor_options_from_ids, parse_actor_param
+from apps.audit.utils.catalog_activity_filter import (
+    catalog_actions_for_operation,
+    norm_activity_operation,
+)
 from apps.audit.utils.friendly_changes import enrich_shipping_line_audit_changes
 
 CRUD_ACTIONS = (
@@ -20,6 +24,10 @@ CRUD_ACTIONS = (
     "vessel_updated",
     "vessel_deleted",
 )
+
+# Legacy kind param (deprecated).
+ACTIVITY_KINDS = ("all", "crud")
+ACTIVITY_OPERATIONS = ("all", "create", "update", "delete")
 
 
 def _actor_display(entry: ShippingLineAuditEntry) -> str | None:
@@ -70,17 +78,35 @@ def _item(entry: ShippingLineAuditEntry) -> dict[str, Any]:
     }
 
 
-def _base_qs(*, kind: str, shipping_line_id: int | None = None):
+def _resolve_action_filter(
+    *,
+    operation: str = "all",
+    kind: str | None = None,
+) -> tuple[str, ...] | None:
+    operation = norm_activity_operation(operation, ACTIVITY_OPERATIONS, "all")
+    legacy = (kind or "all").lower()
+    if legacy == "crud":
+        return CRUD_ACTIONS
+    if operation == "all":
+        return None
+    return catalog_actions_for_operation(operation, CRUD_ACTIONS)
+
+
+def _base_qs(
+    *,
+    action_filter: tuple[str, ...] | None = None,
+    shipping_line_id: int | None = None,
+):
     qs = ShippingLineAuditEntry.objects.select_related("actor", "shipping_line")
     if shipping_line_id is not None:
         qs = qs.filter(shipping_line_id=shipping_line_id)
-    if kind == "crud":
-        qs = qs.filter(action__in=CRUD_ACTIONS)
+    if action_filter is not None:
+        qs = qs.filter(action__in=action_filter)
     return qs
 
 
 def list_shipping_line_activity_actors() -> dict[str, Any]:
-    qs = _base_qs(kind="all")
+    qs = _base_qs()
     user_ids = qs.exclude(actor_id=None).values_list("actor_id", flat=True).distinct()
     has_system = qs.filter(actor_id__isnull=True).exists()
     return {
@@ -91,7 +117,8 @@ def list_shipping_line_activity_actors() -> dict[str, Any]:
 
 def build_shipping_line_activity(
     *,
-    kind: str = "all",
+    operation: str = "all",
+    kind: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     actor: str | None = None,
@@ -99,14 +126,11 @@ def build_shipping_line_activity(
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
-    kind = (kind or "all").lower()
-    if kind not in ("all", "crud"):
-        kind = "all"
-
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
 
-    qs = _base_qs(kind=kind, shipping_line_id=shipping_line_id)
+    action_filter = _resolve_action_filter(operation=operation, kind=kind)
+    qs = _base_qs(action_filter=action_filter, shipping_line_id=shipping_line_id)
 
     bound_from = _parse_bound(date_from, end_of_day=False)
     bound_to = _parse_bound(date_to, end_of_day=True)

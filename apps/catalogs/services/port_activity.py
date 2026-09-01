@@ -11,6 +11,10 @@ from django.utils.dateparse import parse_date, parse_datetime
 
 from apps.audit.models import PortAuditEntry
 from apps.audit.utils.activity_actor import actor_options_from_ids, parse_actor_param
+from apps.audit.utils.catalog_activity_filter import (
+    catalog_actions_for_operation,
+    norm_activity_operation,
+)
 from apps.audit.utils.friendly_changes import enrich_port_audit_changes
 
 CRUD_ACTIONS = (
@@ -45,6 +49,10 @@ CRUD_ACTIONS = (
     "loa_recalc_rule_updated",
     "loa_recalc_rule_deleted",
 )
+
+# Legacy kind param (deprecated).
+ACTIVITY_KINDS = ("all", "crud")
+ACTIVITY_OPERATIONS = ("all", "create", "update", "delete")
 
 
 def _actor_display(entry: PortAuditEntry) -> str | None:
@@ -90,12 +98,31 @@ def _item(entry: PortAuditEntry) -> dict[str, Any]:
     }
 
 
-def _base_qs(*, allowed_ports: list[int] | None, kind: str, port_id: int | None = None):
+def _resolve_action_filter(
+    *,
+    operation: str = "all",
+    kind: str | None = None,
+) -> tuple[str, ...] | None:
+    operation = norm_activity_operation(operation, ACTIVITY_OPERATIONS, "all")
+    legacy = (kind or "all").lower()
+    if legacy == "crud":
+        return CRUD_ACTIONS
+    if operation == "all":
+        return None
+    return catalog_actions_for_operation(operation, CRUD_ACTIONS)
+
+
+def _base_qs(
+    *,
+    allowed_ports: list[int] | None,
+    action_filter: tuple[str, ...] | None = None,
+    port_id: int | None = None,
+):
     qs = PortAuditEntry.objects.select_related("actor", "port")
     if port_id is not None:
         qs = qs.filter(Q(subject_port_id=port_id) | Q(port_id=port_id))
-    if kind == "crud":
-        qs = qs.filter(action__in=CRUD_ACTIONS)
+    if action_filter is not None:
+        qs = qs.filter(action__in=action_filter)
     if allowed_ports is not None:
         qs = qs.filter(subject_port_id__in=allowed_ports)
     return qs
@@ -105,7 +132,7 @@ def list_port_activity_actors(
     *,
     allowed_ports: list[int] | None,
 ) -> dict[str, Any]:
-    qs = _base_qs(allowed_ports=allowed_ports, kind="all")
+    qs = _base_qs(allowed_ports=allowed_ports)
     user_ids = qs.exclude(actor_id=None).values_list("actor_id", flat=True).distinct()
     has_system = qs.filter(actor_id__isnull=True).exists()
     return {
@@ -117,7 +144,8 @@ def list_port_activity_actors(
 def build_port_activity(
     *,
     allowed_ports: list[int] | None,
-    kind: str = "all",
+    operation: str = "all",
+    kind: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     actor: str | None = None,
@@ -125,16 +153,13 @@ def build_port_activity(
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
-    kind = (kind or "all").lower()
-    if kind not in ("all", "crud"):
-        kind = "all"
-
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
 
+    action_filter = _resolve_action_filter(operation=operation, kind=kind)
     qs = _base_qs(
         allowed_ports=allowed_ports,
-        kind=kind,
+        action_filter=action_filter,
         port_id=port_id,
     )
 

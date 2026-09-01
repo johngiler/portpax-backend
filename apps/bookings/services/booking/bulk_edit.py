@@ -355,6 +355,7 @@ def apply_bulk_edit_rows(
                 vessel_id=vessel_id,
                 call_date=call_date,
                 notes=notes,
+                audit_source="bulk_edit",
             )
             booking = update_booking_operational(
                 booking,
@@ -365,6 +366,7 @@ def apply_bulk_edit_rows(
                 etd=etd,
                 port_operator_override=port_operator_override,
                 override_reason=override_reason,
+                audit_source="bulk_edit",
             )
             if (
                 new_status
@@ -377,6 +379,7 @@ def apply_bulk_edit_rows(
                     user=user,
                     request=request,
                     require_lta_agreement=False,
+                    audit_source="bulk_edit",
                 )
             updated.append(
                 {

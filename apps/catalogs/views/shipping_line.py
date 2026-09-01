@@ -161,7 +161,8 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
                 shipping_line_id = None
 
         data = build_shipping_line_activity(
-            kind=request.query_params.get("kind") or "all",
+            operation=request.query_params.get("operation") or "all",
+            kind=request.query_params.get("kind"),
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
             actor=request.query_params.get("actor"),

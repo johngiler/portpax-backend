@@ -43,6 +43,7 @@ def update_booking_identity(
     vessel_id: int | None = None,
     call_date: date | None = None,
     notes: str | None = None,
+    audit_source: str | None = None,
 ) -> Booking:
     if booking.status == BookingStatus.C:
         raise BookingValidationError(
@@ -262,6 +263,9 @@ def update_booking_identity(
         summary = "Actualización de identidad de escala"
     elif "notes" in changes:
         summary = "Actualización de notas"
+
+    if audit_source:
+        changes["source"] = audit_source
 
     record_booking_audit(
         booking,

@@ -209,6 +209,8 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
         data = build_lta_activity(
             allowed_ports=None if allowed is None else list(allowed),
             kind=request.query_params.get("kind") or "all",
+            operation=request.query_params.get("operation") or "all",
+            origin=request.query_params.get("origin") or "all",
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
             actor=request.query_params.get("actor"),

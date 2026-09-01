@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
@@ -17,7 +18,87 @@ from apps.catalogs.models import Port, ShippingLine
 CRUD_ACTIONS = ("created", "updated", "deleted")
 LINK_ACTIONS = ("link_bookings",)
 GENERATE_ACTIONS = ("generate_bookings",)
+
+# Legacy kind param (deprecated).
 ACTIVITY_KINDS = ("all", "crud", "link", "generate")
+
+ACTIVITY_OPERATIONS = (
+    "all",
+    "create",
+    "update",
+    "delete",
+    "link",
+    "generate",
+    "regenerate",
+)
+ACTIVITY_ORIGINS = ("all", "booking")
+
+
+def _norm(value: str | None, allowed: tuple[str, ...], default: str) -> str:
+    lowered = (value or default).lower()
+    return lowered if lowered in allowed else default
+
+
+def _legacy_kind_filters(kind: str) -> dict[str, Any]:
+    if kind == "crud":
+        return {"crud_only": True}
+    if kind == "link":
+        return {"operation": "link", "origin": "booking"}
+    if kind == "generate":
+        return {"all_generate_jobs": True}
+    return {}
+
+
+def _resolve_activity_filters(
+    *,
+    operation: str = "all",
+    origin: str = "all",
+    kind: str | None = None,
+) -> dict[str, Any]:
+    operation = _norm(operation, ACTIVITY_OPERATIONS, "all")
+    origin = _norm(origin, ACTIVITY_ORIGINS, "all")
+    crud_only = False
+    all_generate_jobs = False
+
+    legacy = _legacy_kind_filters(kind) if kind and kind not in ("all", "") else {}
+    if legacy.get("crud_only"):
+        crud_only = True
+    if legacy.get("all_generate_jobs"):
+        all_generate_jobs = True
+    if legacy.get("operation"):
+        operation = legacy["operation"]
+    if legacy.get("origin"):
+        origin = legacy["origin"]
+
+    actions: tuple[str, ...] | None = None
+    job_kind: str | None = None
+
+    if crud_only:
+        actions = CRUD_ACTIONS
+    elif all_generate_jobs:
+        actions = GENERATE_ACTIONS
+    elif operation == "create":
+        actions = ("created",)
+    elif operation == "update":
+        actions = ("updated",)
+    elif operation == "delete":
+        actions = ("deleted",)
+    elif operation == "link" and origin == "booking":
+        actions = LINK_ACTIONS
+    elif operation == "generate" and origin == "booking":
+        actions = GENERATE_ACTIONS
+        job_kind = "generate"
+    elif operation == "regenerate" and origin == "booking":
+        actions = GENERATE_ACTIONS
+        job_kind = "regenerate"
+    else:
+        actions = CRUD_ACTIONS + LINK_ACTIONS + GENERATE_ACTIONS
+
+    return {
+        "actions": actions,
+        "job_kind": job_kind,
+        "all_generate_jobs": all_generate_jobs,
+    }
 
 
 def _actor_display(entry: LtaAuditEntry) -> str | None:
@@ -45,8 +126,12 @@ def _parse_bound(value: str | None, *, end_of_day: bool = False):
 
 
 def _item_kind(entry: LtaAuditEntry) -> str:
-    """CRUD vs vinculación vs generación (async jobs via action or job_kind)."""
+    """Display bucket: crud vs link vs generate (legacy item.kind field)."""
     if entry.action in GENERATE_ACTIONS:
+        changes = entry.changes if isinstance(entry.changes, dict) else {}
+        job_kind = changes.get("job_kind")
+        if job_kind == "regenerate":
+            return "generate"
         return "generate"
     if entry.action in LINK_ACTIONS:
         return "link"
@@ -60,7 +145,6 @@ def _item_kind(entry: LtaAuditEntry) -> str:
         "generate",
         "regenerate",
     ) and job_status in ("success", "failed", "queued"):
-        # Queued create/update/delete stay CRUD; job completions get their own kind.
         if entry.action in CRUD_ACTIONS and job_status == "queued":
             return "crud"
         if job_kind in ("generate", "regenerate"):
@@ -150,18 +234,23 @@ def _item(
 def _base_qs(
     *,
     allowed_ports: list[int] | None,
-    kind: str,
+    filters: dict[str, Any],
     agreement_id: int | None = None,
 ):
     qs = LtaAuditEntry.objects.select_related("actor", "agreement")
     if agreement_id is not None:
         qs = qs.filter(agreement_id=agreement_id)
-    if kind == "crud":
-        qs = qs.filter(action__in=CRUD_ACTIONS)
-    elif kind == "link":
-        qs = qs.filter(action__in=LINK_ACTIONS)
-    elif kind == "generate":
-        qs = qs.filter(action__in=GENERATE_ACTIONS)
+
+    actions = filters.get("actions") or CRUD_ACTIONS + LINK_ACTIONS + GENERATE_ACTIONS
+    qs = qs.filter(action__in=actions)
+
+    if filters.get("all_generate_jobs"):
+        qs = qs.filter(
+            Q(changes__job_kind="generate") | Q(changes__job_kind="regenerate")
+        )
+    elif filters.get("job_kind"):
+        qs = qs.filter(changes__job_kind=filters["job_kind"])
+
     if allowed_ports is not None:
         qs = qs.filter(port_id__in=allowed_ports)
     return qs
@@ -171,7 +260,8 @@ def list_lta_activity_actors(
     *,
     allowed_ports: list[int] | None,
 ) -> dict[str, Any]:
-    qs = _base_qs(allowed_ports=allowed_ports, kind="all")
+    filters = _resolve_activity_filters(operation="all", origin="all")
+    qs = _base_qs(allowed_ports=allowed_ports, filters=filters)
     user_ids = qs.exclude(actor_id=None).values_list("actor_id", flat=True).distinct()
     has_system = qs.filter(actor_id__isnull=True).exists()
     return {
@@ -184,6 +274,8 @@ def build_lta_activity(
     *,
     allowed_ports: list[int] | None,
     kind: str = "all",
+    operation: str = "all",
+    origin: str = "all",
     date_from: str | None = None,
     date_to: str | None = None,
     actor: str | None = None,
@@ -191,16 +283,15 @@ def build_lta_activity(
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
-    kind = (kind or "all").lower()
-    if kind not in ACTIVITY_KINDS:
-        kind = "all"
+    kind = _norm(kind, ACTIVITY_KINDS, "all")
+    filters = _resolve_activity_filters(operation=operation, origin=origin, kind=kind)
 
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
 
     qs = _base_qs(
         allowed_ports=allowed_ports,
-        kind=kind,
+        filters=filters,
         agreement_id=agreement_id,
     )
 

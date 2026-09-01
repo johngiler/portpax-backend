@@ -79,10 +79,11 @@ def unlink_agreement_bookings(
             action="lta_unlinked",
             summary=f"Acuerdo LTA desvinculado: {code}",
             changes={
+                "source": "lta_agreement",
                 "long_term_agreement": {
                     "old": code,
                     "new": None,
-                }
+                },
             },
             user=user,
         )
@@ -192,10 +193,11 @@ def link_matching_bookings(
                 action="lta_linked",
                 summary=f"Acuerdo LTA vinculado: {agreement.code}",
                 changes={
+                    "source": "lta_agreement",
                     "long_term_agreement": {
                         "old": None,
                         "new": agreement.code,
-                    }
+                    },
                 },
                 user=user,
             )

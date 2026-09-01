@@ -50,6 +50,7 @@ def update_booking_status(
     etd_real=None,
     acknowledge_combined_red: bool = False,
     require_lta_agreement: bool = True,
+    audit_source: str | None = None,
 ) -> Booking:
     allowed = ALLOWED_TRANSITIONS.get(booking.status, set())
     if new_status not in allowed:
@@ -164,6 +165,8 @@ def update_booking_status(
             "from": cleared_lta_code,
             "to": None,
         }
+    if audit_source:
+        status_changes["source"] = audit_source
     record_booking_audit(
         booking,
         action="status_change",
@@ -192,6 +195,7 @@ def update_booking_operational(
     port_operator_override: bool = False,
     acknowledge_combined_red: bool = False,
     override_reason: str = "",
+    audit_source: str | None = None,
 ) -> Booking:
     changes: dict = {}
     update_fields = ["updated_at"]
@@ -318,6 +322,8 @@ def update_booking_operational(
             summary = "Cambio de horario"
         if acknowledge_combined_red:
             changes["acknowledge_combined_red"] = True
+        if audit_source:
+            changes["source"] = audit_source
         record_booking_audit(
             booking,
             action="operational_update",

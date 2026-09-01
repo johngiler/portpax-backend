@@ -10,10 +10,16 @@ from django.utils.dateparse import parse_date, parse_datetime
 
 from apps.audit.models import UserAuditEntry
 from apps.audit.utils.activity_actor import actor_options_from_ids, parse_actor_param
+from apps.audit.utils.catalog_activity_filter import norm_activity_operation
 from apps.audit.utils.friendly_changes import enrich_user_audit_changes
 
 CRUD_ACTIONS = ("created", "updated", "deleted")
 LOGIN_ACTIONS = ("login",)
+ALL_TRACKED_ACTIONS = CRUD_ACTIONS + LOGIN_ACTIONS
+
+# Legacy kind param (deprecated).
+ACTIVITY_KINDS = ("all", "crud", "login")
+ACTIVITY_OPERATIONS = ("all", "create", "update", "delete", "login")
 
 
 def _actor_display(entry: UserAuditEntry) -> str | None:
@@ -72,19 +78,43 @@ def _item(entry: UserAuditEntry) -> dict[str, Any]:
     }
 
 
-def _base_qs(*, kind: str, user_id: int | None = None):
+def _resolve_action_filter(
+    *,
+    operation: str = "all",
+    kind: str | None = None,
+) -> tuple[str, ...] | None:
+    operation = norm_activity_operation(operation, ACTIVITY_OPERATIONS, "all")
+    legacy = (kind or "all").lower()
+    if legacy == "crud":
+        return CRUD_ACTIONS
+    if legacy == "login":
+        return LOGIN_ACTIONS
+    if operation == "login":
+        return LOGIN_ACTIONS
+    if operation == "create":
+        return ("created",)
+    if operation == "update":
+        return ("updated",)
+    if operation == "delete":
+        return ("deleted",)
+    return None
+
+
+def _base_qs(
+    *,
+    action_filter: tuple[str, ...] | None = None,
+    user_id: int | None = None,
+):
     qs = UserAuditEntry.objects.select_related("actor", "subject")
     if user_id is not None:
         qs = qs.filter(subject_id=user_id)
-    if kind == "crud":
-        qs = qs.filter(action__in=CRUD_ACTIONS)
-    elif kind == "login":
-        qs = qs.filter(action__in=LOGIN_ACTIONS)
+    if action_filter is not None:
+        qs = qs.filter(action__in=action_filter)
     return qs
 
 
 def list_user_activity_actors() -> dict[str, Any]:
-    qs = _base_qs(kind="all")
+    qs = _base_qs()
     user_ids = qs.exclude(actor_id=None).values_list("actor_id", flat=True).distinct()
     has_system = qs.filter(actor_id__isnull=True).exists()
     return {
@@ -95,7 +125,8 @@ def list_user_activity_actors() -> dict[str, Any]:
 
 def build_user_activity(
     *,
-    kind: str = "all",
+    operation: str = "all",
+    kind: str | None = None,
     role: str | None = None,
     is_active: str | None = None,
     date_from: str | None = None,
@@ -105,14 +136,11 @@ def build_user_activity(
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
-    kind = (kind or "all").lower()
-    if kind not in ("all", "crud", "login"):
-        kind = "all"
-
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
 
-    qs = _base_qs(kind=kind, user_id=user_id)
+    action_filter = _resolve_action_filter(operation=operation, kind=kind)
+    qs = _base_qs(action_filter=action_filter, user_id=user_id)
 
     if role:
         qs = qs.filter(subject_role=role)

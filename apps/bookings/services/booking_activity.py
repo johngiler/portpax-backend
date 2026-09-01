@@ -20,9 +20,25 @@ SINGLE_ACTIONS = (
     "status_change",
     "lta_linked",
     "lta_unlinked",
+    "deleted",
 )
 
-# Structural kinds + creation-origin filters (Tipo dropdown).
+CREATE_AUDIT_ACTIONS = ("created",)
+UPDATE_AUDIT_ACTIONS = (
+    "operational_update",
+    "identity_update",
+    "status_change",
+    "lta_linked",
+    "lta_unlinked",
+)
+DELETE_AUDIT_ACTIONS = ("deleted",)
+LTA_LINK_ACTIONS = ("lta_linked", "lta_unlinked")
+BOOKING_UPDATE_ACTIONS = tuple(
+    action for action in UPDATE_AUDIT_ACTIONS if action not in LTA_LINK_ACTIONS
+)
+LTA_AGREEMENT_SOURCES = ("lta_agreement",)
+
+# Legacy single-axis filter (Tipo dropdown — deprecated, kept for compat).
 ACTIVITY_KINDS = (
     "all",
     "single",
@@ -33,7 +49,164 @@ ACTIVITY_KINDS = (
     "lta_generate",
 )
 
+ACTIVITY_OPERATIONS = ("all", "create", "update", "delete")
+ACTIVITY_ORIGINS = (
+    "all",
+    "wizard",
+    "mass_import",
+    "berthing_import",
+    "lta_generate",
+    "booking_update",
+    "mass_update",
+    "lta_agreement",
+    "lta_link",  # legacy alias of lta_agreement
+)
+
 MASS_IMPORT_SOURCES = ("mass_import", "import_file", "import_paste")
+
+
+def _norm(value: str | None, allowed: tuple[str, ...], default: str) -> str:
+    lowered = (value or default).lower()
+    return lowered if lowered in allowed else default
+
+
+def _legacy_kind_filters(kind: str) -> dict[str, Any]:
+    """Map deprecated kind param to operation/origin/include flags."""
+    if kind == "single":
+        return {"include_bulk": False}
+    if kind == "bulk":
+        return {"operation": "create", "include_single": False}
+    if kind == "wizard":
+        return {"operation": "create", "origin": "wizard"}
+    if kind == "mass_import":
+        return {"operation": "create", "origin": "mass_import"}
+    if kind == "berthing_import":
+        return {"operation": "create", "origin": "berthing_import"}
+    if kind == "lta_generate":
+        return {"operation": "create", "origin": "lta_generate"}
+    return {}
+
+
+def _resolve_activity_filters(
+    *,
+    operation: str = "all",
+    origin: str = "all",
+    kind: str | None = None,
+) -> dict[str, Any]:
+    operation = _norm(operation, ACTIVITY_OPERATIONS, "all")
+    origin = _norm(origin, ACTIVITY_ORIGINS, "all")
+    if origin == "lta_link":
+        origin = "lta_agreement"
+
+    include_single = True
+    include_bulk = True
+    audit_actions: tuple[str, ...] | None = None
+    source_filter: str | None = None
+    exclude_sources: tuple[str, ...] = ()
+    lta_agreement_only = False
+    batch_kind: str | None = None
+
+    legacy = _legacy_kind_filters(kind) if kind and kind not in ("all", "") else {}
+    if legacy.get("include_single") is False:
+        include_single = False
+    if legacy.get("include_bulk") is False:
+        include_bulk = False
+    if legacy.get("operation"):
+        operation = legacy["operation"]
+    if legacy.get("origin"):
+        origin = legacy["origin"]
+
+    if operation == "create":
+        audit_actions = CREATE_AUDIT_ACTIONS
+    elif operation == "update":
+        audit_actions = UPDATE_AUDIT_ACTIONS
+        include_bulk = False
+    elif operation == "delete":
+        audit_actions = DELETE_AUDIT_ACTIONS
+        include_bulk = False
+    else:
+        audit_actions = SINGLE_ACTIONS
+
+    if origin == "wizard":
+        include_bulk = False
+        if operation in ("all", "create"):
+            source_filter = "wizard"
+            audit_actions = _intersect_actions(audit_actions, CREATE_AUDIT_ACTIONS)
+        elif operation == "update":
+            audit_actions = _intersect_actions(audit_actions, BOOKING_UPDATE_ACTIONS)
+            exclude_sources = ("bulk_edit", *LTA_AGREEMENT_SOURCES)
+    elif origin == "lta_generate":
+        source_filter = "lta_generate"
+        include_bulk = False
+        audit_actions = _intersect_actions(audit_actions, CREATE_AUDIT_ACTIONS)
+    elif origin == "mass_import":
+        batch_kind = "mass_import"
+        include_single = False
+        if operation in ("all", "create"):
+            audit_actions = CREATE_AUDIT_ACTIONS
+        else:
+            include_bulk = False
+            audit_actions = ()
+    elif origin == "berthing_import":
+        # One-time CLI import: aggregate batch row only (no per-booking audits in feed).
+        batch_kind = "berthing_import"
+        include_single = False
+        if operation in ("all", "create"):
+            audit_actions = CREATE_AUDIT_ACTIONS
+        else:
+            include_bulk = False
+            audit_actions = ()
+    elif origin == "lta_agreement":
+        include_bulk = False
+        lta_agreement_only = True
+        if operation in ("all", "update"):
+            audit_actions = _intersect_actions(audit_actions, UPDATE_AUDIT_ACTIONS)
+        elif operation == "create":
+            include_single = False
+            audit_actions = ()
+    elif origin == "mass_update":
+        include_bulk = False
+        source_filter = "bulk_edit"
+        audit_actions = _intersect_actions(audit_actions, BOOKING_UPDATE_ACTIONS)
+    elif origin == "booking_update":
+        include_bulk = False
+        audit_actions = _intersect_actions(audit_actions, BOOKING_UPDATE_ACTIONS)
+        exclude_sources = ("bulk_edit", *LTA_AGREEMENT_SOURCES)
+
+    if operation == "create" and origin in ("lta_agreement", "booking_update"):
+        include_single = False
+        include_bulk = False
+        audit_actions = ()
+    if operation == "update" and origin in (
+        "lta_generate",
+        "mass_import",
+        "berthing_import",
+    ):
+        include_single = False
+        include_bulk = False
+        audit_actions = ()
+    if operation == "delete" and origin not in ("all",):
+        include_single = False
+        audit_actions = ()
+
+    return {
+        "include_single": include_single,
+        "include_bulk": include_bulk,
+        "audit_actions": audit_actions,
+        "source_filter": source_filter,
+        "exclude_sources": exclude_sources,
+        "lta_agreement_only": lta_agreement_only,
+        "batch_kind": batch_kind,
+    }
+
+
+def _intersect_actions(
+    current: tuple[str, ...] | None,
+    allowed: tuple[str, ...],
+) -> tuple[str, ...]:
+    if not current:
+        return allowed
+    return tuple(action for action in current if action in allowed)
 
 
 def _user_display(user) -> str | None:
@@ -114,11 +287,18 @@ def _audit_queryset(
     date_to,
     actor_system: bool = False,
     actor_user_id: int | None = None,
+    actions: tuple[str, ...] | None = None,
     source: str | None = None,
+    exclude_sources: tuple[str, ...] = (),
+    lta_agreement_only: bool = False,
     booking_id: int | None = None,
 ):
+    actions = actions if actions is not None else SINGLE_ACTIONS
+    if not actions:
+        return BookingAuditEntry.objects.none()
+
     qs = (
-        BookingAuditEntry.objects.filter(action__in=SINGLE_ACTIONS)
+        BookingAuditEntry.objects.filter(action__in=actions)
         .select_related("booking", "user")
         .exclude(changes__has_key="import_batch_id")
     )
@@ -129,6 +309,16 @@ def _audit_queryset(
             qs = qs.filter(changes__source__in=MASS_IMPORT_SOURCES)
         else:
             qs = qs.filter(changes__source=source)
+    if exclude_sources:
+        for excluded in exclude_sources:
+            qs = qs.filter(
+                ~Q(changes__has_key="source") | ~Q(changes__source=excluded)
+            )
+    if lta_agreement_only:
+        qs = qs.filter(
+            Q(action__in=LTA_LINK_ACTIONS)
+            | Q(changes__source__in=LTA_AGREEMENT_SOURCES)
+        )
     if allowed_ports is not None:
         qs = qs.filter(
             Q(port_id__in=allowed_ports) | Q(booking__port_id__in=allowed_ports)
@@ -211,6 +401,8 @@ def build_booking_activity(
     user,
     allowed_ports: list[int] | None,
     kind: str = "all",
+    operation: str = "all",
+    origin: str = "all",
     date_from: str | None = None,
     date_to: str | None = None,
     actor: str | None = None,
@@ -218,9 +410,12 @@ def build_booking_activity(
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
-    kind = (kind or "all").lower()
-    if kind not in ACTIVITY_KINDS:
-        kind = "all"
+    kind = _norm(kind, ACTIVITY_KINDS, "all")
+    filters = _resolve_activity_filters(
+        operation=operation,
+        origin=origin,
+        kind=kind,
+    )
 
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
@@ -235,6 +430,10 @@ def build_booking_activity(
             date_to=bound_to,
             actor_system=actor_system,
             actor_user_id=actor_user_id,
+            actions=filters["audit_actions"],
+            source=filters["source_filter"],
+            exclude_sources=filters["exclude_sources"],
+            lta_agreement_only=filters["lta_agreement_only"],
             booking_id=booking_id,
         )
         count = qs.count()
@@ -248,29 +447,22 @@ def build_booking_activity(
         }
 
     items: list[dict[str, Any]] = []
-    include_single = kind in ("all", "single", "wizard", "berthing_import", "lta_generate")
-    include_bulk = kind in ("all", "bulk", "mass_import", "berthing_import")
-    source_filter = (
-        kind if kind in ("wizard", "berthing_import", "lta_generate") else None
-    )
-    batch_kind = (
-        "berthing_import"
-        if kind == "berthing_import"
-        else ("mass_import" if kind == "mass_import" else None)
-    )
 
-    if include_single:
+    if filters["include_single"]:
         for entry in _audit_queryset(
             allowed_ports=allowed_ports,
             date_from=bound_from,
             date_to=bound_to,
             actor_system=actor_system,
             actor_user_id=actor_user_id,
-            source=source_filter,
+            actions=filters["audit_actions"],
+            source=filters["source_filter"],
+            exclude_sources=filters["exclude_sources"],
+            lta_agreement_only=filters["lta_agreement_only"],
         )[:500]:
             items.append(_single_item(entry))
 
-    if include_bulk:
+    if filters["include_bulk"]:
         for batch in _batch_queryset(
             allowed_ports=allowed_ports,
             user=user,
@@ -278,7 +470,7 @@ def build_booking_activity(
             date_to=bound_to,
             actor_system=actor_system,
             actor_user_id=actor_user_id,
-            kind=batch_kind,
+            kind=filters["batch_kind"],
         )[:500]:
             items.append(_bulk_item(batch))
 

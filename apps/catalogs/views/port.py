@@ -137,7 +137,8 @@ class PortViewSet(viewsets.ModelViewSet):
                 port_id = None
         data = build_port_activity(
             allowed_ports=None if allowed is None else list(allowed),
-            kind=request.query_params.get("kind") or "all",
+            operation=request.query_params.get("operation") or "all",
+            kind=request.query_params.get("kind"),
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
             actor=request.query_params.get("actor"),

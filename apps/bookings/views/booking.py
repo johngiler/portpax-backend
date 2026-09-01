@@ -216,8 +216,13 @@ class BookingViewSet(
 
     def destroy(self, request, *args, **kwargs):
         booking = self.get_object()
+        self._ensure_port_access(booking.port_id)
         try:
-            delete_cancelled_booking(booking)
+            delete_cancelled_booking(
+                booking,
+                user=request.user,
+                request=request,
+            )
         except BookingDeleteError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -493,6 +498,8 @@ class BookingViewSet(
             user=request.user,
             allowed_ports=user_port_ids(request.user),
             kind=request.query_params.get("kind") or "all",
+            operation=request.query_params.get("operation") or "all",
+            origin=request.query_params.get("origin") or "all",
             date_from=request.query_params.get("date_from"),
             date_to=request.query_params.get("date_to"),
             actor=request.query_params.get("actor"),
