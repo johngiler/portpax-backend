@@ -76,12 +76,12 @@ def lta_link_matching(self, agreement_id: int, user_id: int | None = None):
     try:
         result = link_matching_bookings(agreement, user=actor)
         linked = int(result.get("linked") or 0)
-        skipped = int(result.get("skipped") or 0)
+        no_match = int(result.get("no_match") or 0)
         record_lta_audit(
             action="link_bookings",
             summary=(
                 f"Vinculación LTA completada ({agreement.code}): "
-                f"{linked} vinculadas, {skipped} omitidas"
+                f"{linked} vinculadas, {no_match} sin match con el acuerdo"
             ),
             agreement=agreement,
             changes={
@@ -89,13 +89,13 @@ def lta_link_matching(self, agreement_id: int, user_id: int | None = None):
                 "job_kind": "link",
                 "task_id": task_id,
                 "linked": linked,
-                "skipped": skipped,
+                "no_match": no_match,
                 "agreement_code": agreement.code,
             },
             actor=actor,
             entity=snapshot_lta(agreement),
         )
-        return {"ok": True, "linked": linked, "skipped": skipped}
+        return {"ok": True, "linked": linked, "no_match": no_match}
     except Exception as exc:
         logger.exception("lta_link_matching failed agreement_id=%s", agreement_id)
         record_lta_audit(
@@ -146,7 +146,7 @@ def lta_resync_agreement(self, agreement_id: int, user_id: int | None = None):
         result = resync_agreement_bookings(agreement, user=actor)
         linked = int(result.get("linked") or 0)
         unlinked = int(result.get("unlinked") or 0)
-        skipped = int(result.get("skipped") or 0)
+        no_match = int(result.get("no_match") or 0)
         kept = int(result.get("kept") or 0)
         record_lta_audit(
             action="link_bookings",
@@ -161,7 +161,7 @@ def lta_resync_agreement(self, agreement_id: int, user_id: int | None = None):
                 "task_id": task_id,
                 "linked": linked,
                 "unlinked_bookings": unlinked,
-                "skipped": skipped,
+                "no_match": no_match,
                 "kept": kept,
                 "agreement_code": agreement.code,
             },

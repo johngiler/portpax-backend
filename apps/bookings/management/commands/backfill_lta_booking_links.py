@@ -76,19 +76,19 @@ class Command(BaseCommand):
         self.stdout.write(f"[{mode}] Processing {len(agreements)} agreement(s)…")
 
         total_linked = 0
-        total_skipped = 0
+        total_no_match = 0
         for agreement in agreements:
             result = link_matching_bookings(agreement, dry_run=dry_run)
             linked = int(result.get("linked") or 0)
-            skipped = int(result.get("skipped") or 0)
+            no_match = int(result.get("no_match") or 0)
             total_linked += linked
-            total_skipped += skipped
+            total_no_match += no_match
             detail = result.get("detail")
             if detail and linked == 0:
                 self.stdout.write(f"  {agreement.code}: {detail}")
             else:
                 self.stdout.write(
-                    f"  {agreement.code}: linked={linked} skipped={skipped}"
+                    f"  {agreement.code}: linked={linked} no_match={no_match}"
                 )
 
         # Live counts after write (or current counts on dry-run).
@@ -112,6 +112,6 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"Done [{mode}]. agreements={len(agreements)} "
-                f"linked={total_linked} skipped={total_skipped}"
+                f"linked={total_linked} no_match={total_no_match}"
             )
         )

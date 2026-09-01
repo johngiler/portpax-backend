@@ -144,7 +144,7 @@ def link_matching_bookings(
     if not agreement.is_active:
         return {
             "linked": 0,
-            "skipped": 0,
+            "no_match": 0,
             "dry_run": dry_run,
             "detail": "El acuerdo no está activo.",
             "agreement_code": agreement.code,
@@ -163,12 +163,12 @@ def link_matching_bookings(
         candidates = candidates.filter(pk__in=booking_ids)
 
     to_update: list[Booking] = []
-    skipped = 0
+    no_match = 0
     now = timezone.now()
 
     for booking in candidates:
         if not agreement_covers_booking(agreement, booking):
-            skipped += 1
+            no_match += 1
             continue
         best = find_best_matching_agreement(
             port_id=booking.port_id,
@@ -178,7 +178,7 @@ def link_matching_bookings(
             position=booking.position,
         )
         if best is None or best.pk != agreement.pk:
-            skipped += 1
+            no_match += 1
             continue
         booking.long_term_agreement = agreement
         booking.updated_at = now
@@ -202,7 +202,7 @@ def link_matching_bookings(
 
     return {
         "linked": len(to_update),
-        "skipped": skipped,
+        "no_match": no_match,
         "dry_run": dry_run,
         "agreement_code": agreement.code,
     }
@@ -243,7 +243,7 @@ def resync_agreement_bookings(
     return {
         "unlinked": int(unlinked.get("unlinked") or 0),
         "linked": int(linked.get("linked") or 0),
-        "skipped": int(linked.get("skipped") or 0),
+        "no_match": int(linked.get("no_match") or 0),
         "kept": len(antes & deseado),
         "dry_run": dry_run,
         "agreement_code": agreement.code,
