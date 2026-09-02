@@ -173,7 +173,7 @@ def recompute_future_planned_pax_from_history(
         if planned is None:
             continue
         qs = (
-            Booking.objects.filter(vessel_id=vessel.id, call_date__gt=as_of)
+            Booking.objects.filter(vessel_id=vessel.id, call_date__gte=as_of)
             .exclude(status=BookingStatus.C)
             .filter(actual_pax__isnull=True)
             .exclude(planned_pax=planned)
