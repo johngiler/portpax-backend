@@ -28,7 +28,7 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     BookingStatus.LTA: {BookingStatus.CL, BookingStatus.CO, BookingStatus.R, BookingStatus.C},
     BookingStatus.LTD: {BookingStatus.R, BookingStatus.C},
     BookingStatus.R: set(),
-    BookingStatus.C: set(),
+    BookingStatus.C: {BookingStatus.H},
 }
 
 
@@ -125,6 +125,21 @@ def update_booking_status(
     update_fields = ["status", "updated_at"]
     if new_status in (BookingStatus.LTA, BookingStatus.CL) and booking.long_term_agreement_id:
         update_fields.append("long_term_agreement")
+    reactivation_clears: dict = {}
+    if new_status == BookingStatus.H and old_status == BookingStatus.C:
+        if booking.cancellation_reason:
+            reactivation_clears["cancellation_reason"] = {
+                "from": booking.cancellation_reason,
+                "to": None,
+            }
+            booking.cancellation_reason = ""
+            update_fields.append("cancellation_reason")
+        if booking.cancellation_evidence:
+            reactivation_clears["cancellation_evidence"] = {"from": "file", "to": None}
+            booking.cancellation_evidence.delete(save=False)
+            booking.cancellation_evidence = None
+            update_fields.append("cancellation_evidence")
+
     if new_status == BookingStatus.C:
         if booking.long_term_agreement_id:
             old_lta = getattr(booking, "long_term_agreement", None)
@@ -160,6 +175,7 @@ def update_booking_status(
     refresh_related_booking_conflicts(booking, user=user, request=request)
 
     status_changes: dict = {"status": {"from": old_status, "to": new_status}}
+    status_changes.update(reactivation_clears)
     if cleared_lta_code is not None:
         status_changes["long_term_agreement"] = {
             "from": cleared_lta_code,
