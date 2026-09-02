@@ -13,14 +13,48 @@ from apps.bookings.constants import (
 )
 from apps.bookings.models import Booking, BookingStatus
 
+PAX_BASIS_PLANNED = "planned"
+PAX_BASIS_CAPACITY = "capacity"
+PAX_BASIS_CHOICES = frozenset({PAX_BASIS_PLANNED, PAX_BASIS_CAPACITY})
 
-def booking_pax(booking: Booking) -> int:
-    """Prefer actual PAX when present; otherwise planned."""
+
+def normalize_pax_basis(raw: str | None) -> str:
+    value = (raw or PAX_BASIS_PLANNED).strip().lower()
+    return value if value in PAX_BASIS_CHOICES else PAX_BASIS_PLANNED
+
+
+def booking_pax(
+    booking: Booking,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
+) -> int:
+    """
+    Passenger contribution for matrix reports.
+
+    Always prefer actual_pax when set (manifested Real).
+    Otherwise: planned snapshot, or vessel max capacity per pax_basis.
+    """
     if booking.actual_pax is not None:
         return int(booking.actual_pax)
+    basis = normalize_pax_basis(pax_basis)
+    if basis == PAX_BASIS_CAPACITY:
+        vessel = getattr(booking, "vessel", None)
+        cap = getattr(vessel, "pax_capacity", None) if vessel is not None else None
+        return int(cap) if cap is not None else 0
     if booking.planned_pax is not None:
         return int(booking.planned_pax)
     return 0
+
+
+def pax_basis_note(pax_basis: str) -> str:
+    if normalize_pax_basis(pax_basis) == PAX_BASIS_CAPACITY:
+        return (
+            "Calls = escalas. PAX = real si existe, si no capacidad máxima del barco."
+        )
+    return (
+        "Calls = escalas. PAX = real si existe, si no planificado "
+        "(promedio de reales del barco hasta el último manifiesto)."
+    )
 
 
 def scheduled_bookings_qs(

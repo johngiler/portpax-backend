@@ -563,6 +563,7 @@ def _place_bookings_by_day(
             "eta": booking.eta.isoformat() if booking.eta else None,
             "etd": booking.etd.isoformat() if booking.etd else None,
             "actual_pax": booking.actual_pax,
+            "planned_pax": booking.planned_pax,
         }
         for cell_index in cell_indexes:
             existing = day_cells[cell_index]

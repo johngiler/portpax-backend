@@ -59,6 +59,10 @@ class Booking(models.Model):
     actual_pax = models.PositiveIntegerField(null=True, blank=True)
     actual_crew = models.PositiveIntegerField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    operation_notes = models.TextField(
+        blank=True,
+        help_text="Port-operator notes for arrival / berth operations (not identity notes).",
+    )
     has_conflict = models.BooleanField(
         default=False,
         db_index=True,
@@ -96,6 +100,12 @@ class Booking(models.Model):
         upload_to="bookings/confirmations/",
         null=True,
         blank=True,
+    )
+    arrival_manifest = models.FileField(
+        upload_to="bookings/arrival_manifests/",
+        null=True,
+        blank=True,
+        help_text="Arrival manifest uploaded by port operator (PDF/image).",
     )
     long_term_agreement = models.ForeignKey(
         "bookings.LongTermAgreement",

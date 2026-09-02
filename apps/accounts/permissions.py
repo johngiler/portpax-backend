@@ -43,6 +43,16 @@ def user_can_access_port(user, port_id: int | None) -> bool:
     return int(port_id) in allowed
 
 
+def user_may_edit_booking_schedule(user) -> bool:
+    """Admin / booking_operator may edit position and planned ETA/ETD."""
+    return user_role(user) in {UserRole.ADMIN, UserRole.BOOKING_OPERATOR}
+
+
+def user_may_edit_port_operations(user) -> bool:
+    """Admin / port_operator may edit arrival PAX, crew, real times, notes, manifesto."""
+    return user_role(user) in {UserRole.ADMIN, UserRole.PORT_OPERATOR}
+
+
 class IsFrontendAppUser(BasePermission):
     """Allow only non-superusers with an assigned UserProfile role."""
 

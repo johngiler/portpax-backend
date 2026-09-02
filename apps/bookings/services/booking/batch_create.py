@@ -192,6 +192,13 @@ def create_booking_batch(
     bookings: list[Booking] = []
     reserved_by_date: dict[date, set[int]] = {}
 
+    from apps.bookings.services.booking.planned_pax import (
+        compute_planned_pax_for_vessel,
+    )
+
+    planned_suggestion = compute_planned_pax_for_vessel(vessel.id)
+    planned_pax = planned_suggestion.planned_pax
+
     with transaction.atomic():
         for spec in specs:
             call_date = spec["call_date"]
@@ -226,7 +233,7 @@ def create_booking_batch(
                     notes=notes,
                     eta=spec.get("eta"),
                     etd=spec.get("etd"),
-                    planned_pax=spec.get("planned_pax"),
+                    planned_pax=planned_pax,
                     created_by=created_by,
                     long_term_agreement=None,
                 )

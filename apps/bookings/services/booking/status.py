@@ -208,11 +208,18 @@ def update_booking_operational(
     planned_pax=None,
     actual_pax=None,
     actual_crew=None,
+    operation_notes=None,
+    arrival_manifest=None,
     port_operator_override: bool = False,
     acknowledge_combined_red: bool = False,
     override_reason: str = "",
     audit_source: str | None = None,
 ) -> Booking:
+    from apps.accounts.permissions import (
+        user_may_edit_booking_schedule,
+        user_may_edit_port_operations,
+    )
+
     changes: dict = {}
     update_fields = ["updated_at"]
     position_changed = False
@@ -221,6 +228,32 @@ def update_booking_operational(
     pending_position = position_id is not None and position_id != booking.position_id
     pending_eta = eta is not None and eta != booking.eta
     pending_etd = etd is not None and etd != booking.etd
+    pending_schedule = pending_position or pending_eta or pending_etd
+
+    pending_port_ops = any(
+        (
+            eta_real is not None,
+            etd_real is not None,
+            actual_pax is not None,
+            actual_crew is not None,
+            operation_notes is not None,
+            arrival_manifest is not None,
+        )
+    )
+
+    if pending_schedule and not user_may_edit_booking_schedule(user):
+        raise BookingStatusError(
+            "No tienes permiso para cambiar posición u horarios planificados."
+        )
+    if pending_port_ops and not user_may_edit_port_operations(user):
+        raise BookingStatusError(
+            "No tienes permiso para editar datos de arribo (PAX real, tripulación, "
+            "manifiesto, ETA/ETD real o notas de operación)."
+        )
+    # Planned PAX is a create-time snapshot; ignore client updates.
+    _ = planned_pax
+    _ = override_reason
+    _ = port_operator_override
 
     if pending_position:
         old_position_id = booking.position_id
@@ -267,11 +300,6 @@ def update_booking_operational(
         booking.etd_real = etd_real
         update_fields.append("etd_real")
 
-    if planned_pax is not None:
-        changes["planned_pax"] = {"from": booking.planned_pax, "to": planned_pax}
-        booking.planned_pax = planned_pax
-        update_fields.append("planned_pax")
-
     if actual_pax is not None:
         changes["actual_pax"] = {"from": booking.actual_pax, "to": actual_pax}
         booking.actual_pax = actual_pax
@@ -281,6 +309,22 @@ def update_booking_operational(
         changes["actual_crew"] = {"from": booking.actual_crew, "to": actual_crew}
         booking.actual_crew = actual_crew
         update_fields.append("actual_crew")
+
+    if operation_notes is not None and operation_notes != booking.operation_notes:
+        changes["operation_notes"] = {
+            "from": booking.operation_notes,
+            "to": operation_notes,
+        }
+        booking.operation_notes = operation_notes
+        update_fields.append("operation_notes")
+
+    if arrival_manifest is not None:
+        changes["arrival_manifest"] = {
+            "from": "file" if booking.arrival_manifest else None,
+            "to": "file",
+        }
+        booking.arrival_manifest = arrival_manifest
+        update_fields.append("arrival_manifest")
 
     if position_changed or schedule_changed:
         if position_changed:

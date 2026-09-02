@@ -162,6 +162,7 @@ class BookingSerializer(
     )
     cancellation_evidence_url = serializers.SerializerMethodField()
     confirmation_pdf_url = serializers.SerializerMethodField()
+    arrival_manifest_url = serializers.SerializerMethodField()
     long_term_agreement = serializers.IntegerField(
         source="long_term_agreement_id",
         read_only=True,
@@ -202,6 +203,7 @@ class BookingSerializer(
             "status",
             "status_display",
             "notes",
+            "operation_notes",
             "has_conflict",
             "conflict_severity",
             "conflict_snapshot",
@@ -211,6 +213,7 @@ class BookingSerializer(
             "cancellation_reason_display",
             "cancellation_evidence_url",
             "confirmation_pdf_url",
+            "arrival_manifest_url",
             "long_term_agreement",
             "long_term_agreement_code",
             "audit_entries",
@@ -239,6 +242,9 @@ class BookingSerializer(
     def get_confirmation_pdf_url(self, obj) -> str | None:
         return self._file_url(obj.confirmation_pdf)
 
+    def get_arrival_manifest_url(self, obj) -> str | None:
+        return self._file_url(obj.arrival_manifest)
+
     def get_long_term_agreement_code(self, obj) -> str | None:
         if not obj.long_term_agreement_id:
             return None
@@ -263,6 +269,8 @@ class BookingUpdateSerializer(serializers.Serializer):
     vessel = serializers.IntegerField(required=False)
     call_date = serializers.DateField(required=False)
     notes = serializers.CharField(required=False, allow_blank=True)
+    operation_notes = serializers.CharField(required=False, allow_blank=True)
+    arrival_manifest = serializers.FileField(required=False, allow_null=True)
     cancellation_reason = serializers.ChoiceField(
         choices=CancellationReason.choices,
         required=False,
@@ -279,10 +287,14 @@ class BookingUpdateSerializer(serializers.Serializer):
     )
 
     def update(self, instance, validated_data):
+        from apps.accounts.models import UserRole
+        from apps.accounts.permissions import user_role
+
         request = self.context.get("request")
         user = request.user if request else None
         cancellation_evidence = validated_data.pop("cancellation_evidence", None)
         cancellation_reason = validated_data.pop("cancellation_reason", None)
+        arrival_manifest = validated_data.pop("arrival_manifest", None)
         new_status = validated_data.pop("status", None)
         port_operator_override = validated_data.pop("port_operator_override", False)
         acknowledge_combined_red = validated_data.pop("acknowledge_combined_red", False)
@@ -294,6 +306,7 @@ class BookingUpdateSerializer(serializers.Serializer):
             for key in identity_keys
             if key in validated_data
         }
+        operation_notes = validated_data.pop("operation_notes", None)
 
         operational_keys = (
             "position",
@@ -301,13 +314,22 @@ class BookingUpdateSerializer(serializers.Serializer):
             "etd",
             "eta_real",
             "etd_real",
-            "planned_pax",
             "actual_pax",
             "actual_crew",
         )
         operational_fields = {
             key: validated_data[key] for key in operational_keys if key in validated_data
         }
+        # Planned PAX is server-computed at create; drop client attempts.
+        validated_data.pop("planned_pax", None)
+
+        role = user_role(user)
+        if identity_fields and role == UserRole.PORT_OPERATOR:
+            raise serializers.ValidationError(
+                {
+                    "detail": "El operador de puerto no puede editar identidad de la reserva.",
+                }
+            )
 
         try:
             if identity_fields:
@@ -335,7 +357,6 @@ class BookingUpdateSerializer(serializers.Serializer):
                         position_id=pre_r.get("position"),
                         eta=pre_r.get("eta"),
                         etd=pre_r.get("etd"),
-                        planned_pax=pre_r.get("planned_pax"),
                         actual_crew=pre_r.get("actual_crew"),
                         port_operator_override=port_operator_override,
                         acknowledge_combined_red=acknowledge_combined_red,
@@ -354,7 +375,11 @@ class BookingUpdateSerializer(serializers.Serializer):
                     acknowledge_combined_red=acknowledge_combined_red,
                 )
             else:
-                if operational_fields:
+                if (
+                    operational_fields
+                    or operation_notes is not None
+                    or arrival_manifest is not None
+                ):
                     instance = update_booking_operational(
                         instance,
                         user=user,
@@ -364,9 +389,10 @@ class BookingUpdateSerializer(serializers.Serializer):
                         etd=operational_fields.get("etd"),
                         eta_real=operational_fields.get("eta_real"),
                         etd_real=operational_fields.get("etd_real"),
-                        planned_pax=operational_fields.get("planned_pax"),
                         actual_pax=operational_fields.get("actual_pax"),
                         actual_crew=operational_fields.get("actual_crew"),
+                        operation_notes=operation_notes,
+                        arrival_manifest=arrival_manifest,
                         port_operator_override=port_operator_override,
                         acknowledge_combined_red=acknowledge_combined_red,
                         override_reason=override_reason,

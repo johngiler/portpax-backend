@@ -102,6 +102,7 @@ def _serialize_cell(booking, request) -> dict:
         "eta": booking.eta.isoformat() if booking.eta else None,
         "etd": booking.etd.isoformat() if booking.etd else None,
         "actual_pax": booking.actual_pax,
+        "planned_pax": booking.planned_pax,
         "position_code": position_code,
         "conflict_chips": conflict_display["conflict_chips"],
         "conflict_highlights": conflict_display["conflict_highlights"],

@@ -11,8 +11,10 @@ from openpyxl import Workbook
 
 from apps.bookings.services.report_exports.common import (
     booking_pax,
+    pax_basis_note,
     scheduled_bookings_qs,
     years_in_range,
+    PAX_BASIS_PLANNED,
 )
 from apps.bookings.services.report_exports.xlsx_style import (
     ALIGN_CENTER,
@@ -118,6 +120,8 @@ def _empty_year_months() -> dict[int, dict[int, dict[str, int]]]:
 
 def _aggregate_by_port(
     qs,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
 ) -> tuple[dict[int, dict[int, dict[int, dict[str, int]]]], dict[int, tuple[str, str]]]:
     """port_id -> year -> month -> {calls, pax}."""
     data: dict[int, dict[int, dict[int, dict[str, int]]]] = defaultdict(_empty_year_months)
@@ -126,12 +130,14 @@ def _aggregate_by_port(
         meta[booking.port_id] = (booking.port.code, booking.port.name)
         cell = data[booking.port_id][booking.call_date.year][booking.call_date.month]
         cell["calls"] += 1
-        cell["pax"] += booking_pax(booking)
+        cell["pax"] += booking_pax(booking, pax_basis=pax_basis)
     return data, meta
 
 
 def _aggregate_by_line(
     qs,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
 ) -> tuple[dict[int, dict[int, dict[int, dict[str, int]]]], dict[int, tuple[str, str]]]:
     """shipping_line_id -> year -> month -> {calls, pax}."""
     data: dict[int, dict[int, dict[int, dict[str, int]]]] = defaultdict(_empty_year_months)
@@ -143,12 +149,14 @@ def _aggregate_by_line(
         )
         cell = data[booking.shipping_line_id][booking.call_date.year][booking.call_date.month]
         cell["calls"] += 1
-        cell["pax"] += booking_pax(booking)
+        cell["pax"] += booking_pax(booking, pax_basis=pax_basis)
     return data, meta
 
 
 def _aggregate_trends_by_line(
     qs,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
 ) -> tuple[dict[int, dict[int, dict[str, int]]], dict[int, tuple[str, str]]]:
     """shipping_line_id -> year -> {calls, pax}."""
     data: dict[int, dict[int, dict[str, int]]] = defaultdict(
@@ -162,7 +170,7 @@ def _aggregate_trends_by_line(
         )
         cell = data[booking.shipping_line_id][booking.call_date.year]
         cell["calls"] += 1
-        cell["pax"] += booking_pax(booking)
+        cell["pax"] += booking_pax(booking, pax_basis=pax_basis)
     return data, meta
 
 
@@ -231,6 +239,7 @@ def build_ports_totals_matrix(
     date_from: date,
     date_to: date,
     without_lta: bool = False,
+    pax_basis: str = PAX_BASIS_PLANNED,
     allowed_ports: set[int] | None = None,
     request=None,
     page: int | None = None,
@@ -242,7 +251,7 @@ def build_ports_totals_matrix(
         allowed_ports=allowed_ports,
         without_lta=without_lta,
     )
-    port_data, port_meta = _aggregate_by_port(qs)
+    port_data, port_meta = _aggregate_by_port(qs, pax_basis=pax_basis)
     years = years_in_range(date_from, date_to)
 
     sections: list[dict[str, Any]] = []
@@ -281,10 +290,11 @@ def build_ports_totals_matrix(
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "without_lta": without_lta,
+        "pax_basis": pax_basis,
         "month_labels": list(MONTH_LABELS),
         "years": years,
         "sections": page_sections,
-        "note": "Calls = escalas. PAX = real si existe, si no planificado.",
+        "note": pax_basis_note(pax_basis),
         **pagination,
     }
 
@@ -295,6 +305,7 @@ def build_port_carrier_matrix(
     date_to: date,
     port_id: int,
     without_lta: bool = False,
+    pax_basis: str = PAX_BASIS_PLANNED,
     allowed_ports: set[int] | None = None,
     request=None,
     page: int | None = None,
@@ -308,7 +319,7 @@ def build_port_carrier_matrix(
         allowed_ports=allowed_ports,
         without_lta=without_lta,
     )
-    line_data, line_meta = _aggregate_by_line(qs)
+    line_data, line_meta = _aggregate_by_line(qs, pax_basis=pax_basis)
     years = years_in_range(date_from, date_to)
 
     sections: list[dict[str, Any]] = []
@@ -363,10 +374,11 @@ def build_port_carrier_matrix(
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "without_lta": without_lta,
+        "pax_basis": pax_basis,
         "month_labels": list(MONTH_LABELS),
         "years": years,
         "sections": page_sections,
-        "note": "Desglose por naviera en el puerto seleccionado.",
+        "note": pax_basis_note(pax_basis),
         **pagination,
     }
 
@@ -383,6 +395,7 @@ def build_port_trends(
     date_to: date,
     port_id: int,
     without_lta: bool = False,
+    pax_basis: str = PAX_BASIS_PLANNED,
     allowed_ports: set[int] | None = None,
     request=None,
     page: int | None = None,
@@ -396,7 +409,7 @@ def build_port_trends(
         allowed_ports=allowed_ports,
         without_lta=without_lta,
     )
-    line_data, line_meta = _aggregate_trends_by_line(qs)
+    line_data, line_meta = _aggregate_trends_by_line(qs, pax_basis=pax_basis)
     years = years_in_range(date_from, date_to)
 
     lines: list[dict[str, Any]] = []
@@ -465,9 +478,12 @@ def build_port_trends(
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "without_lta": without_lta,
+        "pax_basis": pax_basis,
         "years": years,
         "lines": page_lines,
-        "note": "SHIPS = calls. Growth % = variación YoY de PAX.",
+        "note": (
+            f"{pax_basis_note(pax_basis)} Growth % = variación YoY de PAX."
+        ),
         **pagination,
     }
 

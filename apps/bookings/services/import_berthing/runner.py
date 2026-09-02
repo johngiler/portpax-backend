@@ -257,6 +257,13 @@ def import_berthing_rows(
             planned_pax = None
             actual_pax = None
             if status == BookingStatus.R:
+                # Real = manifested: always need actual_pax. Planned = prior
+                # vessel average (or capacity if first Real for that ship).
+                from apps.bookings.services.booking.planned_pax import (
+                    compute_planned_pax_for_vessel,
+                )
+
+                planned_pax = compute_planned_pax_for_vessel(vessel.id).planned_pax
                 if isinstance(pax_delta, int):
                     capacity = vessel.pax_capacity
                     if capacity is not None:

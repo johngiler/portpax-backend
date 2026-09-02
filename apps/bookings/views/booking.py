@@ -685,6 +685,50 @@ class BookingViewSet(
         result = serializer.save()
         return Response(result)
 
+    @action(detail=False, methods=["get"], url_path="planned-pax-preview")
+    def planned_pax_preview(self, request):
+        """Suggest planned_pax from vessel history (or max capacity)."""
+        vessel_id = request.query_params.get("vessel")
+        if not vessel_id:
+            return Response(
+                {"detail": "Se requiere vessel."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            vessel_pk = int(vessel_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "vessel debe ser un id numérico."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        exclude_id = None
+        raw_exclude = request.query_params.get("exclude_booking")
+        if raw_exclude:
+            try:
+                exclude_id = int(raw_exclude)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "exclude_booking debe ser un id numérico."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        from apps.bookings.services.booking.planned_pax import (
+            compute_planned_pax_for_vessel,
+        )
+
+        suggestion = compute_planned_pax_for_vessel(
+            vessel_pk,
+            exclude_booking_id=exclude_id,
+        )
+        return Response(
+            {
+                "planned_pax": suggestion.planned_pax,
+                "capacity": suggestion.capacity,
+                "sample_count": suggestion.sample_count,
+                "source": suggestion.source,
+                "pct_of_capacity": suggestion.pct_of_capacity,
+            }
+        )
+
     @action(detail=False, methods=["get"], url_path="suggest-positions")
     def suggest_positions(self, request):
         port_id = request.query_params.get("port")
@@ -1066,6 +1110,11 @@ class BookingViewSet(
             "yes",
         )
 
+    def _report_pax_basis(self, request) -> str:
+        from apps.bookings.services.report_exports.common import normalize_pax_basis
+
+        return normalize_pax_basis(request.query_params.get("pax_basis"))
+
     def _report_pagination_params(self, request) -> tuple[int, int]:
         page = self._optional_int_param("page")
         if isinstance(page, Response):
@@ -1089,6 +1138,7 @@ class BookingViewSet(
                 date_from=date_from,
                 date_to=date_to,
                 without_lta=self._report_without_lta(request),
+                pax_basis=self._report_pax_basis(request),
                 allowed_ports=user_port_ids(request.user),
                 request=request,
                 page=page,
@@ -1120,6 +1170,7 @@ class BookingViewSet(
                 date_to=date_to,
                 port_id=port_id,
                 without_lta=self._report_without_lta(request),
+                pax_basis=self._report_pax_basis(request),
                 allowed_ports=user_port_ids(request.user),
                 request=request,
                 page=page,
@@ -1151,6 +1202,7 @@ class BookingViewSet(
                 date_to=date_to,
                 port_id=port_id,
                 without_lta=self._report_without_lta(request),
+                pax_basis=self._report_pax_basis(request),
                 allowed_ports=user_port_ids(request.user),
                 request=request,
                 page=page,
@@ -1197,6 +1249,7 @@ class BookingViewSet(
             )
 
         without_lta = self._report_without_lta(request)
+        pax_basis = self._report_pax_basis(request)
         date_from, err = self._parse_iso_date_param("date_from")
         if err:
             return err
@@ -1254,6 +1307,7 @@ class BookingViewSet(
                     date_from=date_from,
                     date_to=date_to,
                     without_lta=without_lta,
+                    pax_basis=pax_basis,
                     allowed_ports=allowed_ports,
                 )
                 filename = ports_totals_matrix_filename(date_from, date_to)
@@ -1268,6 +1322,7 @@ class BookingViewSet(
                     date_to=date_to,
                     port_id=port_id,
                     without_lta=without_lta,
+                    pax_basis=pax_basis,
                     allowed_ports=allowed_ports,
                 )
                 port = Port.objects.get(pk=port_id)
@@ -1285,6 +1340,7 @@ class BookingViewSet(
                     date_to=date_to,
                     port_id=port_id,
                     without_lta=without_lta,
+                    pax_basis=pax_basis,
                     allowed_ports=allowed_ports,
                 )
                 port = Port.objects.get(pk=port_id)
