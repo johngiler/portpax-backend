@@ -105,6 +105,7 @@ class BookingListSerializer(
             "eta",
             "etd",
             "planned_pax",
+            "actual_pax",
             "status",
             "status_display",
             "confirmation_pdf_url",
@@ -147,6 +148,11 @@ class BookingSerializer(
         read_only=True,
         allow_null=True,
     )
+    vessel_pax_capacity = serializers.IntegerField(
+        source="vessel.pax_capacity",
+        read_only=True,
+        allow_null=True,
+    )
     position_code = serializers.SerializerMethodField()
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     cancellation_reason = serializers.CharField(read_only=True)
@@ -182,6 +188,7 @@ class BookingSerializer(
             "vessel_name",
             "vessel_logo",
             "vessel_loa_m",
+            "vessel_pax_capacity",
             "position",
             "position_code",
             "call_date",
