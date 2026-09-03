@@ -136,6 +136,8 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
         )
         after = snapshot_lta(agreement)
         changes = diff_lta_snapshots(before, after)
+        if not changes:
+            return
         async_result = lta_resync_agreement.delay(
             agreement.pk,
             _enqueue_user_id(self.request),
