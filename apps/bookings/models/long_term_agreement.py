@@ -59,6 +59,15 @@ class LongTermAgreement(models.Model):
         blank=True,
         help_text="First expected call date for interval_days matching.",
     )
+    date_exceptions = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            "Date-only exceptions to weekday/cadence: "
+            "include {kind, date}, skip {kind, date}, "
+            "reschedule {kind, from, to}."
+        ),
+    )
     min_packs = models.PositiveIntegerField(
         null=True,
         blank=True,

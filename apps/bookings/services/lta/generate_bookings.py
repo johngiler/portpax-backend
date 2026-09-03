@@ -9,7 +9,7 @@ from django.db import transaction
 from apps.audit.services.record import record_booking_audit
 from apps.bookings.models import Booking, BookingStatus, LongTermAgreement
 from apps.bookings.services.booking.code import resolve_unique_booking_code
-from apps.bookings.services.lta.generate_dates import iter_agreement_candidate_dates
+from apps.bookings.services.lta.generate_dates import iter_agreement_effective_dates
 from apps.bookings.services.lta.link_bookings import resync_agreement_bookings
 from apps.bookings.services.validation.conflicts import (
     refresh_related_booking_conflicts,
@@ -90,7 +90,8 @@ def materialize_agreement_bookings(
     today: date | None = None,
 ) -> dict:
     """
-    Create missing Booking rows: first explicit vessel × each position × each A1 date.
+    Create missing Booking rows: first explicit vessel × each position × each
+    effective A1 date (rule grid + date exceptions).
 
     Status = LTA. Skips slots that already have a non-cancelled booking.
     """
@@ -98,7 +99,7 @@ def materialize_agreement_bookings(
     today = today or date.today()
     vessel = _first_vessel(agreement)
     positions = _positions(agreement)
-    dates = iter_agreement_candidate_dates(agreement, today)
+    dates = iter_agreement_effective_dates(agreement, today)
 
     planned = []
     for call_date in dates:

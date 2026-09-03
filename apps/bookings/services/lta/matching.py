@@ -9,6 +9,7 @@ from django.db.models import QuerySet
 
 from apps.bookings.models import LongTermAgreement
 from apps.catalogs.models import Position, Vessel
+from apps.bookings.services.lta.date_exceptions import agreement_covers_call_date
 
 DEFAULT_ADVANCE_MONTHS_MIN = 18
 DEFAULT_ADVANCE_MONTHS_MAX = 32
@@ -98,9 +99,7 @@ def find_matching_agreements(
     for agreement in qs:
         if not agreement_covers_validity(agreement, call_date):
             continue
-        if not agreement_covers_weekday(agreement, call_date):
-            continue
-        if not agreement_covers_cadence(agreement, call_date):
+        if not agreement_covers_call_date(agreement, call_date):
             continue
         if not agreement_covers_vessel(agreement, vessel):
             continue
@@ -167,7 +166,7 @@ def find_foreign_slot_agreements(
             continue
         if not agreement_covers_validity(agreement, call_date):
             continue
-        if not agreement_covers_weekday(agreement, call_date):
+        if not agreement_covers_call_date(agreement, call_date):
             continue
         foreign.append(agreement)
     return foreign

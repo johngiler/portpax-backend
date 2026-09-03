@@ -8,21 +8,21 @@ from django.utils import timezone
 from apps.audit.services.record import record_booking_audit
 from apps.bookings.models import Booking, BookingStatus, LongTermAgreement
 from apps.bookings.services.lta.matching import (
-    agreement_covers_cadence,
     agreement_covers_position,
     agreement_covers_validity,
     agreement_covers_vessel,
-    agreement_covers_weekday,
     find_best_matching_agreement,
+)
+from apps.bookings.services.lta.date_exceptions import agreement_covers_call_date
+from apps.bookings.services.validation.conflicts import (
+    refresh_related_booking_conflicts,
 )
 
 
 def agreement_covers_booking(agreement: LongTermAgreement, booking: Booking) -> bool:
     if not agreement_covers_validity(agreement, booking.call_date):
         return False
-    if not agreement_covers_weekday(agreement, booking.call_date):
-        return False
-    if not agreement_covers_cadence(agreement, booking.call_date):
+    if not agreement_covers_call_date(agreement, booking.call_date):
         return False
     if not agreement_covers_vessel(agreement, booking.vessel):
         return False
@@ -87,6 +87,8 @@ def unlink_agreement_bookings(
             },
             user=user,
         )
+        # Recompute LTA-zone / occupancy conflicts after FK clear.
+        refresh_related_booking_conflicts(booking, user=user)
 
     return {
         "unlinked": len(bookings),
@@ -201,6 +203,7 @@ def link_matching_bookings(
                 },
                 user=user,
             )
+            refresh_related_booking_conflicts(booking, user=user)
 
     return {
         "linked": len(to_update),

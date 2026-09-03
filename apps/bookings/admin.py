@@ -67,6 +67,7 @@ class LongTermAgreementAdmin(admin.ModelAdmin):
         "weekdays",
         "interval_days",
         "cadence_anchor",
+        "date_exceptions",
         "min_packs",
         "advance_months_min",
         "advance_months_max",

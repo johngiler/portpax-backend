@@ -39,6 +39,7 @@ def snapshot_lta(agreement) -> dict[str, Any]:
         "cadence_anchor": (
             str(agreement.cadence_anchor) if agreement.cadence_anchor else None
         ),
+        "date_exceptions": list(agreement.date_exceptions or []),
         "min_packs": agreement.min_packs,
         "advance_months_min": agreement.advance_months_min,
         "advance_months_max": agreement.advance_months_max,
@@ -110,6 +111,7 @@ def diff_lta_snapshots(
         "weekdays",
         "interval_days",
         "cadence_anchor",
+        "date_exceptions",
         "min_packs",
         "advance_months_min",
         "advance_months_max",

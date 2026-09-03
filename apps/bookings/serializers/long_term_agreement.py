@@ -66,6 +66,7 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             "weekdays",
             "interval_days",
             "cadence_anchor",
+            "date_exceptions",
             "min_packs",
             "advance_months_min",
             "advance_months_max",
@@ -132,7 +133,7 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
         elif isinstance(data, dict):
             mutable = {**data}
 
-        for key in ("weekdays", "vessel_ids", "position_ids"):
+        for key in ("weekdays", "vessel_ids", "position_ids", "date_exceptions"):
             if key not in mutable:
                 continue
             raw = mutable.get(key)
@@ -166,6 +167,17 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
                 )
             normalized.append(day_i)
         return normalized
+
+    def validate_date_exceptions(self, value):
+        from apps.bookings.services.lta.date_exceptions import (
+            DateExceptionError,
+            normalize_date_exceptions,
+        )
+
+        try:
+            return normalize_date_exceptions(value)
+        except DateExceptionError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     def validate(self, attrs):
         port = attrs.get("port") or getattr(self.instance, "port", None)

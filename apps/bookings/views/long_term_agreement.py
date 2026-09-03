@@ -13,7 +13,7 @@ from apps.bookings.serializers.long_term_agreement import (
     LongTermAgreementDetailSerializer,
     LongTermAgreementSerializer,
 )
-from apps.bookings.services.lta.windows import windows_as_dict
+from apps.bookings.services.lta.date_exceptions import build_date_preview
 from apps.bookings.services.lta.lta_activity import (
     build_lta_activity,
     list_lta_activity_actors,
@@ -233,6 +233,12 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
     def windows(self, request):
         """Rolling 6-month blockcitos: current, open booking, LTA zone."""
         return Response(windows_as_dict())
+
+    @action(detail=True, methods=["get"], url_path="date-preview")
+    def date_preview(self, request, pk=None):
+        """Rule grid + date exceptions as the operator preview (A1 zone)."""
+        agreement = self.get_object()
+        return Response(build_date_preview(agreement))
 
     @action(detail=True, methods=["post"], url_path="link-bookings")
     def link_bookings(self, request, pk=None):

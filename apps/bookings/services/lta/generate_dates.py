@@ -99,3 +99,21 @@ def iter_agreement_candidate_dates(
             out.append(cursor)
         cursor += one
     return out
+
+
+def iter_agreement_effective_dates(
+    agreement: LongTermAgreement,
+    today: date | None = None,
+) -> list[date]:
+    """Rule dates with include / skip / reschedule applied (A1 + validity)."""
+    from apps.bookings.services.lta.date_exceptions import apply_date_exceptions
+
+    today = today or date.today()
+    rule_dates = iter_agreement_candidate_dates(agreement, today)
+
+    def extra_ok(call_date: date) -> bool:
+        return agreement_covers_validity(agreement, call_date) and agreement_in_lta_zone_only(
+            agreement, call_date, today
+        )
+
+    return apply_date_exceptions(agreement, rule_dates, extra_ok=extra_ok)
