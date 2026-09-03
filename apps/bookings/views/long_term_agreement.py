@@ -33,6 +33,7 @@ from apps.bookings.services.lta.generate_bookings import (
     LtaGenerateError,
     validate_generate_prerequisites,
 )
+from apps.bookings.services.lta.windows import windows_as_dict
 from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
 
 
