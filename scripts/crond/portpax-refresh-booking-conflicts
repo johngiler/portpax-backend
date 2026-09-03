@@ -9,4 +9,4 @@ SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=""
 
-0 0 * * * git cd /home/git/backend && .venv/bin/python manage.py refresh_booking_conflicts >> /var/log/portpax-refresh-booking-conflicts.log 2>&1
+0 0 * * * git cd /home/git/backend && .venv/bin/python manage.py refresh_booking_conflicts >> /home/git/backend/logs/refresh-booking-conflicts.log 2>&1
