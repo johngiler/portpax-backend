@@ -96,10 +96,15 @@ def refresh_booking_conflicts(
     acknowledge_combined_red: bool = False,
     user=None,
     request=None,
+    notify: bool = True,
+    notify_updates: bool = True,
 ) -> list[dict]:
     """Recompute and persist has_conflict + conflict_severity + conflict_snapshot.
 
     Records booking audit when conflicts are detected or cleared.
+    notify: campanita on newly detected / resolved flags.
+    notify_updates: campanita when an existing conflict's codes/severity change
+    (skip in bulk/cron so recálculos no inundan la campanita).
     """
     from apps.audit.services.record import record_booking_audit
     from apps.bookings.services.validation import validate_booking_instance
@@ -167,11 +172,12 @@ def refresh_booking_conflicts(
                 user=user,
                 request=request,
             )
-            notify_booking_conflict(
-                booking,
-                event=Notification.Event.CONFLICT_DETECTED,
-                actor=user,
-            )
+            if notify:
+                notify_booking_conflict(
+                    booking,
+                    event=Notification.Event.CONFLICT_DETECTED,
+                    actor=user,
+                )
         elif prev_flag and not next_flag:
             record_booking_audit(
                 booking,
@@ -185,11 +191,12 @@ def refresh_booking_conflicts(
                 user=user,
                 request=request,
             )
-            notify_booking_conflict(
-                booking,
-                event=Notification.Event.CONFLICT_RESOLVED,
-                actor=user,
-            )
+            if notify:
+                notify_booking_conflict(
+                    booking,
+                    event=Notification.Event.CONFLICT_RESOLVED,
+                    actor=user,
+                )
         elif next_flag and prev_flag and (
             prev_codes != next_codes or prev_severity != next_severity
         ):
@@ -209,11 +216,12 @@ def refresh_booking_conflicts(
                 user=user,
                 request=request,
             )
-            notify_booking_conflict(
-                booking,
-                event=Notification.Event.CONFLICT_UPDATED,
-                actor=user,
-            )
+            if notify and notify_updates:
+                notify_booking_conflict(
+                    booking,
+                    event=Notification.Event.CONFLICT_UPDATED,
+                    actor=user,
+                )
 
     return snapshot
 
@@ -246,6 +254,8 @@ def refresh_booking_conflicts_for_vessel_itinerary(
     *,
     user=None,
     request=None,
+    notify: bool = True,
+    notify_updates: bool = True,
 ) -> int:
     """Recompute conflicts for every active booking on a vessel (geo + pier)."""
     from apps.bookings.constants import OCCUPATION_CONFLICT_STATUSES
@@ -257,7 +267,13 @@ def refresh_booking_conflicts_for_vessel_itinerary(
     ).order_by("call_date", "id")
     count = 0
     for booking in qs.iterator(chunk_size=200):
-        refresh_booking_conflicts(booking, user=user, request=request)
+        refresh_booking_conflicts(
+            booking,
+            user=user,
+            request=request,
+            notify=notify,
+            notify_updates=notify_updates,
+        )
         count += 1
     return count
 

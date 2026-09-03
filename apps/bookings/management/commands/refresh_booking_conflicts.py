@@ -53,7 +53,11 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         if options["vessel"]:
-            total = refresh_booking_conflicts_for_vessel_itinerary(options["vessel"])
+            total = refresh_booking_conflicts_for_vessel_itinerary(
+                options["vessel"],
+                notify=True,
+                notify_updates=False,
+            )
             self.stdout.write(
                 self.style.SUCCESS(
                     f"Done. refreshed_itinerary vessel_id={options['vessel']} count={total}"
@@ -76,18 +80,33 @@ class Command(BaseCommand):
         total = qs.count()
         flagged = 0
         cleared = 0
+        snapshot_updated = 0
         unchanged = 0
         self.stdout.write(f"Refreshing {total} booking(s)…")
 
         for i, booking in enumerate(qs.iterator(chunk_size=200), start=1):
             prev = bool(booking.has_conflict)
-            refresh_booking_conflicts(booking)
-            booking.refresh_from_db(fields=["has_conflict"])
+            prev_codes = {
+                str(item.get("code") or "")
+                for item in (booking.conflict_snapshot or [])
+            }
+            prev_severity = booking.conflict_severity or None
+            refresh_booking_conflicts(booking, notify=True, notify_updates=False)
+            booking.refresh_from_db(
+                fields=["has_conflict", "conflict_severity", "conflict_snapshot"]
+            )
             now = bool(booking.has_conflict)
+            next_codes = {
+                str(item.get("code") or "")
+                for item in (booking.conflict_snapshot or [])
+            }
+            next_severity = booking.conflict_severity or None
             if now and not prev:
                 flagged += 1
             elif prev and not now:
                 cleared += 1
+            elif prev_codes != next_codes or prev_severity != next_severity:
+                snapshot_updated += 1
             else:
                 unchanged += 1
             if i % 500 == 0 or i == total:
@@ -95,6 +114,7 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Done. newly_flagged={flagged} cleared={cleared} unchanged={unchanged}"
+                f"Done. newly_flagged={flagged} cleared={cleared} "
+                f"snapshot_updated={snapshot_updated} unchanged={unchanged}"
             )
         )
