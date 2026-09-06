@@ -280,6 +280,7 @@ def create_from_resolved_rows(
     source: str = BookingImportBatch.Source.FILE,
     label: str = "",
     deferred_rows: list[dict[str, Any]] | None = None,
+    tag_name: str | None = None,
 ) -> dict[str, Any]:
     """
     Create one booking per selected resolved row.
@@ -295,11 +296,18 @@ def create_from_resolved_rows(
         else "Importación masiva"
     )
 
+    from apps.bookings.services.booking_tag import (
+        assign_tag_to_bookings,
+        get_or_create_tag,
+    )
+
+    tag = get_or_create_tag(tag_name, user=created_by)
     deferred = deferred_rows or []
     batch = BookingImportBatch.objects.create(
         created_by=created_by,
         source=source,
         label=batch_label,
+        tag=tag,
         requested_count=len(rows) + len(deferred),
         status=BookingImportBatch.Status.COMPLETED,
     )
@@ -411,8 +419,12 @@ def create_from_resolved_rows(
             "finished_at",
             "status",
             "requested_count",
+            "tag",
         ]
     )
+
+    if tag and created_booking_ids:
+        assign_tag_to_bookings(created_booking_ids, tag)
 
     if created:
         from apps.notifications.models import Notification
@@ -435,4 +447,6 @@ def create_from_resolved_rows(
         "created": created,
         "failures": failures,
         "retry_count": len(retry_rows),
+        "tag_id": tag.id if tag else None,
+        "tag_name": tag.name if tag else None,
     }

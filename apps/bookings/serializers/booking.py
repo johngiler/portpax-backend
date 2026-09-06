@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from apps.audit.models import BookingAuditEntry
+from apps.audit.utils.friendly_changes import enrich_booking_audit_changes
 from apps.bookings.models import Booking, BookingStatus, CancellationReason
 from apps.bookings.services.booking.status import (
     BookingStatusError,
@@ -33,6 +34,12 @@ class BookingAuditEntrySerializer(serializers.ModelSerializer):
         if not obj.user_id:
             return None
         return obj.user.get_username()
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        raw = instance.changes if isinstance(instance.changes, dict) else {}
+        data["changes"] = enrich_booking_audit_changes(raw) or {}
+        return data
 
 
 class _BookingFileUrlMixin:
@@ -85,6 +92,8 @@ class BookingListSerializer(
     position_code = serializers.SerializerMethodField()
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     confirmation_pdf_url = serializers.SerializerMethodField()
+    tag_id = serializers.SerializerMethodField()
+    tag_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -109,6 +118,8 @@ class BookingListSerializer(
             "status",
             "status_display",
             "confirmation_pdf_url",
+            "tag_id",
+            "tag_name",
             "conflict_chips",
             "conflict_highlights",
         ]
@@ -121,6 +132,12 @@ class BookingListSerializer(
 
     def get_confirmation_pdf_url(self, obj) -> str | None:
         return self._file_url(obj.confirmation_pdf)
+
+    def get_tag_id(self, obj: Booking) -> int | None:
+        return obj.tag_id
+
+    def get_tag_name(self, obj: Booking) -> str | None:
+        return obj.tag.name if obj.tag_id else None
 
 
 class BookingSerializer(
@@ -169,6 +186,8 @@ class BookingSerializer(
         allow_null=True,
     )
     long_term_agreement_code = serializers.SerializerMethodField()
+    tag_id = serializers.SerializerMethodField()
+    tag_name = serializers.SerializerMethodField()
     audit_entries = BookingAuditEntrySerializer(many=True, read_only=True)
 
     class Meta:
@@ -216,6 +235,8 @@ class BookingSerializer(
             "arrival_manifest_url",
             "long_term_agreement",
             "long_term_agreement_code",
+            "tag_id",
+            "tag_name",
             "audit_entries",
             "created_at",
             "updated_at",
@@ -249,6 +270,12 @@ class BookingSerializer(
         if not obj.long_term_agreement_id:
             return None
         return obj.long_term_agreement.code
+
+    def get_tag_id(self, obj: Booking) -> int | None:
+        return obj.tag_id
+
+    def get_tag_name(self, obj: Booking) -> str | None:
+        return obj.tag.name if obj.tag_id else None
 
 
 class BookingUpdateSerializer(serializers.Serializer):
@@ -285,10 +312,13 @@ class BookingUpdateSerializer(serializers.Serializer):
         default="",
         max_length=255,
     )
+    tag_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    clear_tag = serializers.BooleanField(required=False, default=False)
 
     def update(self, instance, validated_data):
         from apps.accounts.models import UserRole
         from apps.accounts.permissions import user_role
+        from apps.bookings.services.booking_tag import get_or_create_tag
 
         request = self.context.get("request")
         user = request.user if request else None
@@ -299,6 +329,8 @@ class BookingUpdateSerializer(serializers.Serializer):
         port_operator_override = validated_data.pop("port_operator_override", False)
         acknowledge_combined_red = validated_data.pop("acknowledge_combined_red", False)
         override_reason = validated_data.pop("override_reason", "")
+        tag_name = validated_data.pop("tag_name", None)
+        clear_tag = validated_data.pop("clear_tag", False)
 
         identity_keys = ("port", "shipping_line", "vessel", "call_date", "notes")
         identity_fields = {
@@ -418,6 +450,12 @@ class BookingUpdateSerializer(serializers.Serializer):
         except BookingStatusError as exc:
             field = "status" if new_status else "non_field_errors"
             raise serializers.ValidationError({field: str(exc)}) from exc
+
+        if clear_tag or tag_name is not None:
+            next_tag = None if clear_tag else get_or_create_tag(tag_name, user=user)
+            if instance.tag_id != (next_tag.id if next_tag else None):
+                instance.tag = next_tag
+                instance.save(update_fields=["tag", "updated_at"])
 
         return instance
 

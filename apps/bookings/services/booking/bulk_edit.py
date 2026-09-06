@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, time
 
-from apps.bookings.models import Booking, BookingStatus
+from apps.bookings.models import Booking, BookingRunBatch, BookingStatus
 from apps.bookings.services.booking.identity import (
     GROUP_MISMATCH_MESSAGE,
     update_booking_identity,
@@ -18,6 +18,7 @@ from apps.bookings.services.booking.status import (
     update_booking_operational,
     update_booking_status,
 )
+from apps.bookings.services.booking_tag import assign_tag_to_bookings, get_or_create_tag
 from apps.bookings.services.validation import validate_booking_params
 from apps.catalogs.models import Port, Position, ShippingLine, Vessel
 
@@ -286,10 +287,22 @@ def apply_bulk_edit_rows(
     request=None,
     port_operator_override: bool = False,
     override_reason: str = "",
+    tag_name: str | None = None,
 ) -> dict:
     updated: list[dict] = []
     failed: list[dict] = []
     updated_port_ids: set[int] = set()
+    changed_fields: set[str] = set()
+    updated_booking_ids: list[int] = []
+
+    tag = get_or_create_tag(tag_name, user=user)
+    run_batch = BookingRunBatch.objects.create(
+        kind=BookingRunBatch.Kind.MASS_UPDATE,
+        created_by=user if getattr(user, "is_authenticated", False) else None,
+        label="Actualización masiva",
+        tag=tag,
+    )
+    audit_extra = {"run_batch_id": run_batch.id, "source": "bulk_edit"}
 
     for payload in rows:
         booking_id = payload.get("booking_id")
@@ -347,6 +360,29 @@ def apply_bulk_edit_rows(
                 position_id = booking.position_id
             new_status = payload.get("status")
 
+            if port_id != booking.port_id:
+                changed_fields.add("port_id")
+            if shipping_line_id != booking.shipping_line_id:
+                changed_fields.add("shipping_line_id")
+            if vessel_id != booking.vessel_id:
+                changed_fields.add("vessel_id")
+            if call_date != booking.call_date:
+                changed_fields.add("call_date")
+            if notes is not None and notes != (booking.notes or ""):
+                changed_fields.add("notes")
+            if "eta" in payload and eta != booking.eta:
+                changed_fields.add("eta")
+            if "etd" in payload and etd != booking.etd:
+                changed_fields.add("etd")
+            if "position_id" in payload and position_id != booking.position_id:
+                changed_fields.add("position_id")
+            if (
+                new_status
+                and new_status != booking.status
+                and new_status in EDITABLE_STATUSES
+            ):
+                changed_fields.add("status")
+
             booking = update_booking_identity(
                 booking,
                 user=user,
@@ -357,6 +393,7 @@ def apply_bulk_edit_rows(
                 call_date=call_date,
                 notes=notes,
                 audit_source="bulk_edit",
+                audit_extra=audit_extra,
             )
             booking = update_booking_operational(
                 booking,
@@ -368,6 +405,7 @@ def apply_bulk_edit_rows(
                 port_operator_override=port_operator_override,
                 override_reason=override_reason,
                 audit_source="bulk_edit",
+                audit_extra=audit_extra,
             )
             if (
                 new_status
@@ -381,6 +419,7 @@ def apply_bulk_edit_rows(
                     request=request,
                     require_lta_agreement=False,
                     audit_source="bulk_edit",
+                    audit_extra=audit_extra,
                 )
             updated.append(
                 {
@@ -388,6 +427,7 @@ def apply_bulk_edit_rows(
                     "booking_code": booking.booking_code,
                 }
             )
+            updated_booking_ids.append(booking.id)
             if booking.port_id:
                 updated_port_ids.add(int(booking.port_id))
         except BookingValidationError as exc:
@@ -401,6 +441,25 @@ def apply_bulk_edit_rows(
             failed.append({"booking_id": booking_id, "detail": str(exc)})
         except Exception as exc:  # noqa: BLE001 — per-row isolation
             failed.append({"booking_id": booking_id, "detail": str(exc)})
+
+    if tag and updated_booking_ids:
+        assign_tag_to_bookings(updated_booking_ids, tag)
+
+    run_batch.booking_ids = updated_booking_ids
+    run_batch.success_count = len(updated)
+    run_batch.failed_count = len(failed)
+    run_batch.changed_fields = sorted(changed_fields)
+    run_batch.failures = failed
+    run_batch.save(
+        update_fields=[
+            "booking_ids",
+            "success_count",
+            "failed_count",
+            "changed_fields",
+            "failures",
+            "tag",
+        ]
+    )
 
     if updated:
         from apps.notifications.models import Notification
@@ -416,10 +475,14 @@ def apply_bulk_edit_rows(
         )
 
     return {
+        "batch_id": run_batch.id,
         "updated_count": len(updated),
         "failed_count": len(failed),
         "updated": updated,
         "failed": failed,
+        "tag_id": tag.id if tag else None,
+        "tag_name": tag.name if tag else None,
+        "changed_fields": sorted(changed_fields),
     }
 
 

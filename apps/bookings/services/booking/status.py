@@ -7,6 +7,7 @@ from apps.bookings.services.confirmation_pdf import (
     save_confirmation_pdf,
 )
 from apps.bookings.services.position_assignment import auto_assign_position
+from apps.catalogs.utils.position_code import position_short_code
 
 
 class BookingStatusError(Exception):
@@ -51,6 +52,7 @@ def update_booking_status(
     acknowledge_combined_red: bool = False,
     require_lta_agreement: bool = True,
     audit_source: str | None = None,
+    audit_extra: dict | None = None,
 ) -> Booking:
     allowed = ALLOWED_TRANSITIONS.get(booking.status, set())
     if new_status not in allowed:
@@ -183,6 +185,8 @@ def update_booking_status(
         }
     if audit_source:
         status_changes["source"] = audit_source
+    if audit_extra:
+        status_changes.update(audit_extra)
     record_booking_audit(
         booking,
         action="status_change",
@@ -214,6 +218,7 @@ def update_booking_operational(
     acknowledge_combined_red: bool = False,
     override_reason: str = "",
     audit_source: str | None = None,
+    audit_extra: dict | None = None,
 ) -> Booking:
     from apps.accounts.permissions import (
         user_may_edit_booking_schedule,
@@ -261,7 +266,14 @@ def update_booking_operational(
         if booking.position_id:
             old_pos = getattr(booking, "position", None)
             if old_pos is not None:
-                old_position_code = getattr(old_pos, "code", None)
+                port = getattr(old_pos, "port", None)
+                port_code = getattr(port, "code", None) if port is not None else None
+                raw_code = getattr(old_pos, "code", None)
+                old_position_code = (
+                    position_short_code(port_code, raw_code)
+                    if port_code and raw_code
+                    else raw_code
+                )
         changes["position_id"] = {
             "from": old_position_id,
             "to": position_id,
@@ -337,9 +349,16 @@ def update_booking_operational(
             else:
                 booking.position = None
             if "position_id" in changes and isinstance(changes["position_id"], dict):
-                changes["position_id"]["to_code"] = (
-                    booking.position.code if booking.position is not None else None
-                )
+                if booking.position is not None:
+                    pos = booking.position
+                    port_code = pos.port.code if pos.port_id else None
+                    changes["position_id"]["to_code"] = (
+                        position_short_code(port_code, pos.code)
+                        if port_code
+                        else pos.code
+                    )
+                else:
+                    changes["position_id"]["to_code"] = None
 
         if acknowledge_combined_red and not user_may_authorize_exceptions(user):
             raise BookingStatusError(
@@ -384,6 +403,8 @@ def update_booking_operational(
             changes["acknowledge_combined_red"] = True
         if audit_source:
             changes["source"] = audit_source
+        if audit_extra:
+            changes.update(audit_extra)
         record_booking_audit(
             booking,
             action="operational_update",

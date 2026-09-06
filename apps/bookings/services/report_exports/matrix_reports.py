@@ -537,7 +537,7 @@ def _write_dual_matrix_sheet(
     note_row = 1
     note = report.get("note", "")
     if report.get("without_lta"):
-        note = f"{note} Sin LTA / CL / LTD." if note else "Sin LTA / CL / LTD."
+        note = f"{note} Sin LTA." if note else "Sin LTA."
     if note:
         ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=14)
         cell = ws.cell(row=note_row, column=1, value=note)

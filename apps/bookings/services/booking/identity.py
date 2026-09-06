@@ -16,6 +16,7 @@ from apps.bookings.services.booking.shipping_line_group import (
     vessel_line_mismatch_error,
 )
 from apps.catalogs.models import Port, ShippingLine, Vessel
+from apps.catalogs.utils.position_code import position_short_code
 
 __all__ = ["GROUP_MISMATCH_MESSAGE", "update_booking_identity"]
 
@@ -44,6 +45,7 @@ def update_booking_identity(
     call_date: date | None = None,
     notes: str | None = None,
     audit_source: str | None = None,
+    audit_extra: dict | None = None,
 ) -> Booking:
     if booking.status == BookingStatus.C:
         raise BookingValidationError(
@@ -223,7 +225,9 @@ def update_booking_identity(
             changes["position_id"] = {
                 "from": booking.position_id,
                 "to": None,
-                "from_code": position.code,
+                "from_code": position_short_code(position.port.code, position.code)
+                if position.port_id
+                else position.code,
                 "to_code": None,
             }
             booking.position = None
@@ -266,6 +270,8 @@ def update_booking_identity(
 
     if audit_source:
         changes["source"] = audit_source
+    if audit_extra:
+        changes.update(audit_extra)
 
     record_booking_audit(
         booking,

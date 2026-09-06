@@ -7,7 +7,7 @@ from datetime import date
 from django.db import transaction
 
 from apps.audit.services.record import record_booking_audit
-from apps.bookings.models import Booking, BookingStatus, LongTermAgreement
+from apps.bookings.models import Booking, BookingRunBatch, BookingStatus, LongTermAgreement
 from apps.bookings.services.booking.code import resolve_unique_booking_code
 from apps.bookings.services.lta.generate_dates import iter_agreement_effective_dates
 from apps.bookings.services.lta.link_bookings import resync_agreement_bookings
@@ -186,15 +186,31 @@ def materialize_agreement_bookings(
 
     for booking in created:
         refresh_related_booking_conflicts(booking, user=user)
+
+    run_batch = None
+    if created:
+        run_batch = BookingRunBatch.objects.create(
+            kind=BookingRunBatch.Kind.LTA_GENERATE,
+            created_by=user if getattr(user, "is_authenticated", False) else None,
+            label=f"Creación LTA · {agreement.code}",
+            booking_ids=[b.id for b in created],
+            success_count=len(created),
+            meta={"agreement_code": agreement.code, "job_kind": "generate"},
+        )
+
+    for booking in created:
+        changes = {
+            "source": "lta_generate",
+            "long_term_agreement": {"old": None, "new": agreement.code},
+            "status": {"from": None, "to": BookingStatus.LTA},
+        }
+        if run_batch is not None:
+            changes["run_batch_id"] = run_batch.id
         record_booking_audit(
             booking,
             action="created",
             summary=f"Reserva generada desde LTA ({agreement.code})",
-            changes={
-                "source": "lta_generate",
-                "long_term_agreement": {"old": None, "new": agreement.code},
-                "status": {"from": None, "to": BookingStatus.LTA},
-            },
+            changes=changes,
             user=user,
         )
 
@@ -210,6 +226,7 @@ def materialize_agreement_bookings(
         "dry_run": False,
         "agreement_code": agreement.code,
         "bookings_generated": True,
+        "batch_id": run_batch.id if run_batch else None,
     }
 
 

@@ -30,6 +30,14 @@ class BookingImportBatch(ImmutableAuditModel):
         default=Source.FILE,
     )
     label = models.CharField(max_length=255)
+    tag = models.ForeignKey(
+        "bookings.BookingTag",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="import_batches",
+        help_text="Optional tag applied to bookings created in this batch.",
+    )
     status = models.CharField(
         max_length=16,
         choices=Status.choices,

@@ -106,25 +106,125 @@ def enrich_named_fk_change(
     *,
     resolve_one: Callable[[int], tuple[str, str]],
 ) -> Any:
-    """Attach from_code/to_code and from_name/to_name for a single FK id delta."""
+    """Attach from_code/to_code and from_name/to_name for a single FK id delta.
+
+    Fills each side independently. Explicit ``None`` / empty codes are missing.
+    """
     if not isinstance(change, dict):
-        return change
-    if change.get("from_name") or change.get("to_name") or change.get("from_code"):
         return change
     out = dict(change)
     raw_from = out.get("from", out.get("old"))
     raw_to = out.get("to", out.get("new"))
+
+    def _blank(value: Any) -> bool:
+        return value is None or value == ""
+
+    def _fill(raw: Any, code_key: str, name_key: str) -> None:
+        if raw is None or raw == "":
+            return
+        need_code = _blank(out.get(code_key))
+        need_name = _blank(out.get(name_key))
+        if not need_code and not need_name:
+            return
+        code, name = resolve_one(int(raw))
+        if need_code:
+            out[code_key] = code
+        if need_name:
+            out[name_key] = name
+
     try:
-        if raw_from is not None and raw_from != "":
-            code, name = resolve_one(int(raw_from))
-            out.setdefault("from_code", code)
-            out.setdefault("from_name", name)
-        if raw_to is not None and raw_to != "":
-            code, name = resolve_one(int(raw_to))
-            out.setdefault("to_code", code)
-            out.setdefault("to_name", name)
+        _fill(raw_from, "from_code", "from_name")
+        _fill(raw_to, "to_code", "to_name")
     except (TypeError, ValueError):
         return change
+    return out
+
+
+def _shorten_position_code(code: Any) -> str:
+    if not isinstance(code, str):
+        return ""
+    text = code.strip()
+    if not text:
+        return ""
+    # Legacy audits may store full catalog code "{port}-{short}".
+    if "-" in text:
+        return text.split("-", 1)[1] or text
+    return text
+
+
+def _normalize_position_codes(change: Any) -> Any:
+    """Ensure position sides resolve to short labels (E1), never bare PKs."""
+    if not isinstance(change, dict):
+        return change
+    out = enrich_named_fk_change(change, resolve_one=_position_code_name)
+    if not isinstance(out, dict):
+        return change
+    for key in ("from_code", "to_code"):
+        shortened = _shorten_position_code(out.get(key))
+        if shortened:
+            out[key] = shortened
+    return out
+
+
+BOOKING_STATUS_LABELS = {
+    "nr": "Solicitada",
+    "h": "En evaluación",
+    "co": "Confirmada",
+    "cl": "Confirmada LTA",
+    "lta": "LTA",
+    "ltd": "Long Term Deployment",
+    "r": "Real",
+    "c": "Cancelada",
+}
+
+
+def _vessel_code_name(pk: int) -> tuple[str, str]:
+    vessel = Vessel.objects.filter(pk=pk).first()
+    if vessel is None:
+        return ("", f"#{pk}")
+    name = vessel_legend_label(vessel, fallback=f"#{pk}")
+    return ("", name)
+
+
+def _lta_code_name(pk: int) -> tuple[str, str]:
+    from apps.bookings.models import LongTermAgreement
+
+    agreement = LongTermAgreement.objects.filter(pk=pk).first()
+    if agreement is None:
+        return ("", f"#{pk}")
+    code = agreement.code or f"#{pk}"
+    return (code, code)
+
+
+def enrich_booking_audit_changes(changes: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Booking history must never paint raw FKs / PKs to operators."""
+    if not changes or not isinstance(changes, dict):
+        return changes
+    out = deepcopy(changes)
+    if "port_id" in out:
+        out["port_id"] = enrich_named_fk_change(
+            out["port_id"],
+            resolve_one=_port_code_name,
+        )
+    if "shipping_line_id" in out:
+        out["shipping_line_id"] = enrich_named_fk_change(
+            out["shipping_line_id"],
+            resolve_one=_line_code_name,
+        )
+    if "vessel_id" in out:
+        out["vessel_id"] = enrich_named_fk_change(
+            out["vessel_id"],
+            resolve_one=_vessel_code_name,
+        )
+    if "position_id" in out:
+        out["position_id"] = _normalize_position_codes(out["position_id"])
+    if "long_term_agreement_id" in out:
+        out["long_term_agreement_id"] = enrich_named_fk_change(
+            out["long_term_agreement_id"],
+            resolve_one=_lta_code_name,
+        )
+    if "status" in out:
+        out["status"] = enrich_choice_change(out["status"], BOOKING_STATUS_LABELS)
     return out
 
 

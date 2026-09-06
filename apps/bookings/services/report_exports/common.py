@@ -106,9 +106,8 @@ def scheduled_bookings_qs(
     if position_id:
         qs = qs.filter(position_id=position_id)
     if without_lta:
-        qs = qs.exclude(
-            status__in=[BookingStatus.LTA, BookingStatus.CL, BookingStatus.LTD],
-        )
+        # Ghost LTA slots only; CL (confirmed) stays in the totals.
+        qs = qs.exclude(status=BookingStatus.LTA)
     return qs
 
 

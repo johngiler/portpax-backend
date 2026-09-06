@@ -6,7 +6,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.audit.services.record import record_booking_audit
-from apps.bookings.models import Booking, BookingStatus, LongTermAgreement
+from apps.bookings.models import Booking, BookingRunBatch, BookingStatus, LongTermAgreement
 from apps.bookings.services.lta.matching import (
     agreement_covers_position,
     agreement_covers_validity,
@@ -17,6 +17,68 @@ from apps.bookings.services.lta.date_exceptions import agreement_covers_call_dat
 from apps.bookings.services.validation.conflicts import (
     refresh_related_booking_conflicts,
 )
+
+
+def _ensure_lta_agreement_run_batch(
+    *,
+    agreement: LongTermAgreement,
+    user=None,
+    job_kind: str,
+    run_batch: BookingRunBatch | None = None,
+) -> BookingRunBatch:
+    if run_batch is not None:
+        return run_batch
+    return BookingRunBatch.objects.create(
+        kind=BookingRunBatch.Kind.LTA_AGREEMENT,
+        created_by=user if getattr(user, "is_authenticated", False) else None,
+        label=f"Actualización LTA · {agreement.code}",
+        changed_fields=["long_term_agreement"],
+        meta={
+            "agreement_code": agreement.code,
+            "job_kind": job_kind,
+            "linked": 0,
+            "unlinked": 0,
+        },
+    )
+
+
+def _append_run_batch_bookings(
+    run_batch: BookingRunBatch,
+    booking_ids: list[int],
+    *,
+    success_delta: int = 0,
+    field_keys: list[str] | None = None,
+    linked_delta: int = 0,
+    unlinked_delta: int = 0,
+) -> None:
+    ids = list(run_batch.booking_ids or [])
+    for bid in booking_ids:
+        if bid not in ids:
+            ids.append(bid)
+    run_batch.booking_ids = ids
+    run_batch.success_count = int(run_batch.success_count or 0) + success_delta
+
+    fields = list(run_batch.changed_fields or [])
+    for key in field_keys or []:
+        if key not in fields:
+            fields.append(key)
+    run_batch.changed_fields = fields
+
+    meta = dict(run_batch.meta or {})
+    if linked_delta:
+        meta["linked"] = int(meta.get("linked") or 0) + linked_delta
+    if unlinked_delta:
+        meta["unlinked"] = int(meta.get("unlinked") or 0) + unlinked_delta
+    run_batch.meta = meta
+
+    run_batch.save(
+        update_fields=[
+            "booking_ids",
+            "success_count",
+            "changed_fields",
+            "meta",
+        ]
+    )
 
 
 def agreement_covers_booking(agreement: LongTermAgreement, booking: Booking) -> bool:
@@ -41,6 +103,7 @@ def unlink_agreement_bookings(
     user=None,
     dry_run: bool = False,
     booking_ids: set[int] | None = None,
+    run_batch: BookingRunBatch | None = None,
 ) -> dict:
     """Clear long_term_agreement FK on linked bookings (all or a subset)."""
     qs = Booking.objects.filter(long_term_agreement_id=agreement.pk).select_related(
@@ -57,6 +120,7 @@ def unlink_agreement_bookings(
             "unlinked": 0,
             "dry_run": dry_run,
             "agreement_code": agreement.code,
+            "batch_id": run_batch.id if run_batch else None,
         }
 
     if dry_run:
@@ -64,7 +128,15 @@ def unlink_agreement_bookings(
             "unlinked": len(bookings),
             "dry_run": True,
             "agreement_code": agreement.code,
+            "batch_id": run_batch.id if run_batch else None,
         }
+
+    batch = _ensure_lta_agreement_run_batch(
+        agreement=agreement,
+        user=user,
+        job_kind="unlink",
+        run_batch=run_batch,
+    )
 
     now = timezone.now()
     code = agreement.code
@@ -80,6 +152,7 @@ def unlink_agreement_bookings(
             summary=f"Acuerdo LTA desvinculado: {code}",
             changes={
                 "source": "lta_agreement",
+                "run_batch_id": batch.id,
                 "long_term_agreement": {
                     "old": code,
                     "new": None,
@@ -90,10 +163,19 @@ def unlink_agreement_bookings(
         # Recompute LTA-zone / occupancy conflicts after FK clear.
         refresh_related_booking_conflicts(booking, user=user)
 
+    _append_run_batch_bookings(
+        batch,
+        [b.id for b in bookings],
+        success_delta=len(bookings),
+        field_keys=["long_term_agreement"],
+        unlinked_delta=len(bookings),
+    )
+
     return {
         "unlinked": len(bookings),
         "dry_run": False,
         "agreement_code": code,
+        "batch_id": batch.id,
     }
 
 
@@ -137,6 +219,7 @@ def link_matching_bookings(
     user=None,
     dry_run: bool = False,
     booking_ids: set[int] | None = None,
+    run_batch: BookingRunBatch | None = None,
 ) -> dict:
     """
     Assign this LTA to existing bookings that match and have no LTA yet.
@@ -151,6 +234,7 @@ def link_matching_bookings(
             "dry_run": dry_run,
             "detail": "El acuerdo no está activo.",
             "agreement_code": agreement.code,
+            "batch_id": run_batch.id if run_batch else None,
         }
 
     candidates = (
@@ -187,29 +271,62 @@ def link_matching_bookings(
         booking.updated_at = now
         to_update.append(booking)
 
-    if to_update and not dry_run:
-        Booking.objects.bulk_update(to_update, ["long_term_agreement", "updated_at"])
-        for booking in to_update:
-            record_booking_audit(
-                booking,
-                action="lta_linked",
-                summary=f"Acuerdo LTA vinculado: {agreement.code}",
-                changes={
-                    "source": "lta_agreement",
-                    "long_term_agreement": {
-                        "old": None,
-                        "new": agreement.code,
-                    },
+    if not to_update:
+        return {
+            "linked": 0,
+            "no_match": no_match,
+            "dry_run": dry_run,
+            "agreement_code": agreement.code,
+            "batch_id": run_batch.id if run_batch else None,
+        }
+
+    if dry_run:
+        return {
+            "linked": len(to_update),
+            "no_match": no_match,
+            "dry_run": True,
+            "agreement_code": agreement.code,
+            "batch_id": run_batch.id if run_batch else None,
+        }
+
+    batch = _ensure_lta_agreement_run_batch(
+        agreement=agreement,
+        user=user,
+        job_kind="link",
+        run_batch=run_batch,
+    )
+    Booking.objects.bulk_update(to_update, ["long_term_agreement", "updated_at"])
+    for booking in to_update:
+        record_booking_audit(
+            booking,
+            action="lta_linked",
+            summary=f"Acuerdo LTA vinculado: {agreement.code}",
+            changes={
+                "source": "lta_agreement",
+                "run_batch_id": batch.id,
+                "long_term_agreement": {
+                    "old": None,
+                    "new": agreement.code,
                 },
-                user=user,
-            )
-            refresh_related_booking_conflicts(booking, user=user)
+            },
+            user=user,
+        )
+        refresh_related_booking_conflicts(booking, user=user)
+
+    _append_run_batch_bookings(
+        batch,
+        [b.id for b in to_update],
+        success_delta=len(to_update),
+        field_keys=["long_term_agreement"],
+        linked_delta=len(to_update),
+    )
 
     return {
         "linked": len(to_update),
         "no_match": no_match,
-        "dry_run": dry_run,
+        "dry_run": False,
         "agreement_code": agreement.code,
+        "batch_id": batch.id,
     }
 
 
@@ -233,17 +350,27 @@ def resync_agreement_bookings(
     to_unlink = antes - deseado
     to_link = deseado - antes
 
+    run_batch = None
+    if not dry_run and (to_unlink or to_link):
+        run_batch = _ensure_lta_agreement_run_batch(
+            agreement=agreement,
+            user=user,
+            job_kind="resync",
+        )
+
     unlinked = unlink_agreement_bookings(
         agreement,
         user=user,
         dry_run=dry_run,
         booking_ids=to_unlink,
+        run_batch=run_batch,
     )
     linked = link_matching_bookings(
         agreement,
         user=user,
         dry_run=dry_run,
         booking_ids=to_link,
+        run_batch=run_batch,
     )
     return {
         "unlinked": int(unlinked.get("unlinked") or 0),
@@ -253,4 +380,7 @@ def resync_agreement_bookings(
         "dry_run": dry_run,
         "agreement_code": agreement.code,
         "detail": linked.get("detail"),
+        "batch_id": (run_batch.id if run_batch else None)
+        or unlinked.get("batch_id")
+        or linked.get("batch_id"),
     }

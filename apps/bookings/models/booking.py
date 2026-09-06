@@ -115,6 +115,14 @@ class Booking(models.Model):
         related_name="bookings",
         help_text="Linked LTA when the call uses the LTA track.",
     )
+    tag = models.ForeignKey(
+        "bookings.BookingTag",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bookings",
+        help_text="Optional operator tag for filtering related bookings.",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

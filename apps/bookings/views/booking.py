@@ -15,7 +15,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import DenyViewerWrites, user_can_access_port, user_port_ids
-from apps.bookings.models import Booking, BookingImportBatch, BookingStatus
+from apps.bookings.models import Booking, BookingImportBatch, BookingRunBatch, BookingStatus
 from apps.bookings.utils.status_query import (
     apply_booking_status_filters,
     parse_status_query_params,
@@ -41,7 +41,14 @@ from apps.bookings.services.booking.bulk_edit import (
 from apps.bookings.services.booking_activity import (
     build_booking_activity,
     build_import_batch_detail,
+    build_run_batch_detail,
     list_booking_activity_actors,
+)
+from apps.bookings.services.booking_tag import (
+    delete_unused_tag,
+    set_import_batch_tag,
+    set_run_batch_tag,
+    suggest_tags,
 )
 from apps.bookings.services.booking_export import build_bookings_csv, build_bookings_xlsx
 from apps.bookings.services.calendar_export import (
@@ -123,6 +130,7 @@ class BookingViewSet(
             "vessel",
             "position",
             "long_term_agreement",
+            "tag",
         )
         if self.action in ("retrieve", "by_code"):
             qs = qs.prefetch_related("audit_entries")
@@ -381,6 +389,7 @@ class BookingViewSet(
 
         source = request.data.get("source") or "file"
         label = request.data.get("label") or request.data.get("file_name") or ""
+        tag_name = request.data.get("tag_name")
         deferred = request.data.get("deferred_rows") or []
         if not isinstance(deferred, list):
             deferred = []
@@ -390,6 +399,7 @@ class BookingViewSet(
             source=str(source),
             label=str(label),
             deferred_rows=deferred,
+            tag_name=str(tag_name) if tag_name is not None else None,
         )
         # Batch is always persisted; include total-failure runs so the client can open detail.
         return Response(result, status=status.HTTP_201_CREATED)
@@ -480,6 +490,11 @@ class BookingViewSet(
                 request.data.get("port_operator_override")
             ),
             override_reason=str(request.data.get("override_reason") or ""),
+            tag_name=(
+                str(request.data.get("tag_name"))
+                if request.data.get("tag_name") is not None
+                else None
+            ),
         )
         return Response(result)
 
@@ -534,7 +549,7 @@ class BookingViewSet(
     def import_batch_detail(self, request, batch_id=None):
         allowed = user_port_ids(request.user)
         try:
-            batch = BookingImportBatch.objects.select_related("created_by").get(
+            batch = BookingImportBatch.objects.select_related("created_by", "tag").get(
                 pk=batch_id
             )
         except BookingImportBatch.DoesNotExist:
@@ -549,6 +564,118 @@ class BookingViewSet(
             )
         return Response(
             build_import_batch_detail(batch, allowed_ports=allowed),
+        )
+
+    @action(
+        detail=False,
+        methods=["patch"],
+        url_path=r"import-batches/(?P<batch_id>[0-9]+)/tag",
+    )
+    def import_batch_tag(self, request, batch_id=None):
+        allowed = user_port_ids(request.user)
+        try:
+            batch = BookingImportBatch.objects.select_related("tag").get(pk=batch_id)
+        except BookingImportBatch.DoesNotExist:
+            return Response(
+                {"detail": "No encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if allowed is not None and batch.created_by_id != request.user.id:
+            return Response(
+                {"detail": "No encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        clear = bool(request.data.get("clear"))
+        previous = batch.tag
+        tag = set_import_batch_tag(
+            batch,
+            tag_name=request.data.get("tag_name"),
+            user=request.user,
+            allowed_ports=allowed,
+            clear=clear,
+        )
+        if previous and previous.pk != (tag.pk if tag else None):
+            delete_unused_tag(previous)
+        return Response(build_import_batch_detail(batch, allowed_ports=allowed))
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"run-batches/(?P<batch_id>[0-9]+)",
+    )
+    def run_batch_detail(self, request, batch_id=None):
+        allowed = user_port_ids(request.user)
+        try:
+            batch = BookingRunBatch.objects.select_related("created_by", "tag").get(
+                pk=batch_id
+            )
+        except BookingRunBatch.DoesNotExist:
+            return Response(
+                {"detail": "No encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if allowed is not None and batch.created_by_id != request.user.id:
+            return Response(
+                {"detail": "No encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(build_run_batch_detail(batch, allowed_ports=allowed))
+
+    @action(
+        detail=False,
+        methods=["patch"],
+        url_path=r"run-batches/(?P<batch_id>[0-9]+)/tag",
+    )
+    def run_batch_tag(self, request, batch_id=None):
+        allowed = user_port_ids(request.user)
+        try:
+            batch = BookingRunBatch.objects.select_related("tag").get(pk=batch_id)
+        except BookingRunBatch.DoesNotExist:
+            return Response(
+                {"detail": "No encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if allowed is not None and batch.created_by_id != request.user.id:
+            return Response(
+                {"detail": "No encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if batch.kind != BookingRunBatch.Kind.MASS_UPDATE:
+            return Response(
+                {"detail": "Solo la actualización masiva admite tags."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        clear = bool(request.data.get("clear"))
+        previous = batch.tag
+        try:
+            tag = set_run_batch_tag(
+                batch,
+                tag_name=request.data.get("tag_name"),
+                user=request.user,
+                allowed_ports=allowed,
+                clear=clear,
+            )
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if previous and previous.pk != (tag.pk if tag else None):
+            delete_unused_tag(previous)
+        return Response(build_run_batch_detail(batch, allowed_ports=allowed))
+
+    @action(detail=False, methods=["get"], url_path="tags")
+    def tags_suggest(self, request):
+        q = request.query_params.get("q") or request.query_params.get("search") or ""
+        try:
+            limit = int(request.query_params.get("limit") or 20)
+        except (TypeError, ValueError):
+            limit = 20
+        rows = suggest_tags(q, limit=limit)
+        return Response(
+            {
+                "results": [{"id": t.id, "name": t.name} for t in rows],
+            }
         )
 
     @action(

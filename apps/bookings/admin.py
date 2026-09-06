@@ -1,7 +1,13 @@
 from django.contrib import admin
 
 from apps.audit.admin import ImmutableAuditAdminMixin
-from apps.bookings.models import Booking, BookingImportBatch, LongTermAgreement
+from apps.bookings.models import (
+    Booking,
+    BookingImportBatch,
+    BookingRunBatch,
+    BookingTag,
+    LongTermAgreement,
+)
 
 
 @admin.register(Booking)
@@ -13,14 +19,22 @@ class BookingAdmin(admin.ModelAdmin):
         "vessel",
         "call_date",
         "status",
+        "tag",
         "long_term_agreement",
         "created_at",
     ]
-    list_filter = ["status", "port", "shipping_line"]
-    search_fields = ["booking_code", "vessel__name", "port__code"]
+    list_filter = ["status", "port", "shipping_line", "tag"]
+    search_fields = ["booking_code", "vessel__name", "port__code", "tag__name"]
     readonly_fields = ["booking_code", "created_at", "updated_at"]
     ordering = ["-call_date"]
-    raw_id_fields = ["long_term_agreement"]
+    raw_id_fields = ["long_term_agreement", "tag"]
+
+
+@admin.register(BookingTag)
+class BookingTagAdmin(admin.ModelAdmin):
+    list_display = ["name", "created_by", "created_at"]
+    search_fields = ["name"]
+    ordering = ["name"]
 
 
 @admin.register(BookingImportBatch)
@@ -29,6 +43,7 @@ class BookingImportBatchAdmin(ImmutableAuditAdminMixin, admin.ModelAdmin):
         "id",
         "label",
         "source",
+        "tag",
         "created_count",
         "failed_count",
         "requested_count",
@@ -37,8 +52,27 @@ class BookingImportBatchAdmin(ImmutableAuditAdminMixin, admin.ModelAdmin):
         "status",
     ]
     list_filter = ["source", "status"]
-    search_fields = ["label"]
+    search_fields = ["label", "tag__name"]
     ordering = ["-created_at"]
+    raw_id_fields = ["tag"]
+
+
+@admin.register(BookingRunBatch)
+class BookingRunBatchAdmin(ImmutableAuditAdminMixin, admin.ModelAdmin):
+    list_display = [
+        "id",
+        "kind",
+        "label",
+        "tag",
+        "success_count",
+        "failed_count",
+        "created_by",
+        "created_at",
+    ]
+    list_filter = ["kind"]
+    search_fields = ["label", "tag__name"]
+    ordering = ["-created_at"]
+    raw_id_fields = ["tag"]
 
 
 @admin.register(LongTermAgreement)
