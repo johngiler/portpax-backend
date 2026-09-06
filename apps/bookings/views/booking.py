@@ -13,6 +13,7 @@ from rest_framework.mixins import (
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from urllib.parse import quote
 
 from apps.accounts.permissions import DenyViewerWrites, user_can_access_port, user_port_ids
 from apps.bookings.models import Booking, BookingImportBatch, BookingRunBatch, BookingStatus
@@ -67,9 +68,14 @@ from apps.bookings.services.report_exports import (
     build_port_trends_xlsx,
     build_ports_totals_matrix,
     build_ports_totals_matrix_xlsx,
+    build_solicitudes_port_report,
+    build_solicitudes_port_xlsx,
+    parse_id_list,
+    parse_report_years,
     port_carrier_matrix_filename,
     port_trends_filename,
     ports_totals_matrix_filename,
+    solicitudes_port_filename,
 )
 from apps.catalogs.models import Port
 from apps.bookings.services.validation import suggest_positions
@@ -1337,6 +1343,55 @@ class BookingViewSet(
             )
         )
 
+    @action(detail=False, methods=["get"], url_path="report-solicitudes-port")
+    def report_solicitudes_port(self, request):
+        date_from, err = self._parse_iso_date_param("date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("date_to")
+        if err:
+            return err
+        port_id = self._optional_int_param("port")
+        if isinstance(port_id, Response):
+            return port_id
+        if not port_id:
+            return Response(
+                {"detail": "port es obligatorio."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        self._ensure_port_access(port_id)
+        years = parse_report_years(
+            request.query_params.get("years"),
+            date_from=date_from,
+            date_to=date_to,
+        )
+        tag_ids = parse_id_list(request.query_params.get("tags"))
+        shipping_line_ids = parse_id_list(
+            request.query_params.get("shipping_lines")
+            or request.query_params.get("shipping_line")
+        )
+        if not shipping_line_ids:
+            return Response(
+                {"detail": "shipping_line es obligatorio."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            data = build_solicitudes_port_report(
+                date_from=date_from,
+                date_to=date_to,
+                port_id=port_id,
+                years=years,
+                tag_ids=tag_ids,
+                shipping_line_ids=shipping_line_ids,
+                without_lta=self._report_without_lta(request),
+                pax_basis=self._report_pax_basis(request),
+                allowed_ports=user_port_ids(request.user),
+                request=request,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(data)
+
     @action(detail=False, methods=["get"], url_path="report-export")
     def report_export(self, request):
         """Structured operational exports (Availability + matrix reports)."""
@@ -1346,13 +1401,14 @@ class BookingViewSet(
             "ports_totals_matrix",
             "port_carrier_matrix",
             "port_trends",
+            "solicitudes_port",
         }
         if report_type not in allowed:
             return Response(
                 {
                     "detail": (
                         "report_type debe ser availability, ports_totals_matrix, "
-                        "port_carrier_matrix o port_trends."
+                        "port_carrier_matrix, port_trends o solicitudes_port."
                     ),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1368,6 +1424,7 @@ class BookingViewSet(
             "ports_totals_matrix",
             "port_carrier_matrix",
             "port_trends",
+            "solicitudes_port",
         }
         if report_type in matrix_types and fmt != "xlsx":
             return Response(
@@ -1472,6 +1529,42 @@ class BookingViewSet(
                 )
                 port = Port.objects.get(pk=port_id)
                 filename = port_trends_filename(port.code, date_from, date_to)
+            elif report_type == "solicitudes_port":
+                if not port_id:
+                    return Response(
+                        {"detail": "port es obligatorio."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                years = parse_report_years(
+                    request.query_params.get("years"),
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+                tag_ids = parse_id_list(request.query_params.get("tags"))
+                shipping_line_ids = parse_id_list(
+                    request.query_params.get("shipping_lines")
+                    or request.query_params.get("shipping_line")
+                )
+                if not shipping_line_ids:
+                    return Response(
+                        {"detail": "shipping_line es obligatorio."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                payload = build_solicitudes_port_report(
+                    date_from=date_from,
+                    date_to=date_to,
+                    port_id=port_id,
+                    years=years,
+                    tag_ids=tag_ids,
+                    shipping_line_ids=shipping_line_ids,
+                    without_lta=without_lta,
+                    pax_basis=pax_basis,
+                    allowed_ports=allowed_ports,
+                    request=request,
+                )
+                content = build_solicitudes_port_xlsx(payload)
+                port = Port.objects.get(pk=port_id)
+                filename = solicitudes_port_filename(port.code, date_from, date_to)
             else:
                 return Response(
                     {"detail": "report_type no soportado."},
@@ -1489,5 +1582,10 @@ class BookingViewSet(
             "text/csv; charset=utf-8" if fmt == "csv" else xlsx_type
         )
         response = HttpResponse(content, content_type=content_type)
-        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        ascii_name = filename.encode("ascii", "replace").decode("ascii")
+        response["Content-Disposition"] = (
+            f'attachment; filename="{ascii_name}"; '
+            f"filename*=UTF-8''{quote(filename)}"
+        )
         return response
+

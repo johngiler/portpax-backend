@@ -85,6 +85,9 @@ TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 
+# Let the browser JS read download filenames across origins (localhost FE → API).
+CORS_EXPOSE_HEADERS = ["Content-Disposition"]
+
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
