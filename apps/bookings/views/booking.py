@@ -59,9 +59,12 @@ from apps.bookings.services.calendar_export import (
 )
 from apps.bookings.services.report_exports import (
     availability_filename,
+    booking_movements_filename,
     build_availability_chart_csv,
     build_availability_chart_xlsx,
     build_availability_data,
+    build_booking_movements_report,
+    build_booking_movements_xlsx,
     build_port_carrier_matrix,
     build_port_carrier_matrix_xlsx,
     build_port_trends,
@@ -71,6 +74,7 @@ from apps.bookings.services.report_exports import (
     build_solicitudes_port_report,
     build_solicitudes_port_xlsx,
     parse_id_list,
+    parse_movement_year,
     parse_report_years,
     port_carrier_matrix_filename,
     port_trends_filename,
@@ -1392,6 +1396,21 @@ class BookingViewSet(
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(data)
 
+    @action(detail=False, methods=["get"], url_path="report-booking-movements")
+    def report_booking_movements(self, request):
+        year = parse_movement_year(
+            request.query_params.get("year")
+            or request.query_params.get("years")
+        )
+        try:
+            data = build_booking_movements_report(
+                year=year,
+                allowed_ports=user_port_ids(request.user),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(data)
+
     @action(detail=False, methods=["get"], url_path="report-export")
     def report_export(self, request):
         """Structured operational exports (Availability + matrix reports)."""
@@ -1402,13 +1421,15 @@ class BookingViewSet(
             "port_carrier_matrix",
             "port_trends",
             "solicitudes_port",
+            "booking_movements",
         }
         if report_type not in allowed:
             return Response(
                 {
                     "detail": (
                         "report_type debe ser availability, ports_totals_matrix, "
-                        "port_carrier_matrix, port_trends o solicitudes_port."
+                        "port_carrier_matrix, port_trends, solicitudes_port "
+                        "o booking_movements."
                     ),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1425,6 +1446,7 @@ class BookingViewSet(
             "port_carrier_matrix",
             "port_trends",
             "solicitudes_port",
+            "booking_movements",
         }
         if report_type in matrix_types and fmt != "xlsx":
             return Response(
@@ -1434,6 +1456,37 @@ class BookingViewSet(
 
         without_lta = self._report_without_lta(request)
         pax_basis = self._report_pax_basis(request)
+
+        if report_type == "booking_movements":
+            year = parse_movement_year(
+                request.query_params.get("year")
+                or request.query_params.get("years")
+            )
+            try:
+                payload = build_booking_movements_report(
+                    year=year,
+                    allowed_ports=user_port_ids(request.user),
+                )
+                content = build_booking_movements_xlsx(payload)
+                filename = booking_movements_filename(year)
+            except ValueError as exc:
+                return Response(
+                    {"detail": str(exc)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            response = HttpResponse(
+                content,
+                content_type=(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                ),
+            )
+            ascii_name = filename.encode("ascii", "replace").decode("ascii")
+            response["Content-Disposition"] = (
+                f'attachment; filename="{ascii_name}"; '
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+            return response
+
         date_from, err = self._parse_iso_date_param("date_from")
         if err:
             return err
