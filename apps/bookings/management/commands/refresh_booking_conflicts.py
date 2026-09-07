@@ -91,7 +91,9 @@ class Command(BaseCommand):
                 for item in (booking.conflict_snapshot or [])
             }
             prev_severity = booking.conflict_severity or None
-            refresh_booking_conflicts(booking, notify=True, notify_updates=False)
+            refresh_booking_conflicts(
+                booking, notify=True, notify_updates=False
+            )
             booking.refresh_from_db(
                 fields=["has_conflict", "conflict_severity", "conflict_snapshot"]
             )

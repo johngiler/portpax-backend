@@ -35,7 +35,6 @@ CONFLICT_HIGHLIGHT_BY_CODE: dict[str, str] = {
     "draft_too_deep": "card",
     "multi_port_conflict": "card",
     "multi_port_proximity": "card",
-    "vessel_itinerary_buffer": "card",
     "lta_beyond_horizon": "card",
     "lta_horizon_denied": "card",
 }
@@ -43,7 +42,6 @@ CONFLICT_HIGHLIGHT_BY_CODE: dict[str, str] = {
 CONFLICT_CHIP_LABEL_BY_CODE: dict[str, str] = {
     "multi_port_proximity": "Proximidad",
     "multi_port_conflict": "Multi-puerto",
-    "vessel_itinerary_buffer": "Itinerario",
     "loa_exceeds_position": "Eslora",
     "loa_overhang": "Eslora",
     "loa_shared_pier": "Eslora",
@@ -79,7 +77,7 @@ CHIP_LABEL_BY_TYPE: dict[str, str] = {
 
 CODE_TO_TYPE: dict[str, str] = {}
 for _type, codes in {
-    "proximity": ["multi_port_proximity", "multi_port_conflict", "vessel_itinerary_buffer"],
+    "proximity": ["multi_port_proximity", "multi_port_conflict"],
     "loa": [
         "loa_exceeds_position",
         "loa_overhang",

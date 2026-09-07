@@ -127,7 +127,7 @@ def refresh_booking_conflicts(
     Records booking audit when conflicts are detected or cleared.
     notify: campanita on newly detected / resolved flags.
     notify_updates: campanita when an existing conflict's codes/severity change
-    (skip in bulk/cron so recálculos no inundan la campanita).
+    (command uses notify_updates=False so only new/resolved flags alert).
     """
     from apps.audit.services.record import record_booking_audit
     from apps.bookings.models import BookingStatus
@@ -152,6 +152,9 @@ def refresh_booking_conflicts(
         for item in conflicts:
             code = str(item.get("code") or "")
             if code in INFO_ONLY_CODES:
+                continue
+            # Hot validators that block save must not become persisted conflict chips.
+            if code in BLOCKING_VALIDATION_CODES:
                 continue
             sev = resolve_issue_severity(item)
             if sev not in ("yellow", "red"):
@@ -342,8 +345,18 @@ def refresh_related_booking_conflicts(
     *,
     user=None,
     request=None,
+    notify: bool = True,
 ) -> None:
-    """Refresh this booking, LOA pier siblings, and vessel itinerary neighbors."""
+    """Refresh this booking and others that may share its conflicts.
+
+    Covers:
+    - same-day related pier slots (occupation, FILO, combined components)
+    - same-day LOA recalc siblings
+    - same-vessel itinerary / geo neighbors in the proximity window
+
+    Primary booking uses notify; neighbors refresh silently to avoid duplicate
+    campanita noise for the same operational change.
+    """
     from datetime import timedelta
 
     from django.db.models import Q
@@ -354,28 +367,40 @@ def refresh_related_booking_conflicts(
         VESSEL_ITINERARY_BUFFER_DAYS,
     )
     from apps.bookings.models import Booking
+    from apps.bookings.services.validation.rules import related_position_ids
     from apps.catalogs.models import PositionLoaRecalcRule
 
-    refresh_booking_conflicts(booking, user=user, request=request)
+    refresh_booking_conflicts(
+        booking,
+        user=user,
+        request=request,
+        notify=notify,
+        notify_updates=notify,
+    )
 
     refreshed_ids = {booking.pk}
 
     if booking.position_id and booking.call_date:
-        sibling_ids: set[int] = set()
+        position_ids = related_position_ids(booking.position_id)
         for rule in PositionLoaRecalcRule.objects.filter(is_active=True).filter(
             Q(position_a_id=booking.position_id) | Q(position_b_id=booking.position_id)
         ):
-            sibling_ids.add(rule.position_a_id)
-            sibling_ids.add(rule.position_b_id)
-        sibling_ids.discard(booking.position_id)
-        if sibling_ids:
-            for other in Booking.objects.filter(
-                call_date=booking.call_date,
-                position_id__in=sibling_ids,
-                status__in=OCCUPATION_CONFLICT_STATUSES,
-            ).exclude(pk=booking.pk):
-                refresh_booking_conflicts(other, user=user, request=request)
-                refreshed_ids.add(other.pk)
+            position_ids.add(rule.position_a_id)
+            position_ids.add(rule.position_b_id)
+
+        for other in Booking.objects.filter(
+            call_date=booking.call_date,
+            position_id__in=position_ids,
+            status__in=OCCUPATION_CONFLICT_STATUSES,
+        ).exclude(pk__in=refreshed_ids):
+            refresh_booking_conflicts(
+                other,
+                user=user,
+                request=request,
+                notify=False,
+                notify_updates=False,
+            )
+            refreshed_ids.add(other.pk)
 
     if booking.vessel_id and booking.call_date:
         window = max(VESSEL_ITINERARY_BUFFER_DAYS, MAX_GEO_PROXIMITY_WINDOW_DAYS)
@@ -386,4 +411,10 @@ def refresh_related_booking_conflicts(
             status__in=OCCUPATION_CONFLICT_STATUSES,
         ).exclude(pk__in=refreshed_ids)
         for other in neighbors:
-            refresh_booking_conflicts(other, user=user, request=request)
+            refresh_booking_conflicts(
+                other,
+                user=user,
+                request=request,
+                notify=False,
+                notify_updates=False,
+            )
