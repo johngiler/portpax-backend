@@ -18,4 +18,9 @@ LTA_SOFT_FAIL_CODES = frozenset(
 ETA_CLOSE_GAP_HOURS = 2
 
 # Search window (±days) when comparing multi-port itineraries (geo proximity).
-MAX_GEO_PROXIMITY_WINDOW_DAYS = 3
+# Wider than the hard itinerary buffer so long sea legs still warn.
+MAX_GEO_PROXIMITY_WINDOW_DAYS = 14
+
+# Hard buffer: same vessel cannot have another active call within ±N days
+# (any port, including the same). Blocks create/update.
+VESSEL_ITINERARY_BUFFER_DAYS = 4

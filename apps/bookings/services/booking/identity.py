@@ -205,6 +205,20 @@ def update_booking_identity(
                 ],
             )
 
+        from apps.bookings.services.validation.rules import (
+            validate_vessel_itinerary_buffer,
+        )
+
+        buffer_issues = validate_vessel_itinerary_buffer(
+            new_vessel.id,
+            new_call_date,
+            new_port.id,
+            exclude_booking_id=booking.pk,
+        )
+        if buffer_issues:
+            payload = [i.as_dict() for i in buffer_issues]
+            raise BookingValidationError(payload[0]["message"], payload)
+
         existing_codes = set(Booking.objects.values_list("booking_code", flat=True))
         existing_codes.discard(old_code)
         new_code = resolve_unique_booking_code(

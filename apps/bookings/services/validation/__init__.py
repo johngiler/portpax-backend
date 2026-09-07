@@ -110,7 +110,7 @@ def validate_booking_params(
         }
 
     return {
-        "valid": True,
+        "valid": len(all_errors) == 0,
         "errors": all_errors,
         "warnings": all_warnings,
         "conflicts": all_warnings,

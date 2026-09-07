@@ -246,6 +246,11 @@ def revalidate_bulk_edit_row(payload: dict) -> dict:
             exclude_booking_id=booking.id,
         )
         warnings = list(result.get("warnings") or result.get("conflicts") or [])
+        for err in result.get("errors") or []:
+            if isinstance(err, dict):
+                blocking.append(err)
+    else:
+        warnings = []
 
     selectable = len(blocking) == 0 and booking.status != BookingStatus.C
     port = Port.objects.filter(pk=port_id).first()

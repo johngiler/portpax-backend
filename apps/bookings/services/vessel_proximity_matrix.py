@@ -23,7 +23,9 @@ MAX_MATRIX_WINDOW_DAYS = 93
 MAX_MATRIX_RANGE_DAYS = 1100
 DEFAULT_MATRIX_PAGE_SIZE = 30
 
-PROXIMITY_CODES = frozenset({"multi_port_proximity", "multi_port_conflict"})
+PROXIMITY_CODES = frozenset(
+    {"multi_port_proximity", "multi_port_conflict", "vessel_itinerary_buffer"}
+)
 
 
 def _parse_iso_date(raw: str | None, field: str) -> date | None:

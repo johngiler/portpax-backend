@@ -160,6 +160,35 @@ def create_booking_batch(
             "call_dates",
         )
 
+    from apps.bookings.constants import VESSEL_ITINERARY_BUFFER_DAYS
+    from apps.bookings.services.validation.rules import (
+        validate_vessel_itinerary_buffer,
+    )
+
+    # Intra-batch: dates of the same vessel must respect the itinerary buffer.
+    sorted_dates = sorted(unique_dates)
+    for i, left in enumerate(sorted_dates):
+        for right in sorted_dates[i + 1 :]:
+            delta = (right - left).days
+            if delta <= VESSEL_ITINERARY_BUFFER_DAYS:
+                raise BookingBatchCreateError(
+                    f"El mismo barco no puede tener escalas a {delta} día(s) "
+                    f"({left.isoformat()} y {right.isoformat()}). "
+                    f"Separación mínima: {VESSEL_ITINERARY_BUFFER_DAYS + 1} días.",
+                    "call_dates",
+                )
+            break
+
+    for call_date in unique_dates:
+        buffer_issues = validate_vessel_itinerary_buffer(
+            vessel.id, call_date, port.id, exclude_booking_id=None
+        )
+        if buffer_issues:
+            raise BookingBatchCreateError(
+                buffer_issues[0].message,
+                "call_dates",
+            )
+
     from apps.bookings.services.lta.matching import find_best_matching_agreement
     from apps.bookings.services.validation.conflicts import (
         refresh_related_booking_conflicts,

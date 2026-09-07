@@ -7,7 +7,24 @@ from datetime import date, timedelta
 from django.db.models import Count, QuerySet, Sum
 
 from apps.bookings.models import Booking, BookingStatus, CancellationReason
-from apps.catalogs.models import Port, Position, PositionType
+from apps.bookings.services.dashboard_occupancy import (
+    atomic_pier_positions_qs,
+    iter_occupancy_booking_rows,
+    occupied_physical_slot_days,
+)
+from apps.bookings.services.validation.conflict_type_filters import (
+    CONFLICT_TYPE_CODES,
+)
+from apps.catalogs.models import Port
+
+CONFLICT_TYPE_LABELS_ES = {
+    "proximity": "Proximidad",
+    "loa": "Eslora",
+    "schedule": "Horario",
+    "position": "Posición",
+    "lta": "LTA",
+    "physical": "Físico",
+}
 
 OCCUPANCY_STATUSES = (
     BookingStatus.CO,
@@ -62,6 +79,45 @@ def _port_display(row: dict) -> str:
     return row.get("port__commercial_name") or row["port__name"]
 
 
+def _conflict_summary(qs: QuerySet) -> dict:
+    """Bookings with has_conflict in scope: total + counts per filter type."""
+    code_to_types: dict[str, list[str]] = {}
+    for type_key, codes in CONFLICT_TYPE_CODES.items():
+        for code in codes:
+            code_to_types.setdefault(code, []).append(type_key)
+
+    type_counts = {key: 0 for key in CONFLICT_TYPE_CODES}
+    total = 0
+    for snapshot in (
+        qs.filter(has_conflict=True)
+        .exclude(status=BookingStatus.C)
+        .values_list("conflict_snapshot", flat=True)
+        .iterator(chunk_size=500)
+    ):
+        total += 1
+        found: set[str] = set()
+        for item in snapshot or []:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "")
+            for type_key in code_to_types.get(code, ()):
+                found.add(type_key)
+        for type_key in found:
+            type_counts[type_key] += 1
+
+    by_type = [
+        {
+            "type": type_key,
+            "label": CONFLICT_TYPE_LABELS_ES.get(type_key, type_key),
+            "count": type_counts[type_key],
+        }
+        for type_key in CONFLICT_TYPE_CODES
+        if type_counts[type_key] > 0
+    ]
+    by_type.sort(key=lambda row: row["count"], reverse=True)
+    return {"total": total, "by_type": by_type}
+
+
 def build_dashboard_stats(
     *,
     date_from: date,
@@ -110,19 +166,19 @@ def build_dashboard_stats(
     planned_pax = pax_agg["planned"] or 0
     actual_pax = pax_agg["actual"] or 0
 
-    positions_qs = Position.objects.filter(
-        is_active=True,
-        position_type=PositionType.PIER,
-        port__is_active=True,
+    positions_qs = atomic_pier_positions_qs(
+        port_id=port_id,
+        allowed_ports=allowed_ports,
     )
-    if allowed_ports is not None:
-        positions_qs = positions_qs.filter(port_id__in=allowed_ports)
-    if port_id:
-        positions_qs = positions_qs.filter(port_id=port_id)
     position_count = positions_qs.count()
     day_count = (date_to - date_from).days + 1
     capacity_slot_days = position_count * day_count
-    occupied_slot_days = qs.filter(status__in=OCCUPANCY_STATUSES).count()
+    occupancy_rows = iter_occupancy_booking_rows(
+        qs.filter(status__in=OCCUPANCY_STATUSES)
+    )
+    occupied_slot_days, occupied_by_port_map = occupied_physical_slot_days(
+        occupancy_rows
+    )
     occupancy_pct = (
         round((occupied_slot_days / capacity_slot_days) * 100, 1)
         if capacity_slot_days > 0
@@ -310,22 +366,26 @@ def build_dashboard_stats(
     prior_pax = prior_active.aggregate(planned=Sum("planned_pax"))["planned"] or 0
     current_calls = active_qs.count()
 
-    # --- Occupancy by port (period filter) ---
+    prior_occupancy_rows = iter_occupancy_booking_rows(
+        prior_qs.filter(status__in=OCCUPANCY_STATUSES)
+    )
+    prior_occupied_slot_days, _ = occupied_physical_slot_days(prior_occupancy_rows)
+    # Same pier plant × same window length → comparable occupancy rates.
+    prior_occupancy_pct = (
+        round((prior_occupied_slot_days / capacity_slot_days) * 100, 1)
+        if capacity_slot_days > 0
+        else 0.0
+    )
+    # --- Occupancy by port (period filter, physical pier slot-days) ---
     pier_by_port = {
         row["port_id"]: row["c"]
         for row in positions_qs.values("port_id").annotate(c=Count("id"))
-    }
-    occupied_by_port = {
-        row["port_id"]: row["c"]
-        for row in qs.filter(status__in=OCCUPANCY_STATUSES)
-        .values("port_id")
-        .annotate(c=Count("id"))
     }
     occupancy_by_port = []
     for port in ports_in_scope.order_by("name"):
         pier_count = pier_by_port.get(port.id, 0)
         capacity = pier_count * day_count
-        occupied = occupied_by_port.get(port.id, 0)
+        occupied = occupied_by_port_map.get(port.id, 0)
         occupancy_by_port.append(
             {
                 "port_id": port.id,
@@ -364,6 +424,7 @@ def build_dashboard_stats(
             "actual_pax": actual_pax,
             "ports_count": ports_in_scope.count(),
         },
+        "conflicts": _conflict_summary(qs),
         "action_queue": {
             "as_of": today.isoformat(),
             "holds": holds_open.count(),
@@ -396,6 +457,11 @@ def build_dashboard_stats(
                 "current": planned_pax,
                 "prior": prior_pax,
                 "delta_pct": _delta_pct(planned_pax, prior_pax),
+            },
+            "occupancy": {
+                "current": occupancy_pct,
+                "prior": prior_occupancy_pct,
+                "delta_pct": _delta_pct(occupancy_pct, prior_occupancy_pct),
             },
         },
         "occupancy_by_port": occupancy_by_port,

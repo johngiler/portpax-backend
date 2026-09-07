@@ -35,6 +35,7 @@ CONFLICT_SEVERITY_BY_CODE: dict[str, str] = {
     "lta_policy_denied": "yellow",
     "multi_port_conflict": "yellow",
     "multi_port_proximity": "yellow",
+    "vessel_itinerary_buffer": "red",
     "no_position_available": "yellow",
     # Traffic light OK / informational match
     "loa_recalc_sum_green": "green",

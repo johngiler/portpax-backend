@@ -5,7 +5,7 @@ from __future__ import annotations
 from django.db.models import Q
 
 CONFLICT_TYPE_CODES: dict[str, list[str]] = {
-    "proximity": ["multi_port_proximity", "multi_port_conflict"],
+    "proximity": ["multi_port_proximity", "multi_port_conflict", "vessel_itinerary_buffer"],
     "loa": [
         "loa_exceeds_position",
         "loa_overhang",

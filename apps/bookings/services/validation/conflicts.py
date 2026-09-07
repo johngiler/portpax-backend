@@ -1,10 +1,21 @@
-"""Persist and normalize non-blocking booking conflicts."""
+"""Persist and normalize booking conflicts.
+
+Most operational rules are non-blocking (warnings). A small set of codes
+remain hard errors that block create/update (see BLOCKING_VALIDATION_CODES).
+"""
 
 from __future__ import annotations
 
 from apps.bookings.services.validation.conflict_codes import (
     INFO_ONLY_CODES,
     severity_for_code,
+)
+
+# Codes that stay as errors after normalize (block create / update / import).
+BLOCKING_VALIDATION_CODES = frozenset(
+    {
+        "vessel_itinerary_buffer",
+    }
 )
 
 
@@ -73,18 +84,30 @@ def max_snapshot_severity(snapshot: list[dict] | None) -> str | None:
 
 def apply_nonblocking_validation(result: dict) -> dict:
     """
-    Operational rules never block create/update/confirm.
-    Returns conflicts with severity; valid always True.
+    Most operational rules become warnings (ops can still save).
+
+    Codes in BLOCKING_VALIDATION_CODES stay as errors and set valid=False.
     """
     conflicts = conflicts_from_validation(result)
-    # Keep green + yellow + red visible as warnings for the UI.
-    warnings = [c for c in conflicts]
+    blocking: list[dict] = []
+    warnings: list[dict] = []
+    for item in conflicts:
+        code = str(item.get("code") or "")
+        if code in BLOCKING_VALIDATION_CODES:
+            blocked = dict(item)
+            blocked["level"] = "error"
+            blocked["severity"] = "red"
+            blocking.append(blocked)
+        else:
+            warnings.append(item)
     return {
-        "valid": True,
-        "errors": [],
+        "valid": len(blocking) == 0,
+        "errors": blocking,
         "warnings": warnings,
         "conflicts": [
-            c for c in conflicts if c.get("code") not in INFO_ONLY_CODES or c.get("severity") == "green"
+            c
+            for c in (blocking + warnings)
+            if c.get("code") not in INFO_ONLY_CODES or c.get("severity") == "green"
         ],
         "by_date": result.get("by_date") or {},
     }
@@ -107,6 +130,7 @@ def refresh_booking_conflicts(
     (skip in bulk/cron so recálculos no inundan la campanita).
     """
     from apps.audit.services.record import record_booking_audit
+    from apps.bookings.models import BookingStatus
     from apps.bookings.services.validation import validate_booking_instance
     from apps.bookings.services.validation.conflict_codes import resolve_issue_severity
 
@@ -114,23 +138,27 @@ def refresh_booking_conflicts(
     prev_severity = getattr(booking, "conflict_severity", None) or None
     prev_snapshot = list(booking.conflict_snapshot or [])
 
-    result = validate_booking_instance(
-        booking,
-        acknowledge_combined_red=acknowledge_combined_red,
-        nonblocking=False,
-    )
-    conflicts = conflicts_from_validation(result)
-    snapshot: list[dict] = []
-    for item in conflicts:
-        code = str(item.get("code") or "")
-        if code in INFO_ONLY_CODES:
-            continue
-        sev = resolve_issue_severity(item)
-        if sev not in ("yellow", "red"):
-            continue
-        normalized = dict(item)
-        normalized["severity"] = sev
-        snapshot.append(normalized)
+    # Cancelled bookings do not keep operational conflict flags.
+    if booking.status == BookingStatus.C:
+        snapshot = []
+    else:
+        result = validate_booking_instance(
+            booking,
+            acknowledge_combined_red=acknowledge_combined_red,
+            nonblocking=False,
+        )
+        conflicts = conflicts_from_validation(result)
+        snapshot = []
+        for item in conflicts:
+            code = str(item.get("code") or "")
+            if code in INFO_ONLY_CODES:
+                continue
+            sev = resolve_issue_severity(item)
+            if sev not in ("yellow", "red"):
+                continue
+            normalized = dict(item)
+            normalized["severity"] = sev
+            snapshot.append(normalized)
 
     next_flag = snapshot_sets_has_conflict(snapshot)
     next_severity = max_snapshot_severity(snapshot) if next_flag else None
@@ -315,30 +343,47 @@ def refresh_related_booking_conflicts(
     user=None,
     request=None,
 ) -> None:
-    """Refresh this booking and same-day pier siblings that share a recalc pair."""
-    refresh_booking_conflicts(booking, user=user, request=request)
-    if not booking.position_id or not booking.call_date:
-        return
+    """Refresh this booking, LOA pier siblings, and vessel itinerary neighbors."""
+    from datetime import timedelta
 
-    from apps.bookings.constants import OCCUPATION_CONFLICT_STATUSES
-    from apps.bookings.models import Booking
-    from apps.catalogs.models import PositionLoaRecalcRule
     from django.db.models import Q
 
-    sibling_ids: set[int] = set()
-    for rule in PositionLoaRecalcRule.objects.filter(is_active=True).filter(
-        Q(position_a_id=booking.position_id) | Q(position_b_id=booking.position_id)
-    ):
-        sibling_ids.add(rule.position_a_id)
-        sibling_ids.add(rule.position_b_id)
-    sibling_ids.discard(booking.position_id)
-    if not sibling_ids:
-        return
+    from apps.bookings.constants import (
+        MAX_GEO_PROXIMITY_WINDOW_DAYS,
+        OCCUPATION_CONFLICT_STATUSES,
+        VESSEL_ITINERARY_BUFFER_DAYS,
+    )
+    from apps.bookings.models import Booking
+    from apps.catalogs.models import PositionLoaRecalcRule
 
-    qs = Booking.objects.filter(
-        call_date=booking.call_date,
-        position_id__in=sibling_ids,
-        status__in=OCCUPATION_CONFLICT_STATUSES,
-    ).exclude(pk=booking.pk)
-    for other in qs:
-        refresh_booking_conflicts(other, user=user, request=request)
+    refresh_booking_conflicts(booking, user=user, request=request)
+
+    refreshed_ids = {booking.pk}
+
+    if booking.position_id and booking.call_date:
+        sibling_ids: set[int] = set()
+        for rule in PositionLoaRecalcRule.objects.filter(is_active=True).filter(
+            Q(position_a_id=booking.position_id) | Q(position_b_id=booking.position_id)
+        ):
+            sibling_ids.add(rule.position_a_id)
+            sibling_ids.add(rule.position_b_id)
+        sibling_ids.discard(booking.position_id)
+        if sibling_ids:
+            for other in Booking.objects.filter(
+                call_date=booking.call_date,
+                position_id__in=sibling_ids,
+                status__in=OCCUPATION_CONFLICT_STATUSES,
+            ).exclude(pk=booking.pk):
+                refresh_booking_conflicts(other, user=user, request=request)
+                refreshed_ids.add(other.pk)
+
+    if booking.vessel_id and booking.call_date:
+        window = max(VESSEL_ITINERARY_BUFFER_DAYS, MAX_GEO_PROXIMITY_WINDOW_DAYS)
+        neighbors = Booking.objects.filter(
+            vessel_id=booking.vessel_id,
+            call_date__gte=booking.call_date - timedelta(days=window),
+            call_date__lte=booking.call_date + timedelta(days=window),
+            status__in=OCCUPATION_CONFLICT_STATUSES,
+        ).exclude(pk__in=refreshed_ids)
+        for other in neighbors:
+            refresh_booking_conflicts(other, user=user, request=request)

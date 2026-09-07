@@ -230,6 +230,78 @@ def validate_physical_fit(
     return issues
 
 
+def validate_vessel_itinerary_buffer(
+    vessel_id: int,
+    call_date,
+    port_id: int,
+    exclude_booking_id: int | None = None,
+) -> list[ValidationIssue]:
+    """
+    Hard buffer: the same vessel cannot have another active call within
+    ±VESSEL_ITINERARY_BUFFER_DAYS (any port, including the same).
+    """
+    from datetime import timedelta
+
+    from apps.bookings.constants import (
+        ACTIVE_BOOKING_STATUSES,
+        VESSEL_ITINERARY_BUFFER_DAYS,
+    )
+    from apps.bookings.services.validation.legend_labels import port_legend_label
+
+    window_start = call_date - timedelta(days=VESSEL_ITINERARY_BUFFER_DAYS)
+    window_end = call_date + timedelta(days=VESSEL_ITINERARY_BUFFER_DAYS)
+    qs = (
+        Booking.objects.filter(
+            vessel_id=vessel_id,
+            call_date__gte=window_start,
+            call_date__lte=window_end,
+            status__in=ACTIVE_BOOKING_STATUSES,
+        )
+        .select_related("port")
+        .order_by("call_date", "id")
+    )
+    if exclude_booking_id:
+        qs = qs.exclude(pk=exclude_booking_id)
+
+    issues: list[ValidationIssue] = []
+    for other in qs[:12]:
+        delta = abs((other.call_date - call_date).days)
+        if delta > VESSEL_ITINERARY_BUFFER_DAYS:
+            continue
+        other_port = port_legend_label(other.port) if other.port_id else "otro puerto"
+        if other.port_id == port_id:
+            where = f"en el mismo puerto ({other_port})"
+        else:
+            where = f"en {other_port}"
+        if delta == 0:
+            gap = "el mismo día"
+        elif delta == 1:
+            gap = "al día siguiente / anterior"
+        else:
+            gap = f"a {delta} días"
+        issues.append(
+            ValidationIssue(
+                "error",
+                "vessel_itinerary_buffer",
+                (
+                    f"El mismo barco ya tiene escala {where} "
+                    f"({other.booking_code}) el {other.call_date.isoformat()} "
+                    f"({gap}). Debe haber al menos "
+                    f"{VESSEL_ITINERARY_BUFFER_DAYS + 1} días de separación "
+                    f"(±{VESSEL_ITINERARY_BUFFER_DAYS} días)."
+                ),
+                detail={
+                    "other_booking_code": other.booking_code,
+                    "other_call_date": other.call_date.isoformat(),
+                    "other_port": other.port.code if other.port_id else "",
+                    "delta_days": delta,
+                    "buffer_days": VESSEL_ITINERARY_BUFFER_DAYS,
+                },
+            )
+        )
+    return issues
+
+
 def validate_multi_port_conflict(
     vessel_id: int,
     call_date,
@@ -875,6 +947,11 @@ def validate_booking(
     acknowledge_combined_red: bool = False,
 ) -> dict:
     issues: list[ValidationIssue] = []
+    issues.extend(
+        validate_vessel_itinerary_buffer(
+            vessel.id, call_date, port.id, exclude_booking_id
+        )
+    )
     issues.extend(validate_multi_port_conflict(vessel.id, call_date, port.id, exclude_booking_id))
     issues.extend(validate_lta(port, vessel, call_date, position))
     if position:
