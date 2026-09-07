@@ -1,9 +1,14 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from apps.bookings.views import BookingViewSet, LongTermAgreementViewSet
+from apps.bookings.views import (
+    BookingTagViewSet,
+    BookingViewSet,
+    LongTermAgreementViewSet,
+)
 
 router = DefaultRouter()
+router.register("tags", BookingTagViewSet, basename="booking-tag")
 router.register(
     "long-term-agreements",
     LongTermAgreementViewSet,

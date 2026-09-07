@@ -9,6 +9,8 @@ from apps.audit.services.context import with_audit_context
 
 
 def _booking_entity_snapshot(booking) -> dict:
+    from apps.catalogs.utils.position_code import position_short_code
+
     entity = {
         "booking_code": getattr(booking, "booking_code", "") or "",
         "port_id": getattr(booking, "port_id", None),
@@ -24,7 +26,11 @@ def _booking_entity_snapshot(booking) -> dict:
         entity["vessel_name"] = getattr(vessel, "name", "") or ""
     position = getattr(booking, "position", None)
     if position is not None:
-        entity["position_code"] = getattr(position, "code", "") or ""
+        raw_code = getattr(position, "code", "") or ""
+        port_code = entity.get("port_code") or ""
+        entity["position_code"] = (
+            position_short_code(port_code, raw_code) if port_code else raw_code
+        )
     return entity
 
 

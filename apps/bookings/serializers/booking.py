@@ -452,10 +452,20 @@ class BookingUpdateSerializer(serializers.Serializer):
             raise serializers.ValidationError({field: str(exc)}) from exc
 
         if clear_tag or tag_name is not None:
+            from apps.bookings.services.booking_tag import record_booking_tag_audit
+
+            previous = instance.tag
             next_tag = None if clear_tag else get_or_create_tag(tag_name, user=user)
             if instance.tag_id != (next_tag.id if next_tag else None):
                 instance.tag = next_tag
                 instance.save(update_fields=["tag", "updated_at"])
+                record_booking_tag_audit(
+                    instance,
+                    previous=previous,
+                    next_tag=next_tag,
+                    user=user,
+                    request=request,
+                )
 
         return instance
 

@@ -225,7 +225,22 @@ def enrich_booking_audit_changes(changes: dict[str, Any] | None) -> dict[str, An
         )
     if "status" in out:
         out["status"] = enrich_choice_change(out["status"], BOOKING_STATUS_LABELS)
+    if "tag_id" in out:
+        out["tag_id"] = enrich_named_fk_change(
+            out["tag_id"],
+            resolve_one=_tag_name,
+        )
     return out
+
+
+def _tag_name(pk: int) -> tuple[str, str]:
+    from apps.bookings.models import BookingTag
+
+    tag = BookingTag.objects.filter(pk=pk).first()
+    if tag is None:
+        return ("", f"#{pk}")
+    name = tag.name or f"#{pk}"
+    return ("", name)
 
 
 def _port_code_name(pk: int) -> tuple[str, str]:

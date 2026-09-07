@@ -49,7 +49,6 @@ from apps.bookings.services.booking_tag import (
     delete_unused_tag,
     set_import_batch_tag,
     set_run_batch_tag,
-    suggest_tags,
 )
 from apps.bookings.services.booking_export import build_bookings_csv, build_bookings_xlsx
 from apps.bookings.services.calendar_export import (
@@ -601,6 +600,7 @@ class BookingViewSet(
             batch,
             tag_name=request.data.get("tag_name"),
             user=request.user,
+            request=request,
             allowed_ports=allowed,
             clear=clear,
         )
@@ -662,6 +662,7 @@ class BookingViewSet(
                 batch,
                 tag_name=request.data.get("tag_name"),
                 user=request.user,
+                request=request,
                 allowed_ports=allowed,
                 clear=clear,
             )
@@ -673,20 +674,6 @@ class BookingViewSet(
         if previous and previous.pk != (tag.pk if tag else None):
             delete_unused_tag(previous)
         return Response(build_run_batch_detail(batch, allowed_ports=allowed))
-
-    @action(detail=False, methods=["get"], url_path="tags")
-    def tags_suggest(self, request):
-        q = request.query_params.get("q") or request.query_params.get("search") or ""
-        try:
-            limit = int(request.query_params.get("limit") or 20)
-        except (TypeError, ValueError):
-            limit = 20
-        rows = suggest_tags(q, limit=limit)
-        return Response(
-            {
-                "results": [{"id": t.id, "name": t.name} for t in rows],
-            }
-        )
 
     @action(
         detail=False,

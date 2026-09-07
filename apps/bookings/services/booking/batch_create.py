@@ -263,12 +263,19 @@ def create_booking_batch(
         CONFIRMATION_PDF_STATUSES,
         save_confirmation_pdf,
     )
+    from apps.catalogs.utils.position_code import position_short_code
 
     for booking in created:
         summary = f"Reserva creada ({booking.get_status_display()})"
         if booking.position_id:
+            port_code = booking.port.code if booking.port_id else ""
+            pos_label = (
+                position_short_code(port_code, booking.position.code)
+                if port_code
+                else booking.position.code
+            )
             summary = (
-                f"{summary} — posición {booking.position.code} asignada automáticamente"
+                f"{summary} — posición {pos_label} asignada automáticamente"
             )
         if booking.status in CONFIRMATION_PDF_STATUSES:
             save_confirmation_pdf(booking)

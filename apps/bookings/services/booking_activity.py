@@ -77,6 +77,7 @@ FIELD_LABELS = {
     "notes": "Notas",
     "long_term_agreement": "Acuerdo LTA",
     "long_term_agreement_id": "Acuerdo LTA",
+    "tag_id": "Tag",
 }
 
 
@@ -441,10 +442,13 @@ def _audit_queryset(
     qs = (
         BookingAuditEntry.objects.filter(action__in=actions)
         .select_related("booking", "user")
-        .exclude(changes__has_key="import_batch_id")
-        .exclude(changes__has_key="run_batch_id")
     )
-    if booking_id is not None:
+    # Global feed rolls import/run batches into cards; booking detail keeps every row.
+    if booking_id is None:
+        qs = qs.exclude(changes__has_key="import_batch_id").exclude(
+            changes__has_key="run_batch_id"
+        )
+    else:
         qs = qs.filter(booking_id=booking_id)
     if source:
         if source == "mass_import":
@@ -816,6 +820,7 @@ def _side_label(raw: dict, *, side: str, field: str) -> str:
         "shipping_line_id",
         "vessel_id",
         "long_term_agreement_id",
+        "tag_id",
     ):
         if name not in (None, ""):
             return str(name)
