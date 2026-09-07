@@ -571,8 +571,21 @@ class BookingViewSet(
                 {"detail": "No encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        try:
+            page = int(request.query_params.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get("page_size") or 20)
+        except (TypeError, ValueError):
+            page_size = 20
         return Response(
-            build_import_batch_detail(batch, allowed_ports=allowed),
+            build_import_batch_detail(
+                batch,
+                allowed_ports=allowed,
+                page=page,
+                page_size=page_size,
+            ),
         )
 
     @action(
@@ -606,7 +619,22 @@ class BookingViewSet(
         )
         if previous and previous.pk != (tag.pk if tag else None):
             delete_unused_tag(previous)
-        return Response(build_import_batch_detail(batch, allowed_ports=allowed))
+        try:
+            page = int(request.query_params.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get("page_size") or 20)
+        except (TypeError, ValueError):
+            page_size = 20
+        return Response(
+            build_import_batch_detail(
+                batch,
+                allowed_ports=allowed,
+                page=page,
+                page_size=page_size,
+            )
+        )
 
     @action(
         detail=False,
@@ -629,7 +657,22 @@ class BookingViewSet(
                 {"detail": "No encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        return Response(build_run_batch_detail(batch, allowed_ports=allowed))
+        try:
+            page = int(request.query_params.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get("page_size") or 20)
+        except (TypeError, ValueError):
+            page_size = 20
+        return Response(
+            build_run_batch_detail(
+                batch,
+                allowed_ports=allowed,
+                page=page,
+                page_size=page_size,
+            )
+        )
 
     @action(
         detail=False,
@@ -673,7 +716,22 @@ class BookingViewSet(
             )
         if previous and previous.pk != (tag.pk if tag else None):
             delete_unused_tag(previous)
-        return Response(build_run_batch_detail(batch, allowed_ports=allowed))
+        try:
+            page = int(request.query_params.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get("page_size") or 20)
+        except (TypeError, ValueError):
+            page_size = 20
+        return Response(
+            build_run_batch_detail(
+                batch,
+                allowed_ports=allowed,
+                page=page,
+                page_size=page_size,
+            )
+        )
 
     @action(
         detail=False,

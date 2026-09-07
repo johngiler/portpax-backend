@@ -335,21 +335,43 @@ def _bulk_item(batch: BookingImportBatch) -> dict[str, Any]:
 def _lta_agreement_link_counts(
     batch: BookingRunBatch,
 ) -> tuple[int, int]:
-    """Vinculadas / desvinculadas from audits (source of truth for this run)."""
+    """Net vinculadas / desvinculadas (churn unlink+relink counts as neither)."""
     from apps.audit.models import BookingAuditEntry
 
-    linked = BookingAuditEntry.objects.filter(
+    per_booking = _collect_run_batch_booking_changes(batch.id)
+    linked, unlinked = _net_lta_counts_from_booking_changes(per_booking)
+    # Prefer net from audits even when both are 0 (pure churn). Meta stores event totals.
+    has_audits = BookingAuditEntry.objects.filter(
         changes__run_batch_id=batch.id,
-        action="lta_linked",
-    ).count()
-    unlinked = BookingAuditEntry.objects.filter(
-        changes__run_batch_id=batch.id,
-        action="lta_unlinked",
-    ).count()
-    if linked or unlinked:
+    ).exists()
+    if has_audits:
         return linked, unlinked
     meta = batch.meta if isinstance(batch.meta, dict) else {}
     return int(meta.get("linked") or 0), int(meta.get("unlinked") or 0)
+
+
+def _net_lta_counts_from_booking_changes(
+    per_booking: dict[int, list[dict[str, Any]]],
+) -> tuple[int, int]:
+    """Count bookings whose net LTA delta is link vs unlink."""
+    linked = 0
+    unlinked = 0
+    for rows in per_booking.values():
+        for row in rows:
+            if row.get("field") not in (
+                "long_term_agreement",
+                "long_term_agreement_id",
+            ):
+                continue
+            fr = row.get("from")
+            to = row.get("to")
+            fr_empty = fr in (None, "", "—")
+            to_empty = to in (None, "", "—")
+            if fr_empty and not to_empty:
+                linked += 1
+            elif not fr_empty and to_empty:
+                unlinked += 1
+    return linked, unlinked
 
 
 def _run_item(batch: BookingRunBatch) -> dict[str, Any]:
@@ -382,7 +404,7 @@ def _run_item(batch: BookingRunBatch) -> dict[str, Any]:
                 parts.append(f"{unlinked_count} desvinculadas")
             summary = f"Actualización LTA: {', '.join(parts)}"
         else:
-            summary = f"Actualización LTA: {batch.success_count} reservas"
+            summary = "Actualización LTA: sin cambio de vínculo"
         if field_labels:
             summary = f"{summary} · {', '.join(field_labels)}"
 
@@ -414,8 +436,16 @@ def _run_item(batch: BookingRunBatch) -> dict[str, Any]:
         "not_created_count": None,
         "changed_fields": field_keys,
         "changed_field_labels": field_labels,
-        "linked_count": linked_count or None,
-        "unlinked_count": unlinked_count or None,
+        "linked_count": (
+            linked_count
+            if batch.kind == BookingRunBatch.Kind.LTA_AGREEMENT
+            else (linked_count or None)
+        ),
+        "unlinked_count": (
+            unlinked_count
+            if batch.kind == BookingRunBatch.Kind.LTA_AGREEMENT
+            else (unlinked_count or None)
+        ),
         "tag_id": tag.id if tag else None,
         "tag_name": tag.name if tag else None,
         "label": batch.label,
@@ -686,10 +716,23 @@ def build_booking_activity(
     }
 
 
+def _list_page_slice(
+    *,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[int, int, int]:
+    """Return (page, page_size, start) clamped for list endpoints."""
+    safe_page = max(1, int(page or 1))
+    safe_size = min(max(1, int(page_size or 20)), 100)
+    return safe_page, safe_size, (safe_page - 1) * safe_size
+
+
 def build_import_batch_detail(
     batch: BookingImportBatch,
     *,
     allowed_ports: list[int] | None,
+    page: int = 1,
+    page_size: int = 20,
 ) -> dict[str, Any]:
     from apps.catalogs.utils.position_code import position_short_code
 
@@ -705,8 +748,12 @@ def build_import_batch_detail(
     if allowed_ports is not None:
         bookings_qs = bookings_qs.filter(port_id__in=allowed_ports)
 
+    bookings_qs = bookings_qs.order_by("call_date", "booking_code")
+    created_total = bookings_qs.count()
+    safe_page, safe_size, start = _list_page_slice(page=page, page_size=page_size)
+
     created: list[dict[str, Any]] = []
-    for booking in bookings_qs.order_by("call_date", "booking_code"):
+    for booking in bookings_qs[start : start + safe_size]:
         position_code = None
         if booking.position_id and booking.position is not None:
             port_code = (
@@ -755,6 +802,9 @@ def build_import_batch_detail(
             0, len(batch.retry_rows or []) - batch.failed_count
         ),
         "created": created,
+        "created_total": created_total,
+        "created_page": safe_page,
+        "created_page_size": safe_size,
         "failures": batch.failures or [],
         "retry_rows": batch.retry_rows or [],
         "retry_count": len(batch.retry_rows or []),
@@ -896,14 +946,22 @@ def _field_change_rows_from_changes(changes: dict[str, Any]) -> list[dict[str, A
 def _collect_run_batch_booking_changes(
     batch_id: int,
 ) -> dict[int, list[dict[str, Any]]]:
-    """Per-booking from→to field deltas for a run batch."""
+    """Per-booking from→to field deltas for a run batch.
+
+    Several audits on the same field are collapsed to the net from→to.
+    Unlink then re-link of the same agreement is omitted (no real update).
+    """
     from apps.audit.models import BookingAuditEntry
 
-    by_booking: dict[int, list[dict[str, Any]]] = {}
+    # booking_id -> field -> chronological side pairs
+    chains: dict[int, dict[str, list[tuple[str, str]]]] = {}
+    labels: dict[str, str] = {}
+
     for entry in (
         BookingAuditEntry.objects.filter(changes__run_batch_id=batch_id)
         .exclude(booking_id__isnull=True)
-        .only("booking_id", "changes")
+        .only("booking_id", "changes", "created_at")
+        .order_by("created_at", "id")
         .iterator(chunk_size=500)
     ):
         booking_id = entry.booking_id
@@ -914,16 +972,34 @@ def _collect_run_batch_booking_changes(
         rows = _field_change_rows_from_changes(changes)
         if not rows:
             continue
-        existing = by_booking.setdefault(booking_id, [])
-        seen = {(r["field"], r["from"], r["to"]) for r in existing}
+        by_field = chains.setdefault(booking_id, {})
         for row in rows:
-            key = (row["field"], row["from"], row["to"])
-            if key in seen:
+            field = row["field"]
+            labels[field] = row["label"]
+            by_field.setdefault(field, []).append((row["from"], row["to"]))
+
+    by_booking: dict[int, list[dict[str, Any]]] = {}
+    for booking_id, fields in chains.items():
+        rows: list[dict[str, Any]] = []
+        for field, sides in fields.items():
+            if not sides:
                 continue
-            seen.add(key)
-            existing.append(row)
-    for rows in by_booking.values():
-        rows.sort(key=lambda row: row["label"])
+            net_from = sides[0][0]
+            net_to = sides[-1][1]
+            # Unlink then re-link (same agreement) → omit; not an update.
+            if net_from == net_to:
+                continue
+            rows.append(
+                {
+                    "field": field,
+                    "label": labels.get(field, FIELD_LABELS.get(field, field)),
+                    "from": net_from,
+                    "to": net_to,
+                }
+            )
+        if rows:
+            rows.sort(key=lambda row: row["label"])
+            by_booking[booking_id] = rows
     return by_booking
 
 
@@ -931,6 +1007,8 @@ def build_run_batch_detail(
     batch: BookingRunBatch,
     *,
     allowed_ports: list[int] | None,
+    page: int = 1,
+    page_size: int = 20,
 ) -> dict[str, Any]:
     from apps.catalogs.utils.position_code import position_short_code
 
@@ -947,8 +1025,25 @@ def build_run_batch_detail(
         bookings_qs = bookings_qs.filter(port_id__in=allowed_ports)
 
     per_booking = _collect_run_batch_booking_changes(batch.id)
+
+    linked_count = 0
+    unlinked_count = 0
+    success_count = int(batch.success_count or 0)
+    if batch.kind == BookingRunBatch.Kind.LTA_AGREEMENT:
+        linked_count, unlinked_count = _net_lta_counts_from_booking_changes(
+            per_booking
+        )
+        # List only bookings with a real net vínculo change (no churn rows).
+        changed_ids = list(per_booking.keys())
+        bookings_qs = bookings_qs.filter(id__in=changed_ids or [-1])
+        success_count = linked_count + unlinked_count
+
+    bookings_qs = bookings_qs.order_by("call_date", "booking_code")
+    bookings_total = bookings_qs.count()
+    safe_page, safe_size, start = _list_page_slice(page=page, page_size=page_size)
+
     fallback_changes: list[dict[str, Any]] = []
-    if batch.changed_fields:
+    if batch.changed_fields and batch.kind != BookingRunBatch.Kind.LTA_AGREEMENT:
         fallback_changes = [
             {
                 "field": key,
@@ -960,7 +1055,7 @@ def build_run_batch_detail(
         ]
 
     bookings = []
-    for booking in bookings_qs.order_by("call_date", "booking_code"):
+    for booking in bookings_qs[start : start + safe_size]:
         changes = per_booking.get(booking.id) or fallback_changes
         position_code = None
         if booking.position_id and booking.position is not None:
@@ -996,14 +1091,6 @@ def build_run_batch_detail(
         )
     tag = batch.tag
     supports_tag = batch.kind == BookingRunBatch.Kind.MASS_UPDATE
-
-    linked_count = 0
-    unlinked_count = 0
-    success_count = int(batch.success_count or 0)
-    if batch.kind == BookingRunBatch.Kind.LTA_AGREEMENT:
-        linked_count, unlinked_count = _lta_agreement_link_counts(batch)
-        # Affected = link + unlink events (disjoint sets in a resync).
-        success_count = linked_count + unlinked_count
 
     buckets: dict[tuple[str, str, str], dict[str, Any]] = {}
     for rows in per_booking.values():
@@ -1041,6 +1128,9 @@ def build_run_batch_detail(
         "linked_count": linked_count,
         "unlinked_count": unlinked_count,
         "bookings": bookings,
+        "bookings_total": bookings_total,
+        "bookings_page": safe_page,
+        "bookings_page_size": safe_size,
         "failures": batch.failures or [],
         "meta": batch.meta or {},
         "tag_id": tag.id if tag else None,
