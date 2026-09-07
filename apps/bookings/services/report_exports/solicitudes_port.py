@@ -8,7 +8,7 @@ from io import BytesIO
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.styles import Border, Font, PatternFill, Side
+from openpyxl.styles import Border, Font, Side
 from openpyxl.utils import get_column_letter
 
 from apps.bookings.models import BookingTag
@@ -33,7 +33,6 @@ from apps.bookings.services.report_exports.xlsx_style import (
     FONT_TITLE,
     FONT_TOTAL,
     NAVY,
-    SKY,
     style_cell,
     write_title_row,
 )
@@ -43,7 +42,6 @@ MIN_REPORT_YEAR = 2025
 
 _BLACK = Side(style="thin", color="000000")
 BORDER_BLACK = Border(left=_BLACK, right=_BLACK, top=_BLACK, bottom=_BLACK)
-FILL_HIGHLIGHT = PatternFill("solid", fgColor=SKY)
 
 
 def _media_url(request, field) -> str | None:
@@ -117,6 +115,12 @@ def _format_arrival(d: date) -> str:
 
 def _port_label(port: Port) -> str:
     return (port.name or port.code or f"#{port.pk}").strip()
+
+
+def _pct(carrier_pax: int, port_pax: int) -> str:
+    if port_pax <= 0:
+        return "—"
+    return f"{int(round((carrier_pax / port_pax) * 100))}%"
 
 
 def _year_pax_totals(
@@ -285,15 +289,7 @@ def build_solicitudes_port_report(
         ],
         "shipping_line_label": carrier_label,
         "title": _port_label(port).upper(),
-        "subtitle": (
-            f"RESUMEN DE MOVIMIENTOS · {carrier_label}"
-            if carrier_label
-            else (
-                f"RESUMEN DE MOVIMIENTOS · {tag_label}"
-                if tags
-                else "RESUMEN DE MOVIMIENTOS"
-            )
-        ),
+        "subtitle": carrier_label or (tag_label if tags else ""),
         "year_blocks": year_blocks,
         "nuevas_solicitadas": nuevas,
         "nuevas_total": nuevas_total,
@@ -325,18 +321,10 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
             alignment=ALIGN_LEFT,
             border=None,
         )
-        row = 3
+        row = 4
     else:
-        row = 2
+        row = 3
 
-    note = payload.get("pax_basis_note") or ""
-    if note:
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
-        cell = ws.cell(row=row, column=1, value=note)
-        style_cell(cell, font=FONT_NOTE, alignment=ALIGN_LEFT, border=None)
-        row += 1
-
-    row += 1
     left_start = row
 
     # Left year blocks (cols 1-6)
@@ -394,7 +382,6 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
                 )
             row += 1
 
-        # Total under Pax column
         for col in range(1, 6):
             cell = ws.cell(row=row, column=col, value="")
             style_cell(cell, border=None)
@@ -411,96 +398,167 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
 
     left_end = row
 
-    # Right summaries starting at column 8
+    # Right summary card: port / carrier / Año | Naviera vs total (pct)
     right_row = left_start
-    selected_years = set(payload.get("years") or [])
+    port_name = str(payload.get("port_name") or "Puerto").strip()
+    carrier_label = str(payload.get("shipping_line_label") or "").strip()
+    carrier_rows = list(
+        payload.get("carrier_by_year") or payload.get("nuevas_solicitadas") or []
+    )
+    port_rows = list(payload.get("port_by_year") or [])
+    carrier_by_year = {
+        int(item.get("year") or 0): int(item.get("pax") or 0)
+        for item in carrier_rows
+        if item.get("year")
+    }
+    port_by_year_map = {
+        int(item.get("year") or 0): int(item.get("pax") or 0)
+        for item in port_rows
+        if item.get("year")
+    }
+    summary_years = sorted(set(carrier_by_year) | set(port_by_year_map))
+    if carrier_label and summary_years:
+        for col in (8, 9):
+            cell = ws.cell(row=right_row, column=col, value="")
+            style_cell(cell, fill=FILL_TITLE, border=BORDER_BLACK)
+        cell = ws.cell(row=right_row, column=8, value=port_name)
+        style_cell(
+            cell,
+            font=FONT_TOTAL,
+            fill=FILL_TITLE,
+            alignment=ALIGN_LEFT,
+            border=BORDER_BLACK,
+        )
+        ws.merge_cells(
+            start_row=right_row,
+            start_column=8,
+            end_row=right_row,
+            end_column=9,
+        )
+        right_row += 1
 
-    def _write_summary_block(
-        start_row: int,
-        *,
-        label: str,
-        rows: list[dict[str, Any]],
-        total: int | None = None,
-        highlight_years: set[int] | None = None,
-    ) -> int:
-        r = start_row
-        ws.merge_cells(start_row=r, start_column=8, end_row=r, end_column=9)
-        cell = ws.cell(row=r, column=8, value=label)
-        style_cell(cell, font=FONT_TOTAL, alignment=ALIGN_LEFT, border=None)
-        r += 1
-        for item in rows:
-            year = int(item.get("year") or 0)
-            pax = int(item.get("pax") or 0)
-            fill = (
-                FILL_HIGHLIGHT
-                if highlight_years and year in highlight_years
-                else FILL_ALT
-            )
-            cell = ws.cell(row=r, column=8, value=year)
+        for col in (8, 9):
+            cell = ws.cell(row=right_row, column=col, value="")
+            style_cell(cell, fill=FILL_TITLE, border=BORDER_BLACK)
+        cell = ws.cell(row=right_row, column=8, value=carrier_label)
+        style_cell(
+            cell,
+            font=FONT_DATA,
+            fill=FILL_TITLE,
+            alignment=ALIGN_LEFT,
+            border=BORDER_BLACK,
+        )
+        ws.merge_cells(
+            start_row=right_row,
+            start_column=8,
+            end_row=right_row,
+            end_column=9,
+        )
+        right_row += 1
+
+        cell = ws.cell(row=right_row, column=8, value="Año")
+        style_cell(
+            cell,
+            font=FONT_HEADER,
+            fill=FILL_HEADER,
+            alignment=ALIGN_CENTER,
+            border=BORDER_BLACK,
+        )
+        cell = ws.cell(
+            row=right_row,
+            column=9,
+            value="Naviera vs total",
+        )
+        style_cell(
+            cell,
+            font=FONT_HEADER,
+            fill=FILL_HEADER,
+            alignment=ALIGN_CENTER,
+            border=BORDER_BLACK,
+        )
+        right_row += 1
+
+        # Help note (UI tooltip equivalent)
+        ws.merge_cells(
+            start_row=right_row,
+            start_column=8,
+            end_row=right_row,
+            end_column=9,
+        )
+        cell = ws.cell(
+            row=right_row,
+            column=8,
+            value="Naviera seleccionada vs total de navieras",
+        )
+        style_cell(
+            cell,
+            font=FONT_NOTE,
+            fill=FILL_ALT,
+            alignment=ALIGN_LEFT,
+            border=BORDER_BLACK,
+        )
+        right_row += 1
+
+        carrier_total = 0
+        port_total = 0
+        for year in summary_years:
+            carrier_pax = carrier_by_year.get(year, 0)
+            port_pax = port_by_year_map.get(year, 0)
+            carrier_total += carrier_pax
+            port_total += port_pax
+            cell = ws.cell(row=right_row, column=8, value=year)
             style_cell(
                 cell,
                 font=FONT_DATA,
-                fill=fill,
+                fill=FILL_ALT,
                 alignment=ALIGN_CENTER,
                 border=BORDER_BLACK,
             )
-            cell = ws.cell(row=r, column=9, value=pax)
+            cell = ws.cell(
+                row=right_row,
+                column=9,
+                value=(
+                    f"{carrier_pax:,} / {port_pax:,} "
+                    f"({_pct(carrier_pax, port_pax)})"
+                ),
+            )
             style_cell(
                 cell,
                 font=FONT_DATA,
-                fill=fill,
+                fill=FILL_ALT,
                 alignment=ALIGN_RIGHT,
                 border=BORDER_BLACK,
-                number_format="#,##0",
             )
-            r += 1
-        if total is not None:
-            cell = ws.cell(row=r, column=8, value="Total")
-            style_cell(
-                cell,
-                font=FONT_TOTAL,
-                fill=FILL_TOTAL,
-                alignment=ALIGN_LEFT,
-                border=BORDER_BLACK,
-            )
-            cell = ws.cell(row=r, column=9, value=int(total))
-            style_cell(
-                cell,
-                font=FONT_TOTAL,
-                fill=FILL_TOTAL,
-                alignment=ALIGN_RIGHT,
-                border=BORDER_BLACK,
-                number_format="#,##0",
-            )
-            r += 1
-        return r + 1
+            right_row += 1
 
-    right_row = _write_summary_block(
-        right_row,
-        label="Nuevas solicitadas",
-        rows=list(payload.get("nuevas_solicitadas") or []),
-        total=int(payload.get("nuevas_total") or 0),
-    )
-    right_row = _write_summary_block(
-        right_row,
-        label=str(payload.get("port_name") or "Puerto"),
-        rows=list(payload.get("port_by_year") or []),
-    )
-    carrier_label = str(payload.get("shipping_line_label") or "").strip()
-    carrier_rows = list(payload.get("carrier_by_year") or [])
-    if carrier_label and carrier_rows:
-        _write_summary_block(
-            right_row,
-            label=carrier_label,
-            rows=carrier_rows,
-            highlight_years=selected_years,
+        cell = ws.cell(row=right_row, column=8, value="Total")
+        style_cell(
+            cell,
+            font=FONT_TOTAL,
+            fill=FILL_TOTAL,
+            alignment=ALIGN_LEFT,
+            border=BORDER_BLACK,
+        )
+        cell = ws.cell(
+            row=right_row,
+            column=9,
+            value=(
+                f"{carrier_total:,} / {port_total:,} "
+                f"({_pct(carrier_total, port_total)})"
+            ),
+        )
+        style_cell(
+            cell,
+            font=FONT_TOTAL,
+            fill=FILL_TOTAL,
+            alignment=ALIGN_RIGHT,
+            border=BORDER_BLACK,
         )
 
-    widths = [22, 16, 12, 12, 12, 10, 3, 12, 12]
+    widths = [22, 16, 12, 12, 12, 10, 3, 14, 28]
     for idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
 
-    # Keep sheet tall enough if right side is longer than left.
     _ = left_end
 
     buf = BytesIO()
