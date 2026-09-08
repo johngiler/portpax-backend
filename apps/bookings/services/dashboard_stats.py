@@ -291,7 +291,7 @@ def build_dashboard_stats(
         else 0.0
     )
 
-    by_line = list(
+    by_line_raw = list(
         active_qs.values(
             "shipping_line_id",
             "shipping_line__name",
@@ -301,8 +301,18 @@ def build_dashboard_stats(
             bookings=Count("id"),
             planned_pax=Sum("planned_pax"),
         )
-        .order_by("-bookings")[:12]
+        .order_by("-planned_pax", "-bookings")[:12]
     )
+    by_line = []
+    for row in by_line_raw:
+        bookings = int(row["bookings"] or 0)
+        planned = int(row["planned_pax"] or 0)
+        by_line.append(
+            {
+                **row,
+                "avg_planned_pax": round(planned / bookings) if bookings else 0,
+            }
+        )
 
     by_month_raw = (
         qs.values("call_date__month", "status")
@@ -341,28 +351,72 @@ def build_dashboard_stats(
         .order_by("-bookings")[:10]
     )
 
+    cancel_base = qs.filter(status=BookingStatus.C).exclude(cancellation_reason="")
     cancel_reasons = list(
-        qs.filter(status=BookingStatus.C)
-        .exclude(cancellation_reason="")
-        .values("cancellation_reason")
-        .annotate(c=Count("id"))
+        cancel_base.values("cancellation_reason")
+        .annotate(
+            c=Count("id"),
+            planned_pax=Sum("planned_pax"),
+        )
         .order_by("-c")
     )
     reason_labels = dict(CancellationReason.choices)
-    by_cancellation_reason = [
-        {
-            "reason": row["cancellation_reason"],
-            "label": reason_labels.get(row["cancellation_reason"], row["cancellation_reason"]),
-            "count": row["c"],
-        }
-        for row in cancel_reasons
-    ]
+    by_cancellation_reason = []
+    for row in cancel_reasons:
+        reason = row["cancellation_reason"]
+        subset = cancel_base.filter(cancellation_reason=reason)
+        top_port = (
+            subset.values("port__name", "port__commercial_name")
+            .annotate(n=Count("id"))
+            .order_by("-n")
+            .first()
+        )
+        top_line = (
+            subset.values("shipping_line__name")
+            .annotate(n=Count("id"))
+            .order_by("-n")
+            .first()
+        )
+        by_cancellation_reason.append(
+            {
+                "reason": reason,
+                "label": reason_labels.get(reason, reason),
+                "count": row["c"],
+                "planned_pax": int(row["planned_pax"] or 0),
+                "port_name": (
+                    (top_port.get("port__commercial_name") or top_port.get("port__name"))
+                    if top_port
+                    else None
+                ),
+                "shipping_line_name": (
+                    top_line.get("shipping_line__name") if top_line else None
+                ),
+            }
+        )
+
+    weekday_in_period = [0] * 7
+    cursor = date_from
+    while cursor <= date_to:
+        weekday_in_period[cursor.weekday()] += 1
+        cursor += timedelta(days=1)
+
+    weekday_used = [0] * 7
+    for call_date in (
+        active_qs.values_list("call_date", flat=True).distinct()
+    ):
+        weekday_used[call_date.weekday()] += 1
 
     weekday_counts = [0] * 7
     for call_date in active_qs.values_list("call_date", flat=True):
         weekday_counts[call_date.weekday()] += 1
     by_weekday = [
-        {"weekday": i, "label": label, "count": weekday_counts[i]}
+        {
+            "weekday": i,
+            "label": label,
+            "count": weekday_counts[i],
+            "days_in_period": weekday_in_period[i],
+            "days_used": weekday_used[i],
+        }
         for i, label in enumerate(
             ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
         )
@@ -645,6 +699,7 @@ def build_dashboard_stats(
                 "code": row["shipping_line__code"],
                 "bookings": row["bookings"],
                 "planned_pax": row["planned_pax"] or 0,
+                "avg_planned_pax": row["avg_planned_pax"],
             }
             for row in by_line
         ],
