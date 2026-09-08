@@ -79,6 +79,106 @@ def _port_display(row: dict) -> str:
     return row.get("port__commercial_name") or row["port__name"]
 
 
+def _media_url(request, field) -> str | None:
+    if not field:
+        return None
+    try:
+        url = field.url
+    except ValueError:
+        return None
+    if request is not None:
+        return request.build_absolute_uri(url)
+    return url
+
+
+def _port_logo_map(port_ids: list[int], request=None) -> dict[int, str | None]:
+    if not port_ids:
+        return {}
+    return {
+        port.id: _media_url(request, port.logo)
+        for port in Port.objects.filter(id__in=port_ids).only("id", "logo")
+    }
+
+
+def _attach_port_logos(
+    rows: list[dict],
+    *,
+    request=None,
+) -> list[dict]:
+    logos = _port_logo_map([row["port_id"] for row in rows], request)
+    for row in rows:
+        row["logo"] = logos.get(row["port_id"])
+    return rows
+
+
+def _peak_pax_by_port(
+    active_qs: QuerySet,
+    *,
+    today: date,
+) -> list[dict]:
+    """
+    Per port: day with the most passengers inside the already-scoped queryset.
+
+    Past call_date → prefer sum(actual_pax); if none manifested, fall back to planned.
+    Today / future → sum(planned_pax).
+    """
+    from django.db.models import Count, Sum
+    from django.db.models.functions import Coalesce
+
+    day_rows = (
+        active_qs.values(
+            "port_id",
+            "call_date",
+            "port__name",
+            "port__code",
+            "port__commercial_name",
+        )
+        .annotate(
+            calls=Count("id"),
+            planned=Coalesce(Sum("planned_pax"), 0),
+            actual=Coalesce(Sum("actual_pax"), 0),
+        )
+        .order_by("port_id", "call_date")
+    )
+
+    best_by_port: dict[int, dict] = {}
+    for row in day_rows:
+        call_date = row["call_date"]
+        planned = int(row["planned"] or 0)
+        actual = int(row["actual"] or 0)
+        if call_date < today:
+            if actual > 0:
+                passengers = actual
+                base = "real"
+            else:
+                passengers = planned
+                base = "planificado"
+        else:
+            passengers = planned
+            base = "planificado"
+
+        if passengers <= 0:
+            continue
+
+        prev = best_by_port.get(row["port_id"])
+        if prev is None or passengers > prev["passengers"]:
+            best_by_port[row["port_id"]] = {
+                "port_id": row["port_id"],
+                "name": _port_display(row),
+                "code": row["port__code"],
+                "call_date": call_date.isoformat(),
+                "calls": row["calls"],
+                "passengers": passengers,
+                "base_pax": base,
+            }
+
+    return sorted(
+        best_by_port.values(),
+        key=lambda r: r["passengers"],
+        reverse=True,
+    )
+
+
 def _conflict_summary(qs: QuerySet) -> dict:
     """Bookings with has_conflict in scope: total + counts per filter type."""
     code_to_types: dict[str, list[str]] = {}
@@ -127,6 +227,7 @@ def build_dashboard_stats(
     shipping_line_group_id: int | None = None,
     allowed_ports: list[int] | None = None,
     today: date | None = None,
+    request=None,
 ) -> dict:
     if date_to < date_from:
         date_from, date_to = date_to, date_from
@@ -269,7 +370,66 @@ def build_dashboard_stats(
     if scoped_ports:
         ports_in_scope = ports_in_scope.filter(id__in=scoped_ports)
 
-    # --- Spec 7.7: action queue (open Hold / NR from today) ---
+    # --- Pendientes de confirmar: Hold + LTA in dashboard date range ---
+    pending_base = _apply_scope(
+        Booking.objects.filter(call_date__gte=date_from, call_date__lte=date_to),
+        **scope_kwargs,
+    )
+    holds_pending = pending_base.filter(status=BookingStatus.H)
+    lta_pending = pending_base.filter(status=BookingStatus.LTA)
+    pending_by_port_map: dict[int, dict] = {}
+    for row in (
+        holds_pending.values(
+            "port_id", "port__name", "port__code", "port__commercial_name"
+        )
+        .annotate(holds=Count("id"))
+        .order_by("-holds")
+    ):
+        pending_by_port_map[row["port_id"]] = {
+            "port_id": row["port_id"],
+            "name": _port_display(row),
+            "code": row["port__code"],
+            "holds": row["holds"],
+            "lta": 0,
+        }
+    for row in (
+        lta_pending.values(
+            "port_id", "port__name", "port__code", "port__commercial_name"
+        )
+        .annotate(lta=Count("id"))
+        .order_by("-lta")
+    ):
+        entry = pending_by_port_map.get(row["port_id"])
+        if entry:
+            entry["lta"] = row["lta"]
+        else:
+            pending_by_port_map[row["port_id"]] = {
+                "port_id": row["port_id"],
+                "name": _port_display(row),
+                "code": row["port__code"],
+                "holds": 0,
+                "lta": row["lta"],
+            }
+    for entry in pending_by_port_map.values():
+        entry["total"] = entry["holds"] + entry["lta"]
+    pending_by_port = _attach_port_logos(
+        sorted(
+            pending_by_port_map.values(),
+            key=lambda r: r["total"],
+            reverse=True,
+        ),
+        request=request,
+    )
+    hold_since = holds_pending.order_by("call_date").values_list(
+        "call_date", flat=True
+    ).first()
+    lta_since = lta_pending.order_by("call_date").values_list(
+        "call_date", flat=True
+    ).first()
+    holds_total = holds_pending.count()
+    lta_total = lta_pending.count()
+
+    # Legacy action_queue shape (Hold + NR from today) — kept for older clients.
     forward_base = _apply_scope(Booking.objects.all(), **scope_kwargs)
     holds_open = forward_base.filter(status=BookingStatus.H, call_date__gte=today)
     nr_open = forward_base.filter(status=BookingStatus.NR, call_date__gte=today)
@@ -354,6 +514,13 @@ def build_dashboard_stats(
         )
     ]
     week_agg = week_qs.aggregate(calls=Count("id"), planned_pax=Sum("planned_pax"))
+    iso_week = week_from.isocalendar()[1]
+
+    # --- Peak passengers day per port within dashboard date range ---
+    peak_pax_by_port = _attach_port_logos(
+        _peak_pax_by_port(active_qs, today=today),
+        request=request,
+    )
 
     # --- Spec 7.7: YoY vs same calendar window prior year ---
     prior_from = _shift_year(date_from, -1)
@@ -426,6 +593,14 @@ def build_dashboard_stats(
             "ports_count": ports_in_scope.count(),
         },
         "conflicts": _conflict_summary(qs),
+        "pending_confirm": {
+            "holds": holds_total,
+            "lta": lta_total,
+            "total": holds_total + lta_total,
+            "hold_since": hold_since.isoformat() if hold_since else None,
+            "lta_since": lta_since.isoformat() if lta_since else None,
+            "by_port": pending_by_port,
+        },
         "action_queue": {
             "as_of": today.isoformat(),
             "holds": holds_open.count(),
@@ -442,10 +617,12 @@ def build_dashboard_stats(
         "current_week": {
             "date_from": week_from.isoformat(),
             "date_to": week_to.isoformat(),
+            "iso_week": iso_week,
             "total_confirmed": week_agg["calls"] or 0,
             "planned_pax": week_agg["planned_pax"] or 0,
             "by_port": week_by_port,
         },
+        "peak_pax_by_port": peak_pax_by_port,
         "yoy": {
             "prior_date_from": prior_from.isoformat(),
             "prior_date_to": prior_to.isoformat(),

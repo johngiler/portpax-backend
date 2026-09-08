@@ -1071,6 +1071,7 @@ class BookingViewSet(
                 shipping_line_group_id=optional_int("shipping_line_group"),
                 allowed_ports=user_port_ids(request.user),
                 today=timezone.localdate(),
+                request=request,
             )
         )
 
