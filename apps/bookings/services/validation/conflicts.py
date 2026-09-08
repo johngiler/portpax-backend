@@ -40,6 +40,61 @@ def normalize_issue_dict(issue: dict) -> dict:
     return out
 
 
+def filter_dominated_validation_issues(items: list[dict]) -> list[dict]:
+    """
+    Drop subordinate avisos when a stronger one already covers the same fact.
+
+    Examples:
+    - multi_port_conflict (same day, other port) dominates vessel_itinerary_buffer
+      for that sibling / any same-day buffer.
+    - Slot hard conflicts (occupied / no slot) dominate same-day itinerary buffer.
+    - multi_port_conflict dominates multi_port_proximity for the same sibling.
+    """
+    if len(items) < 2:
+        return items
+
+    multi_port_others: set[str] = set()
+    has_multi_port_conflict = False
+    has_slot_block = False
+    for item in items:
+        code = str(item.get("code") or "")
+        detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+        if code == "multi_port_conflict":
+            has_multi_port_conflict = True
+            other = detail.get("other_booking_code")
+            if other:
+                multi_port_others.add(str(other))
+        if code in (
+            "position_occupied",
+            "lta_priority_conflict",
+            "no_position_available",
+        ):
+            has_slot_block = True
+
+    out: list[dict] = []
+    for item in items:
+        code = str(item.get("code") or "")
+        detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+        if code == "vessel_itinerary_buffer":
+            other = str(detail.get("other_booking_code") or "")
+            try:
+                delta = int(detail["delta_days"])
+            except (KeyError, TypeError, ValueError):
+                delta = None
+            if has_multi_port_conflict and (
+                delta == 0 or (other and other in multi_port_others)
+            ):
+                continue
+            if has_slot_block and delta == 0:
+                continue
+        if code == "multi_port_proximity":
+            other = str(detail.get("other_booking_code") or "")
+            if other and other in multi_port_others:
+                continue
+        out.append(item)
+    return out
+
+
 def conflicts_from_validation(result: dict) -> list[dict]:
     """Flatten errors+warnings into normalized conflict items."""
     raw: list[dict] = []
@@ -56,7 +111,7 @@ def conflicts_from_validation(result: dict) -> list[dict]:
             continue
         seen.add(key)
         out.append(norm)
-    return out
+    return filter_dominated_validation_issues(out)
 
 
 def snapshot_sets_has_conflict(snapshot: list[dict]) -> bool:
