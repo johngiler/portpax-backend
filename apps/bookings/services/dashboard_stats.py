@@ -491,10 +491,16 @@ def build_dashboard_stats(
     ]
     next_agg = next_qs.aggregate(calls=Count("id"), planned_pax=Sum("planned_pax"))
 
-    # --- Current calendar week (Mon–Sun) confirmed by port ---
+    # --- Current calendar week (Mon–Sun): ops snap, ignore dashboard filters ---
     week_from = today - timedelta(days=today.weekday())
     week_to = week_from + timedelta(days=6)
-    week_qs = forward_base.filter(
+    week_qs = _apply_scope(
+        Booking.objects.all(),
+        port_ids=None,
+        shipping_line_id=None,
+        shipping_line_group_id=None,
+        allowed_ports=allowed_ports,
+    ).filter(
         call_date__gte=week_from,
         call_date__lte=week_to,
         status__in=CONFIRMED_FORWARD_STATUSES,
