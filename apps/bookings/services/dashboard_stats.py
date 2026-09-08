@@ -59,15 +59,15 @@ def _delta_pct(current: float | int, prior: float | int) -> float | None:
 def _apply_scope(
     qs: QuerySet,
     *,
-    port_id: int | None,
+    port_ids: list[int] | None,
     shipping_line_id: int | None,
     shipping_line_group_id: int | None,
     allowed_ports: list[int] | None,
 ) -> QuerySet:
     if allowed_ports is not None:
         qs = qs.filter(port_id__in=allowed_ports)
-    if port_id:
-        qs = qs.filter(port_id=port_id)
+    if port_ids:
+        qs = qs.filter(port_id__in=port_ids)
     if shipping_line_id:
         qs = qs.filter(shipping_line_id=shipping_line_id)
     elif shipping_line_group_id:
@@ -122,7 +122,7 @@ def build_dashboard_stats(
     *,
     date_from: date,
     date_to: date,
-    port_id: int | None = None,
+    port_ids: list[int] | None = None,
     shipping_line_id: int | None = None,
     shipping_line_group_id: int | None = None,
     allowed_ports: list[int] | None = None,
@@ -132,8 +132,9 @@ def build_dashboard_stats(
         date_from, date_to = date_to, date_from
 
     today = today or date.today()
+    scoped_ports = [int(p) for p in (port_ids or []) if p]
     scope_kwargs = {
-        "port_id": port_id,
+        "port_ids": scoped_ports or None,
         "shipping_line_id": shipping_line_id,
         "shipping_line_group_id": shipping_line_group_id,
         "allowed_ports": allowed_ports,
@@ -167,7 +168,7 @@ def build_dashboard_stats(
     actual_pax = pax_agg["actual"] or 0
 
     positions_qs = atomic_pier_positions_qs(
-        port_id=port_id,
+        port_ids=scoped_ports or None,
         allowed_ports=allowed_ports,
     )
     position_count = positions_qs.count()
@@ -265,8 +266,8 @@ def build_dashboard_stats(
     ports_in_scope = Port.objects.filter(is_active=True)
     if allowed_ports is not None:
         ports_in_scope = ports_in_scope.filter(id__in=allowed_ports)
-    if port_id:
-        ports_in_scope = ports_in_scope.filter(id=port_id)
+    if scoped_ports:
+        ports_in_scope = ports_in_scope.filter(id__in=scoped_ports)
 
     # --- Spec 7.7: action queue (open Hold / NR from today) ---
     forward_base = _apply_scope(Booking.objects.all(), **scope_kwargs)

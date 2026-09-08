@@ -1045,11 +1045,28 @@ class BookingViewSet(
             except (TypeError, ValueError):
                 return None
 
+        port_ids: list[int] = []
+        port_raw = request.query_params.get("port")
+        if port_raw:
+            for part in str(port_raw).split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    port_ids.append(int(part))
+                except (TypeError, ValueError):
+                    return Response(
+                        {"detail": "port debe ser id(s) enteros separados por coma."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+        for port_id in port_ids:
+            self._ensure_port_access(port_id)
+
         return Response(
             build_dashboard_stats(
                 date_from=date_from,
                 date_to=date_to,
-                port_id=optional_int("port"),
+                port_ids=port_ids or None,
                 shipping_line_id=optional_int("shipping_line"),
                 shipping_line_group_id=optional_int("shipping_line_group"),
                 allowed_ports=user_port_ids(request.user),

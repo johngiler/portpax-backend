@@ -237,8 +237,10 @@ def validate_vessel_itinerary_buffer(
     exclude_booking_id: int | None = None,
 ) -> list[ValidationIssue]:
     """
-    Hard buffer: the same vessel cannot have another active call within
+    Soft buffer: warn when the same vessel has another active call within
     ±VESSEL_ITINERARY_BUFFER_DAYS (any port, including the same).
+
+    Non-blocking — ops can still create/update; not persisted as a conflict chip.
     """
     from datetime import timedelta
 
@@ -281,7 +283,7 @@ def validate_vessel_itinerary_buffer(
             gap = f"a {delta} días"
         issues.append(
             ValidationIssue(
-                "error",
+                "warning",
                 "vessel_itinerary_buffer",
                 (
                     f"El mismo barco ya tiene escala {where} "

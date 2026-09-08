@@ -12,7 +12,10 @@ from apps.bookings.services.validation.conflict_codes import (
 )
 
 # Codes that stay as errors after normalize (block create / update / import).
-BLOCKING_VALIDATION_CODES = frozenset(
+BLOCKING_VALIDATION_CODES = frozenset()
+
+# Shown as hot warnings on create/update, but never persisted as conflict chips.
+NON_PERSISTED_VALIDATION_CODES = frozenset(
     {
         "vessel_itinerary_buffer",
     }
@@ -152,6 +155,9 @@ def refresh_booking_conflicts(
         for item in conflicts:
             code = str(item.get("code") or "")
             if code in INFO_ONLY_CODES:
+                continue
+            # Hot-only avisos (e.g. ±4 itinerary buffer) — not conflict chips.
+            if code in NON_PERSISTED_VALIDATION_CODES:
                 continue
             # Hot validators that block save must not become persisted conflict chips.
             if code in BLOCKING_VALIDATION_CODES:

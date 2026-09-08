@@ -31,6 +31,7 @@ from apps.catalogs.services.position_combination import exclude_combined_positio
 def atomic_pier_positions_qs(
     *,
     port_id: int | None = None,
+    port_ids: list[int] | None = None,
     allowed_ports: list[int] | None = None,
 ) -> QuerySet[Position]:
     qs = Position.objects.filter(
@@ -41,7 +42,9 @@ def atomic_pier_positions_qs(
     qs = exclude_combined_positions(qs)
     if allowed_ports is not None:
         qs = qs.filter(port_id__in=allowed_ports)
-    if port_id:
+    if port_ids:
+        qs = qs.filter(port_id__in=port_ids)
+    elif port_id:
         qs = qs.filter(port_id=port_id)
     return qs
 
