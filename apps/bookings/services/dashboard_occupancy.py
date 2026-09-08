@@ -131,16 +131,16 @@ def _expand_booking_positions(
     return occupied
 
 
-def occupied_physical_slot_days(
+def occupied_physical_slots(
     bookings: Iterable[tuple[int | None, date, int | None, Decimal | None]],
     *,
     port_ids: set[int] | None = None,
-) -> tuple[int, dict[int, int]]:
+) -> tuple[int, dict[int, int], dict[int, int]]:
     """
     Count distinct physical (position, call_date) slot-days.
 
     `bookings` yields (position_id, call_date, port_id, vessel_loa_m).
-    Returns (total, occupied_by_port_id).
+    Returns (total, occupied_by_port_id, occupied_by_position_id).
     """
     rows = list(bookings)
     combined_sources = _combined_sources()
@@ -161,6 +161,7 @@ def occupied_physical_slot_days(
 
     keys: set[tuple[int, date]] = set()
     by_port: dict[int, set[tuple[int, date]]] = {}
+    by_position: dict[int, set[date]] = {}
 
     for position_id, call_date, booking_port_id, vessel_loa in rows:
         if position_id is None or call_date is None:
@@ -182,8 +183,28 @@ def occupied_physical_slot_days(
             key = (pid, call_date)
             keys.add(key)
             by_port.setdefault(port_id, set()).add(key)
+            by_position.setdefault(pid, set()).add(call_date)
 
-    return len(keys), {pid: len(slots) for pid, slots in by_port.items()}
+    return (
+        len(keys),
+        {pid: len(slots) for pid, slots in by_port.items()},
+        {pid: len(dates) for pid, dates in by_position.items()},
+    )
+
+
+def occupied_physical_slot_days(
+    bookings: Iterable[tuple[int | None, date, int | None, Decimal | None]],
+    *,
+    port_ids: set[int] | None = None,
+) -> tuple[int, dict[int, int]]:
+    """
+    Count distinct physical (position, call_date) slot-days.
+
+    `bookings` yields (position_id, call_date, port_id, vessel_loa_m).
+    Returns (total, occupied_by_port_id).
+    """
+    total, by_port, _ = occupied_physical_slots(bookings, port_ids=port_ids)
+    return total, by_port
 
 def iter_occupancy_booking_rows(qs: QuerySet) -> list[tuple[int | None, date, int | None, Decimal | None]]:
     rows: list[tuple[int | None, date, int | None, Decimal | None]] = []

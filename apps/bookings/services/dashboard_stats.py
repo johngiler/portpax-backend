@@ -12,6 +12,10 @@ from apps.bookings.services.dashboard_occupancy import (
     iter_occupancy_booking_rows,
     occupied_physical_slot_days,
 )
+from apps.bookings.services.dashboard_series import (
+    build_by_port_month,
+    build_occupancy_trends,
+)
 from apps.bookings.services.validation.conflict_type_filters import (
     CONFLICT_TYPE_CODES,
 )
@@ -468,28 +472,7 @@ def build_dashboard_stats(
         reverse=True,
     )
 
-    # --- Spec 7.7: next 30 days confirmed by port ---
-    horizon_to = today + timedelta(days=29)
-    next_qs = forward_base.filter(
-        call_date__gte=today,
-        call_date__lte=horizon_to,
-        status__in=CONFIRMED_FORWARD_STATUSES,
-    )
-    next_by_port = [
-        {
-            "port_id": row["port_id"],
-            "name": _port_display(row),
-            "code": row["port__code"],
-            "calls": row["calls"],
-            "planned_pax": row["planned_pax"] or 0,
-        }
-        for row in (
-            next_qs.values("port_id", "port__name", "port__code", "port__commercial_name")
-            .annotate(calls=Count("id"), planned_pax=Sum("planned_pax"))
-            .order_by("-calls")
-        )
-    ]
-    next_agg = next_qs.aggregate(calls=Count("id"), planned_pax=Sum("planned_pax"))
+    # --- Spec 7.7: next 30 days removed from dashboard UI (kept out of payload) ---
 
     # --- Current calendar week (Mon–Sun): ops snap, ignore dashboard filters ---
     week_from = today - timedelta(days=today.weekday())
@@ -575,6 +558,17 @@ def build_dashboard_stats(
         )
     occupancy_by_port.sort(key=lambda r: r["occupancy_pct"], reverse=True)
 
+    occupancy_qs = qs.filter(status__in=OCCUPANCY_STATUSES)
+    occupancy_trends = build_occupancy_trends(
+        occupancy_qs=occupancy_qs,
+        date_from=date_from,
+        date_to=date_to,
+        ports_in_scope=ports_in_scope,
+        scoped_ports=scoped_ports or None,
+        allowed_ports=allowed_ports,
+    )
+    by_port_month = build_by_port_month(active_qs)
+
     years = sorted({date_from.year, date_to.year})
 
     return {
@@ -613,13 +607,6 @@ def build_dashboard_stats(
             "new_requests": nr_open.count(),
             "by_port": action_by_port,
         },
-        "next_30_days": {
-            "date_from": today.isoformat(),
-            "date_to": horizon_to.isoformat(),
-            "total_confirmed": next_agg["calls"] or 0,
-            "planned_pax": next_agg["planned_pax"] or 0,
-            "by_port": next_by_port,
-        },
         "current_week": {
             "date_from": week_from.isoformat(),
             "date_to": week_to.isoformat(),
@@ -649,6 +636,8 @@ def build_dashboard_stats(
             },
         },
         "occupancy_by_port": occupancy_by_port,
+        "occupancy_trends": occupancy_trends,
+        "by_port_month": by_port_month,
         "by_shipping_line": [
             {
                 "id": row["shipping_line_id"],
@@ -682,12 +671,10 @@ def build_dashboard_stats(
         "by_cancellation_reason": by_cancellation_reason,
         "by_weekday": by_weekday,
         "status_breakdown": [
-            {"status": "nr", "label": "Nuevas solicitudes", "count": nr},
             {"status": "h", "label": "Hold", "count": hold},
             {"status": "co", "label": "Confirmadas", "count": confirmed},
             {"status": "cl", "label": "Confirmadas LTA", "count": confirmed_lta},
             {"status": "lta", "label": "LTA", "count": lta},
-            {"status": "ltd", "label": "Long Term Deployment", "count": ltd},
             {"status": "r", "label": "Real", "count": real},
             {"status": "c", "label": "Canceladas", "count": cancelled},
         ],
