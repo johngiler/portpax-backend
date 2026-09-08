@@ -342,7 +342,7 @@ def build_dashboard_stats(
             bookings=Count("id"),
             planned_pax=Sum("planned_pax"),
         )
-        .order_by("-bookings")[:8]
+        .order_by("-planned_pax", "-bookings")[:8]
     )
 
     by_port = list(
