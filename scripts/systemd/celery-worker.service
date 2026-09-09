@@ -12,6 +12,8 @@ Environment="PATH=/home/git/backend/.venv/bin"
 ExecStart=/home/git/backend/.venv/bin/celery -A config worker -l info --concurrency=2
 Restart=always
 RestartSec=5
+StandardOutput=append:/var/log/celery.log
+StandardError=append:/var/log/celery.log
 
 [Install]
 WantedBy=multi-user.target
