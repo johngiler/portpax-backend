@@ -26,6 +26,9 @@ GUNICORN_LOG="${PORTPAX_GUNICORN_LOG:-/var/log/gunicorn.log}"
 GUNICORN_ACCESS_LOG="${PORTPAX_GUNICORN_ACCESS_LOG:-/var/log/gunicorn-access.log}"
 CELERY_LOG="${PORTPAX_CELERY_LOG:-/var/log/celery.log}"
 DAPHNE_LOG="${PORTPAX_DAPHNE_LOG:-/var/log/daphne.log}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BTOP_CONF_SRC="${PORTPAX_BTOP_CONF:-$SCRIPT_DIR/btop.conf}"
+BTOP_CONF_DST="${HOME:-/home/git}/.config/btop/btop.conf"
 
 colorize_pipe() {
   if command -v ccze >/dev/null 2>&1; then
@@ -35,7 +38,16 @@ colorize_pipe() {
   fi
 }
 
+ensure_btop_config() {
+  if [[ ! -f "$BTOP_CONF_SRC" ]]; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$BTOP_CONF_DST")"
+  cp -f "$BTOP_CONF_SRC" "$BTOP_CONF_DST"
+}
+
 btop_cmd() {
+  ensure_btop_config
   if command -v btop >/dev/null 2>&1; then
     echo "btop"
   elif command -v htop >/dev/null 2>&1; then
