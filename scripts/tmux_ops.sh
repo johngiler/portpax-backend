@@ -62,31 +62,36 @@ cmd_start() {
 
   local colorize
   colorize="$(colorize_pipe)"
-  local cols="${PORTPAX_TMUX_COLS:-240}"
-  local rows="${PORTPAX_TMUX_ROWS:-60}"
+  # Bootstrap size only — systemd has no TTY. After the layout exists we switch
+  # to window-size latest so attach fills the real client terminal (no fixed width).
+  local boot_cols=120
+  local boot_rows=40
+  local bottom_rows=$(( boot_rows * 45 / 100 ))
 
-  # Detached; do NOT pass -x/-y here — under systemd there is no TTY and some
-  # tmux builds then fail later splits/layouts with "size missing".
   tmux new-session -d -s "$SESSION" -n ops \
     "tail -n 200 -F ${GUNICORN_LOG} ${GUNICORN_ACCESS_LOG} 2>/dev/null ${colorize}"
 
-  # Force a concrete window size before any split or select-layout.
   tmux set-window-option -t "${SESSION}:ops" aggressive-resize off
-  tmux resize-window -t "${SESSION}:ops" -x "$cols" -y "$rows"
+  tmux set-window-option -t "${SESSION}:ops" window-size manual
+  tmux resize-window -t "${SESSION}:ops" -x "$boot_cols" -y "$boot_rows"
 
-  # Bottom row (~45% height): celery | daphne | btop
-  tmux split-window -v -t "${SESSION}:ops.0" -p 45 \
+  # Bottom row: celery | daphne | btop
+  tmux split-window -v -t "${SESSION}:ops.0" -l "$bottom_rows" \
     "tail -n 200 -F ${CELERY_LOG} 2>/dev/null ${colorize}"
   tmux split-window -h -t "${SESSION}:ops.1" \
     "tail -n 200 -F ${DAPHNE_LOG} 2>/dev/null ${colorize}"
   tmux split-window -h -t "${SESSION}:ops.2" \
     "$(btop_cmd)"
 
-  # Top = full width; bottom three = equal columns
+  # Relative layout: top full-width, bottom three equal columns
   tmux select-pane -t "${SESSION}:ops.0"
   tmux select-layout -t "${SESSION}:ops" main-horizontal
 
-  echo "started tmux session '$SESSION' (${cols}x${rows})"
+  # Follow the attaching client size (not the bootstrap 120x40).
+  tmux set-window-option -t "${SESSION}:ops" window-size latest
+  tmux set-window-option -t "${SESSION}:ops" aggressive-resize on
+
+  echo "started tmux session '$SESSION' (layout adapts on attach)"
   echo "attach: tmux attach -t $SESSION"
 }
 
