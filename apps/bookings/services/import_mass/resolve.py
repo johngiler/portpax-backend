@@ -11,6 +11,9 @@ from django.db.models import Q
 
 from apps.bookings.constants import LTA_SOFT_FAIL_CODES
 from apps.bookings.models import Booking, BookingStatus
+from apps.bookings.services.import_mass.majority_group_warnings import (
+    annotate_majority_group_warnings,
+)
 from apps.bookings.services.validation import validate_booking_params
 from apps.catalogs.models import Port, Position, ShippingLine, ShippingLineGroup, Vessel
 from apps.catalogs.utils.position_code import (
@@ -610,7 +613,7 @@ def resolve_itm_rows(
             }
         )
 
-    return resolved
+    return annotate_majority_group_warnings(resolved)
 
 
 def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
