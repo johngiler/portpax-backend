@@ -12,10 +12,15 @@ Group=git
 WorkingDirectory=/home/git/backend
 Environment=HOME=/home/git
 Environment=TERM=xterm-256color
+Environment=COLUMNS=240
+Environment=LINES=60
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Creates session and waits; if the session dies, systemd restarts it.
 ExecStart=/home/git/backend/scripts/tmux_ops.sh run
 ExecStop=/home/git/backend/scripts/tmux_ops.sh stop
+# Avoid restart storm while deploying a broken script.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 Restart=always
 RestartSec=5
 KillMode=mixed

@@ -62,24 +62,31 @@ cmd_start() {
 
   local colorize
   colorize="$(colorize_pipe)"
+  local cols="${PORTPAX_TMUX_COLS:-240}"
+  local rows="${PORTPAX_TMUX_ROWS:-60}"
 
-  # Detached session with a known size so btop layouts before first attach.
-  tmux new-session -d -s "$SESSION" -n ops -x 240 -y 60 \
+  # Detached; do NOT pass -x/-y here — under systemd there is no TTY and some
+  # tmux builds then fail later splits/layouts with "size missing".
+  tmux new-session -d -s "$SESSION" -n ops \
     "tail -n 200 -F ${GUNICORN_LOG} ${GUNICORN_ACCESS_LOG} 2>/dev/null ${colorize}"
 
+  # Force a concrete window size before any split or select-layout.
+  tmux set-window-option -t "${SESSION}:ops" aggressive-resize off
+  tmux resize-window -t "${SESSION}:ops" -x "$cols" -y "$rows"
+
   # Bottom row (~45% height): celery | daphne | btop
-  tmux split-window -v -t "${SESSION}:ops" -p 45 \
+  tmux split-window -v -t "${SESSION}:ops.0" -p 45 \
     "tail -n 200 -F ${CELERY_LOG} 2>/dev/null ${colorize}"
-  tmux split-window -h -t "${SESSION}:ops" \
+  tmux split-window -h -t "${SESSION}:ops.1" \
     "tail -n 200 -F ${DAPHNE_LOG} 2>/dev/null ${colorize}"
-  tmux split-window -h -t "${SESSION}:ops" \
+  tmux split-window -h -t "${SESSION}:ops.2" \
     "$(btop_cmd)"
 
   # Top = full width; bottom three = equal columns
   tmux select-pane -t "${SESSION}:ops.0"
   tmux select-layout -t "${SESSION}:ops" main-horizontal
 
-  echo "started tmux session '$SESSION'"
+  echo "started tmux session '$SESSION' (${cols}x${rows})"
   echo "attach: tmux attach -t $SESSION"
 }
 

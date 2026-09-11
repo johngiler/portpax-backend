@@ -7,6 +7,10 @@
 # Server-only files (never overwritten by rsync):
 #   .env, config/settings/local_settings.py, .venv, db.sqlite3, media/, data/, staticfiles/
 #
+# Usage:
+#   ./scripts/deploy.sh              # full deploy (sync + migrate + restarts)
+#   ./scripts/deploy.sh --sync-only  # rsync + chown only (no migrate / collectstatic / restarts)
+#
 
 set -e
 
@@ -14,6 +18,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REMOTE_HOST="portpax-api"
 REMOTE_PATH="/home/git/backend"
+SYNC_ONLY=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --sync-only) SYNC_ONLY=1 ;;
+    -h|--help)
+      echo "Usage: $0 [--sync-only]"
+      echo "  --sync-only   rsync + chown only (skip migrate, collectstatic, service restarts)"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $arg" >&2
+      echo "Usage: $0 [--sync-only]" >&2
+      exit 2
+      ;;
+  esac
+done
 
 RSYNC_EXCLUDE=(
   --exclude ".venv"
@@ -33,9 +54,16 @@ cd "$BACKEND_DIR"
 echo "[deploy] Syncing backend -> $REMOTE_HOST:$REMOTE_PATH"
 rsync -avz --delete "${RSYNC_EXCLUDE[@]}" -e ssh "$BACKEND_DIR/" "$REMOTE_HOST:$REMOTE_PATH/"
 
+echo "[deploy] Fixing ownership on remote..."
+ssh "$REMOTE_HOST" "chown -R git:git $REMOTE_PATH"
+
+if [[ "$SYNC_ONLY" -eq 1 ]]; then
+  echo "[deploy] Sync-only done (skipped migrate / collectstatic / restarts)."
+  exit 0
+fi
+
 REMOTE_SETUP="
 set -e
-chown -R git:git $REMOTE_PATH
 cd $REMOTE_PATH
 
 if [[ ! -f .env ]]; then
