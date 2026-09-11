@@ -1,0 +1,25 @@
+[Unit]
+Description=PortPax ops tmux (gunicorn / celery / daphne logs + btop)
+Documentation=file:///home/git/backend/scripts/tmux_ops.sh
+After=network.target
+# Start after app log writers when present (does not hard-require them).
+Wants=gunicorn.service celery-worker.service daphne.service
+
+[Service]
+Type=simple
+User=git
+Group=git
+WorkingDirectory=/home/git/backend
+Environment=HOME=/home/git
+Environment=TERM=xterm-256color
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Creates session and waits; if the session dies, systemd restarts it.
+ExecStart=/home/git/backend/scripts/tmux_ops.sh run
+ExecStop=/home/git/backend/scripts/tmux_ops.sh stop
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
