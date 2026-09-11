@@ -78,7 +78,7 @@ cmd_start() {
   # to window-size latest so attach fills the real client terminal (no fixed width).
   local boot_cols=120
   local boot_rows=40
-  local bottom_rows=$(( boot_rows * 45 / 100 ))
+  local bottom_rows=$(( boot_rows / 2 ))
 
   tmux new-session -d -s "$SESSION" -n ops \
     "tail -n 200 -F ${GUNICORN_LOG} ${GUNICORN_ACCESS_LOG} 2>/dev/null ${colorize}"
@@ -87,7 +87,7 @@ cmd_start() {
   tmux set-window-option -t "${SESSION}:ops" window-size manual
   tmux resize-window -t "${SESSION}:ops" -x "$boot_cols" -y "$boot_rows"
 
-  # Bottom row: celery | daphne | btop
+  # Bottom row (50% height): celery | daphne | btop
   tmux split-window -v -t "${SESSION}:ops.0" -l "$bottom_rows" \
     "tail -n 200 -F ${CELERY_LOG} 2>/dev/null ${colorize}"
   tmux split-window -h -t "${SESSION}:ops.1" \
@@ -95,9 +95,10 @@ cmd_start() {
   tmux split-window -h -t "${SESSION}:ops.2" \
     "$(btop_cmd)"
 
-  # Relative layout: top full-width, bottom three equal columns
+  # Top = full width; bottom three = equal columns; vertical split stays 50/50
   tmux select-pane -t "${SESSION}:ops.0"
   tmux select-layout -t "${SESSION}:ops" main-horizontal
+  tmux resize-pane -t "${SESSION}:ops.0" -y "50%"
 
   # Follow the attaching client size (not the bootstrap 120x40).
   tmux set-window-option -t "${SESSION}:ops" window-size latest
