@@ -26,6 +26,7 @@ for arg in "$@"; do
     -h|--help)
       echo "Usage: $0 [--sync-only]"
       echo "  --sync-only   rsync + chown only (skip migrate, collectstatic, service restarts)"
+      echo "After a full deploy, gunicorn restarts always; celery and daphne ask [y/N] (default: no)."
       exit 0
       ;;
     *)
@@ -101,15 +102,21 @@ else
   echo "systemctl start gunicorn.service"
 fi
 
-echo "[deploy] Restarting daphne.service (WebSockets)..."
-if ssh "$REMOTE_HOST" "systemctl is-enabled daphne.service >/dev/null 2>&1"; then
-  ssh "$REMOTE_HOST" "sudo bash $REMOTE_PATH/scripts/ensure_daphne_logs.sh"
-  ssh "$REMOTE_HOST" "systemctl restart daphne.service"
+# Daphne — optional restart (default: no). Needed when consumer/ASGI code changes.
+read -r -p "[deploy] ¿Reiniciar daphne (WebSockets)? [y/N] " RESTART_DAPHNE
+if [[ "${RESTART_DAPHNE}" =~ ^[yY]$ ]]; then
+  echo "[deploy] Restarting daphne.service (WebSockets)..."
+  if ssh "$REMOTE_HOST" "systemctl is-enabled daphne.service >/dev/null 2>&1"; then
+    ssh "$REMOTE_HOST" "sudo bash $REMOTE_PATH/scripts/ensure_daphne_logs.sh"
+    ssh "$REMOTE_HOST" "systemctl restart daphne.service"
+  else
+    echo "[deploy] WARN: daphne.service not installed. On server run:"
+    echo "cp scripts/systemd/daphne.service /etc/systemd/system/daphne.service"
+    echo "systemctl daemon-reload && systemctl enable --now daphne.service"
+    echo "Update nginx site from scripts/nginx/api.portpax.com.conf (location /ws/) and reload nginx."
+  fi
 else
-  echo "[deploy] WARN: daphne.service not installed. On server run:"
-  echo "cp scripts/systemd/daphne.service /etc/systemd/system/daphne.service"
-  echo "systemctl daemon-reload && systemctl enable --now daphne.service"
-  echo "Update nginx site from scripts/nginx/api.portpax.com.conf (location /ws/) and reload nginx."
+  echo "[deploy] Daphne left running (no restart)."
 fi
 
 if ssh "$REMOTE_HOST" "systemctl is-active nginx >/dev/null 2>&1"; then
