@@ -58,14 +58,13 @@ def _positions(agreement: LongTermAgreement) -> list[Position]:
 def _slot_exists(
     *,
     port_id: int,
-    vessel_id: int,
     position_id: int,
     call_date: date,
 ) -> bool:
+    """True if any live booking already occupies this pier on call_date."""
     return (
         Booking.objects.filter(
             port_id=port_id,
-            vessel_id=vessel_id,
             position_id=position_id,
             call_date=call_date,
         )
@@ -93,7 +92,9 @@ def materialize_agreement_bookings(
     Create missing Booking rows: first explicit vessel × each position × each
     effective A1 date (rule grid + date exceptions).
 
-    Status = LTA. Skips slots that already have a non-cancelled booking.
+    Status = LTA. Skips pier×date slots that already have a non-cancelled booking
+    (including claimed CL on that pier — does not recreate a ghost for the
+    agreement's first vessel).
     """
     validate_generate_prerequisites(agreement)
     today = today or date.today()
@@ -111,7 +112,6 @@ def materialize_agreement_bookings(
     for call_date, position in planned:
         if _slot_exists(
             port_id=agreement.port_id,
-            vessel_id=vessel.pk,
             position_id=position.pk,
             call_date=call_date,
         ):

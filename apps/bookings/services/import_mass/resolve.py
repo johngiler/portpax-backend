@@ -373,12 +373,12 @@ def _validate_import_booking(
             and cand_pos
         ):
             warn = (
-                f"Hay {lta_count} reservas LTA de esta naviera en esta fecha; "
+                f"Hay {lta_count} reservas LTA de este grupo en esta fecha; "
                 f"se reclamará la de {cand_pos} (posición elegida)."
             )
         else:
             warn = (
-                f"Hay {lta_count} reservas LTA de esta naviera en esta fecha; "
+                f"Hay {lta_count} reservas LTA de este grupo en esta fecha; "
                 "se reclamará la más antigua."
             )
         if warn not in warnings:
@@ -403,6 +403,7 @@ def _validate_import_booking(
             skip_codes = set()
             if claiming:
                 skip_codes.add("position_occupied")
+                skip_codes.add("lta_slot_reserved")
             for err in validation.get("errors") or []:
                 if not isinstance(err, dict):
                     issues.append(str(err))

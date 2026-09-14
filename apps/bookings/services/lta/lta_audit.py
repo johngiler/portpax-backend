@@ -12,6 +12,7 @@ from apps.bookings.services.validation.legend_labels import (
 
 def snapshot_lta(agreement) -> dict[str, Any]:
     port = getattr(agreement, "port", None)
+    group = getattr(agreement, "shipping_line_group", None)
     line = getattr(agreement, "shipping_line", None)
     vessels = list(agreement.vessels.all().order_by("name", "id"))
     positions = list(agreement.positions.select_related("port").order_by("code", "id"))
@@ -26,6 +27,9 @@ def snapshot_lta(agreement) -> dict[str, Any]:
         "port_id": agreement.port_id,
         "port_code": getattr(port, "code", "") or "",
         "port_name": getattr(port, "name", "") or "",
+        "shipping_line_group_id": agreement.shipping_line_group_id,
+        "shipping_line_group_code": getattr(group, "code", "") or "",
+        "shipping_line_group_name": getattr(group, "name", "") or "",
         "shipping_line_id": agreement.shipping_line_id,
         "shipping_line_code": getattr(line, "code", "") or "",
         "shipping_line_name": getattr(line, "name", "") or "",
@@ -147,6 +151,16 @@ def diff_lta_snapshots(
     )
     if line_delta is not None:
         changes["shipping_line_id"] = line_delta
+
+    group_delta = _named_fk_change(
+        before,
+        after,
+        id_key="shipping_line_group_id",
+        code_key="shipping_line_group_code",
+        name_key="shipping_line_group_name",
+    )
+    if group_delta is not None:
+        changes["shipping_line_group_id"] = group_delta
 
     vessels_delta = _labeled_id_list_change(
         before,

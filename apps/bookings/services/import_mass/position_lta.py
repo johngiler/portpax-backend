@@ -40,23 +40,30 @@ def find_claimable_lta_booking(
     preferred_position_id: int | None = None,
 ) -> Booking | None:
     """
-    LTA-only placeholder for the same shipping line / port / date.
-    Vessel name does not matter — the slot is reserved capacity for that line.
+    LTA placeholder for the same shipping-line group / port / date.
+    Vessel name does not matter — the slot is reserved capacity for that group.
 
     When preferred_position_id is set, prefer the LTA on that pier (so claiming
     Icon→P1 takes Adventure on P1, not an older LTA on A1). Otherwise the
-    oldest LTA for the line that day.
+    oldest LTA for the group that day.
     """
-    qs = (
-        Booking.objects.filter(
-            port_id=port_id,
-            call_date=call_date,
-            shipping_line_id=shipping_line_id,
-            status=BookingStatus.LTA,
-        )
-        .select_related("vessel", "position", "port", "shipping_line")
-        .order_by("id")
+    from apps.catalogs.models import ShippingLine
+
+    group_id = (
+        ShippingLine.objects.filter(pk=shipping_line_id)
+        .values_list("group_id", flat=True)
+        .first()
     )
+    qs = Booking.objects.filter(
+        port_id=port_id,
+        call_date=call_date,
+        status=BookingStatus.LTA,
+    ).select_related("vessel", "position", "port", "shipping_line")
+    if group_id is not None:
+        qs = qs.filter(shipping_line__group_id=group_id)
+    else:
+        qs = qs.filter(shipping_line_id=shipping_line_id)
+    qs = qs.order_by("id")
     if preferred_position_id is not None:
         on_pier = qs.filter(position_id=preferred_position_id).first()
         if on_pier is not None:
@@ -70,12 +77,23 @@ def count_claimable_lta_bookings(
     call_date: date,
     shipping_line_id: int,
 ) -> int:
-    return Booking.objects.filter(
+    from apps.catalogs.models import ShippingLine
+
+    group_id = (
+        ShippingLine.objects.filter(pk=shipping_line_id)
+        .values_list("group_id", flat=True)
+        .first()
+    )
+    qs = Booking.objects.filter(
         port_id=port_id,
         call_date=call_date,
-        shipping_line_id=shipping_line_id,
         status=BookingStatus.LTA,
-    ).count()
+    )
+    if group_id is not None:
+        qs = qs.filter(shipping_line__group_id=group_id)
+    else:
+        qs = qs.filter(shipping_line_id=shipping_line_id)
+    return qs.count()
 
 
 def pick_suggested_position(

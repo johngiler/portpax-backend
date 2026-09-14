@@ -6,7 +6,7 @@ import re
 import unicodedata
 
 from apps.bookings.models import LongTermAgreement
-from apps.catalogs.models import Port, ShippingLine, Vessel
+from apps.catalogs.models import Port, ShippingLineGroup, Vessel
 
 PORT_LTA_SEGMENT: dict[str, str] = {
     "puerto_plata": "pop",
@@ -70,14 +70,14 @@ def _weekday_segment(weekdays: list[int]) -> str | None:
 
 def build_lta_agreement_code(
     *,
-    shipping_line_code: str,
+    shipping_line_group_code: str,
     port_code: str,
     all_vessels: bool,
     vessel_names: list[str],
     weekdays: list[int],
 ) -> str | None:
-    """e.g. msc-pop-grandiosa-wed"""
-    line = _shipping_line_segment(shipping_line_code)
+    """e.g. royal-roatan-grandiosa-wed"""
+    line = _shipping_line_segment(shipping_line_group_code)
     port = _port_segment(port_code)
     vessel = _vessel_segment(all_vessels=all_vessels, vessel_names=vessel_names)
     if not line or not port or not vessel:
@@ -91,15 +91,15 @@ def build_lta_agreement_code(
 
 def build_lta_agreement_name(
     *,
-    shipping_line_name: str,
+    shipping_line_group_name: str,
     port_name: str,
     all_vessels: bool,
     vessel_names: list[str],
     weekdays: list[int],
     interval_days: int | None,
 ) -> str | None:
-    """e.g. MSC Puerto Plata — Grandiosa miércoles cada 15 días"""
-    if not shipping_line_name.strip() or not port_name.strip():
+    """e.g. Royal Caribbean Group Puerto Plata — Grandiosa miércoles cada 15 días"""
+    if not shipping_line_group_name.strip() or not port_name.strip():
         return None
     if all_vessels:
         vessel_part = "Todos los barcos"
@@ -120,7 +120,7 @@ def build_lta_agreement_name(
         detail = f"{detail} {', '.join(weekday_labels)}"
     if interval_days is not None and interval_days > 0:
         detail = f"{detail} cada {interval_days} días"
-    return f"{shipping_line_name.strip()} {port_name.strip()} — {detail}"
+    return f"{shipping_line_group_name.strip()} {port_name.strip()} — {detail}"
 
 
 def allocate_unique_lta_code(base: str) -> str:
@@ -140,7 +140,7 @@ def allocate_unique_lta_code(base: str) -> str:
 def build_identity_for_create(
     *,
     port: Port,
-    shipping_line: ShippingLine,
+    shipping_line_group: ShippingLineGroup,
     all_vessels: bool,
     vessels: list[Vessel],
     weekdays: list[int],
@@ -148,14 +148,14 @@ def build_identity_for_create(
 ) -> tuple[str, str]:
     vessel_names = [v.name for v in vessels]
     code = build_lta_agreement_code(
-        shipping_line_code=shipping_line.code,
+        shipping_line_group_code=shipping_line_group.code,
         port_code=port.code,
         all_vessels=all_vessels,
         vessel_names=vessel_names,
         weekdays=weekdays,
     )
     name = build_lta_agreement_name(
-        shipping_line_name=shipping_line.name,
+        shipping_line_group_name=shipping_line_group.name,
         port_name=port.name,
         all_vessels=all_vessels,
         vessel_names=vessel_names,
@@ -164,6 +164,6 @@ def build_identity_for_create(
     )
     if not code or not name:
         raise ValueError(
-            "No se pudo generar código/nombre: completa naviera, puerto y barco."
+            "No se pudo generar código/nombre: completa grupo, puerto y barco."
         )
     return allocate_unique_lta_code(code), name

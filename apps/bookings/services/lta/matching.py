@@ -8,8 +8,8 @@ from datetime import date
 from django.db.models import QuerySet
 
 from apps.bookings.models import LongTermAgreement
-from apps.catalogs.models import Position, Vessel
 from apps.bookings.services.lta.date_exceptions import agreement_covers_call_date
+from apps.catalogs.models import Position, ShippingLine, Vessel
 
 DEFAULT_ADVANCE_MONTHS_MIN = 18
 DEFAULT_ADVANCE_MONTHS_MAX = 32
@@ -27,7 +27,18 @@ def _base_qs() -> QuerySet[LongTermAgreement]:
     return LongTermAgreement.objects.filter(is_active=True).select_related(
         "port",
         "shipping_line",
+        "shipping_line_group",
     ).prefetch_related("vessels", "positions")
+
+
+def group_id_for_shipping_line(shipping_line_id: int | None) -> int | None:
+    if not shipping_line_id:
+        return None
+    return (
+        ShippingLine.objects.filter(pk=shipping_line_id)
+        .values_list("group_id", flat=True)
+        .first()
+    )
 
 
 def port_has_active_agreements(port_id: int) -> bool:
@@ -63,8 +74,20 @@ def agreement_covers_cadence(agreement: LongTermAgreement, call_date: date) -> b
 
 
 def agreement_covers_vessel(agreement: LongTermAgreement, vessel: Vessel) -> bool:
+    """Explicit vessel list wins; all_vessels = any vessel in the agreement's group."""
     if agreement.all_vessels:
-        return vessel.shipping_line_id == agreement.shipping_line_id
+        line = getattr(vessel, "shipping_line", None)
+        group_id = getattr(line, "group_id", None) if line is not None else None
+        if group_id is None:
+            group_id = (
+                ShippingLine.objects.filter(pk=vessel.shipping_line_id)
+                .values_list("group_id", flat=True)
+                .first()
+            )
+        return (
+            group_id is not None
+            and group_id == agreement.shipping_line_group_id
+        )
     vessel_ids = {v.id for v in agreement.vessels.all()}
     return vessel.id in vessel_ids
 
@@ -93,9 +116,12 @@ def find_matching_agreements(
     position: Position | None = None,
     require_position: bool = False,
 ) -> list[LongTermAgreement]:
-    """Own-line LTAs that cover vessel/weekday/(optional position) on call_date."""
+    """Own-group LTAs that cover vessel/weekday/(optional position) on call_date."""
+    group_id = group_id_for_shipping_line(shipping_line_id)
+    if group_id is None:
+        return []
     matches: list[LongTermAgreement] = []
-    qs = _base_qs().filter(port_id=port_id, shipping_line_id=shipping_line_id)
+    qs = _base_qs().filter(port_id=port_id, shipping_line_group_id=group_id)
     for agreement in qs:
         if not agreement_covers_validity(agreement, call_date):
             continue
@@ -151,15 +177,15 @@ def find_foreign_slot_agreements(
     call_date: date,
     position: Position | None,
 ) -> list[LongTermAgreement]:
-    """Other lines' LTAs that strategically own this weekday + position."""
+    """Other groups' LTAs that strategically own this weekday + position."""
     if position is None:
         return []
-    qs = (
-        _base_qs()
-        .filter(port_id=port_id)
-        .exclude(shipping_line_id=shipping_line_id)
-        .filter(positions=position)
-    )
+    group_id = group_id_for_shipping_line(shipping_line_id)
+    qs = _base_qs().filter(port_id=port_id).filter(positions=position)
+    if group_id is not None:
+        qs = qs.exclude(shipping_line_group_id=group_id)
+    else:
+        qs = qs.exclude(shipping_line_id=shipping_line_id)
     foreign: list[LongTermAgreement] = []
     for agreement in qs.distinct():
         if not agreement.reserve_foreign_slots:

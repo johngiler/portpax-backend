@@ -1,15 +1,15 @@
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from apps.catalogs.models import Port, Position, ShippingLine, Vessel
+from apps.catalogs.models import Port, Position, ShippingLine, ShippingLineGroup, Vessel
 
 
 class LongTermAgreement(models.Model):
     """
     Long-term berthing agreement (LTA).
 
-    Grants early booking windows and strategically reserves weekday/position
-    slots for a shipping line. Generar/Regenerar may materialize LTA bookings.
+    Ownership and slot claims are by shipping-line group. shipping_line is a
+    titular brand used when materializing ghost bookings / codes.
     """
 
     class BookingPolicy(models.TextChoices):
@@ -23,14 +23,21 @@ class LongTermAgreement(models.Model):
         on_delete=models.PROTECT,
         related_name="long_term_agreements",
     )
+    shipping_line_group = models.ForeignKey(
+        ShippingLineGroup,
+        on_delete=models.PROTECT,
+        related_name="long_term_agreements",
+        help_text="Corporate group that owns this LTA (claim/match scope).",
+    )
     shipping_line = models.ForeignKey(
         ShippingLine,
         on_delete=models.PROTECT,
         related_name="long_term_agreements",
+        help_text="Titular brand for codes / generated LTA booking stamp.",
     )
     all_vessels = models.BooleanField(
         default=True,
-        help_text="If true, all vessels of the shipping line are covered.",
+        help_text="If true, all vessels of the shipping-line group are covered.",
     )
     vessels = models.ManyToManyField(
         Vessel,
@@ -113,10 +120,12 @@ class LongTermAgreement(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["port", "shipping_line", "code"]
+        ordering = ["port", "shipping_line_group", "code"]
 
     def __str__(self) -> str:
-        return f"{self.code} ({self.port.code} / {self.shipping_line.code})"
+        group = getattr(self, "shipping_line_group", None)
+        group_label = getattr(group, "code", None) or self.shipping_line.code
+        return f"{self.code} ({self.port.code} / {group_label})"
 
     def clean(self):
         if self.advance_months_min > self.advance_months_max:

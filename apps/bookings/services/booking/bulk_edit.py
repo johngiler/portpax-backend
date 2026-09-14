@@ -18,7 +18,10 @@ from apps.bookings.services.booking.status import (
     update_booking_operational,
     update_booking_status,
 )
-from apps.bookings.services.booking_tag import assign_tag_to_bookings, get_or_create_tag
+from apps.bookings.services.booking_tag import (
+    assign_tag_to_bookings_tracked,
+    get_or_create_tag,
+)
 from apps.bookings.services.validation import validate_booking_params
 from apps.catalogs.models import Port, Position, ShippingLine, Vessel
 
@@ -448,7 +451,16 @@ def apply_bulk_edit_rows(
             failed.append({"booking_id": booking_id, "detail": str(exc)})
 
     if tag and updated_booking_ids:
-        assign_tag_to_bookings(updated_booking_ids, tag)
+        tag_updated, _ = assign_tag_to_bookings_tracked(
+            updated_booking_ids,
+            tag,
+            user=user,
+            request=request,
+            audit_extra=audit_extra,
+            create_run_batch=False,
+        )
+        if tag_updated:
+            changed_fields.add("tag_id")
 
     run_batch.booking_ids = updated_booking_ids
     run_batch.success_count = len(updated)

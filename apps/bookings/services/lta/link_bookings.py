@@ -187,7 +187,7 @@ def _desired_booking_ids(agreement: LongTermAgreement) -> set[int]:
     candidates = (
         Booking.objects.filter(
             port_id=agreement.port_id,
-            shipping_line_id=agreement.shipping_line_id,
+            shipping_line__group_id=agreement.shipping_line_group_id,
         )
         .filter(
             Q(long_term_agreement__isnull=True)
@@ -199,6 +199,14 @@ def _desired_booking_ids(agreement: LongTermAgreement) -> set[int]:
 
     desired: set[int] = set()
     for booking in candidates:
+        # Claimed / progressed slots (e.g. LTA→CL) keep the link even when the
+        # vessel is outside the explicit agreement list (same-group claim).
+        if (
+            booking.long_term_agreement_id == agreement.pk
+            and booking.status != BookingStatus.LTA
+        ):
+            desired.add(booking.pk)
+            continue
         if not agreement_covers_booking(agreement, booking):
             continue
         best = find_best_matching_agreement(
@@ -240,7 +248,7 @@ def link_matching_bookings(
     candidates = (
         Booking.objects.filter(
             port_id=agreement.port_id,
-            shipping_line_id=agreement.shipping_line_id,
+            shipping_line__group_id=agreement.shipping_line_group_id,
             long_term_agreement__isnull=True,
         )
         .exclude(status=BookingStatus.C)

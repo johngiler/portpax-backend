@@ -288,6 +288,15 @@ def _line_code_name(pk: int) -> tuple[str, str]:
     return (line.code or "", line.name or line.code or f"#{pk}")
 
 
+def _group_code_name(pk: int) -> tuple[str, str]:
+    from apps.catalogs.models import ShippingLineGroup
+
+    group = ShippingLineGroup.objects.filter(pk=pk).first()
+    if group is None:
+        return ("", f"#{pk}")
+    return (group.code or "", group.name or group.code or f"#{pk}")
+
+
 def enrich_lta_audit_changes(changes: dict[str, Any] | None) -> dict[str, Any] | None:
     if not changes or not isinstance(changes, dict):
         return changes
@@ -311,6 +320,11 @@ def enrich_lta_audit_changes(changes: dict[str, Any] | None) -> dict[str, Any] |
         out["shipping_line_id"] = enrich_named_fk_change(
             out["shipping_line_id"],
             resolve_one=_line_code_name,
+        )
+    if "shipping_line_group_id" in out:
+        out["shipping_line_group_id"] = enrich_named_fk_change(
+            out["shipping_line_group_id"],
+            resolve_one=_group_code_name,
         )
     return out
 

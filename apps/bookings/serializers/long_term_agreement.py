@@ -6,15 +6,49 @@ import json
 from apps.bookings.models import LongTermAgreement
 from apps.bookings.services.lta.identity import build_identity_for_create
 from apps.audit.serializers import LtaAuditEntrySerializer
-from apps.catalogs.models import Position, Vessel
+from apps.catalogs.models import Position, ShippingLine, Vessel
 from apps.catalogs.utils.position_code import position_short_code
 
 CONTRACT_EXTENSIONS = ("pdf", "doc", "docx")
 
 
+def _titular_shipping_line(
+    *,
+    group,
+    vessels: list[Vessel],
+    explicit: ShippingLine | None = None,
+) -> ShippingLine | None:
+    """Brand stamped on generated LTA bookings / kept for legacy codes."""
+    if explicit is not None and explicit.group_id == group.id:
+        return explicit
+    for vessel in vessels:
+        line = getattr(vessel, "shipping_line", None)
+        if line is not None and line.group_id == group.id:
+            return line
+        if vessel.shipping_line_id:
+            line = ShippingLine.objects.filter(
+                pk=vessel.shipping_line_id, group_id=group.id
+            ).first()
+            if line is not None:
+                return line
+    return (
+        ShippingLine.objects.filter(group_id=group.id, is_active=True)
+        .order_by("name", "id")
+        .first()
+    )
+
+
 class LongTermAgreementSerializer(serializers.ModelSerializer):
     port_code = serializers.CharField(source="port.code", read_only=True)
     port_name = serializers.CharField(source="port.name", read_only=True)
+    shipping_line_group_code = serializers.CharField(
+        source="shipping_line_group.code",
+        read_only=True,
+    )
+    shipping_line_group_name = serializers.CharField(
+        source="shipping_line_group.name",
+        read_only=True,
+    )
     shipping_line_code = serializers.CharField(
         source="shipping_line.code",
         read_only=True,
@@ -55,6 +89,9 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             "port",
             "port_code",
             "port_name",
+            "shipping_line_group",
+            "shipping_line_group_code",
+            "shipping_line_group_name",
             "shipping_line",
             "shipping_line_code",
             "shipping_line_name",
@@ -88,6 +125,7 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "code",
             "name",
+            "shipping_line",
             "created_at",
             "updated_at",
             "contract_file_url",
@@ -97,6 +135,7 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             "contract_file": {"write_only": True},
+            "shipping_line": {"required": False},
         }
 
     def get_vessel_names(self, obj) -> list[str]:
@@ -181,8 +220,8 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         port = attrs.get("port") or getattr(self.instance, "port", None)
-        shipping_line = attrs.get("shipping_line") or getattr(
-            self.instance, "shipping_line", None
+        group = attrs.get("shipping_line_group") or getattr(
+            self.instance, "shipping_line_group", None
         )
         all_vessels = attrs.get(
             "all_vessels",
@@ -190,8 +229,8 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
         )
         vessels = attrs.get("vessels")
         if vessels is None and self.instance:
-            vessels = list(self.instance.vessels.all())
-        vessels = vessels or []
+            vessels = list(self.instance.vessels.select_related("shipping_line").all())
+        vessels = list(vessels or [])
         positions = attrs.get("positions")
         if positions is None and self.instance:
             positions = list(self.instance.positions.all())
@@ -210,14 +249,31 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
                 {"advance_months_min": "Debe ser menor o igual al máximo."}
             )
 
+        if not group:
+            raise serializers.ValidationError(
+                {"shipping_line_group": "Requerido."}
+            )
+
         if not all_vessels and not vessels:
             raise serializers.ValidationError(
                 {"vessel_ids": "Selecciona barcos o marca «todos los barcos»."}
             )
         for vessel in vessels:
-            if shipping_line and vessel.shipping_line_id != shipping_line.id:
+            line = getattr(vessel, "shipping_line", None)
+            vessel_group_id = getattr(line, "group_id", None) if line else None
+            if vessel_group_id is None:
+                vessel_group_id = (
+                    ShippingLine.objects.filter(pk=vessel.shipping_line_id)
+                    .values_list("group_id", flat=True)
+                    .first()
+                )
+            if vessel_group_id != group.id:
                 raise serializers.ValidationError(
-                    {"vessel_ids": f"El barco {vessel.name} no pertenece a la naviera."}
+                    {
+                        "vessel_ids": (
+                            f"El barco {vessel.name} no pertenece al grupo de naviera."
+                        )
+                    }
                 )
         for position in positions:
             if port and position.port_id != port.id:
@@ -251,6 +307,22 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"interval_days": "Debe ser al menos 1."}
             )
+
+        titular = _titular_shipping_line(
+            group=group,
+            vessels=[] if all_vessels else vessels,
+            explicit=attrs.get("shipping_line")
+            or getattr(self.instance, "shipping_line", None),
+        )
+        if titular is None:
+            raise serializers.ValidationError(
+                {
+                    "shipping_line_group": (
+                        "El grupo no tiene navieras activas para titular el acuerdo."
+                    )
+                }
+            )
+        attrs["shipping_line"] = titular
         return attrs
 
     def create(self, validated_data):
@@ -258,14 +330,14 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
         positions = validated_data.pop("positions", [])
         contract_file = validated_data.pop("contract_file", None)
         port = validated_data["port"]
-        shipping_line = validated_data["shipping_line"]
+        group = validated_data["shipping_line_group"]
         all_vessels = validated_data.get("all_vessels", True)
         weekdays = validated_data.get("weekdays") or []
         interval_days = validated_data.get("interval_days")
         try:
             code, name = build_identity_for_create(
                 port=port,
-                shipping_line=shipping_line,
+                shipping_line_group=group,
                 all_vessels=all_vessels,
                 vessels=[] if all_vessels else list(vessels),
                 weekdays=weekdays,

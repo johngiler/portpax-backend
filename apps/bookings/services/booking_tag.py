@@ -38,20 +38,6 @@ def suggest_tags(query: str = "", *, limit: int = 20) -> list[BookingTag]:
     return list(qs.order_by("name")[: max(1, min(limit, 50))])
 
 
-def _tag_change_payload(
-    previous: BookingTag | None,
-    next_tag: BookingTag | None,
-) -> dict:
-    return {
-        "tag_id": {
-            "from": previous.id if previous else None,
-            "to": next_tag.id if next_tag else None,
-            "from_name": previous.name if previous else None,
-            "to_name": next_tag.name if next_tag else None,
-        }
-    }
-
-
 def record_booking_tag_audit(
     booking: Booking,
     *,
@@ -60,18 +46,36 @@ def record_booking_tag_audit(
     user=None,
     request=None,
     audit_extra: dict | None = None,
+    previous_name: str | None = None,
+    next_name: str | None = None,
 ) -> None:
     prev_id = previous.id if previous else None
     next_id = next_tag.id if next_tag else None
-    if prev_id == next_id:
+    prev_label = previous_name
+    if prev_label is None:
+        prev_label = previous.name if previous else None
+    next_label = next_name
+    if next_label is None:
+        next_label = next_tag.name if next_tag else None
+    # Same FK with same display name → no-op (incl. rename no-op).
+    if prev_id == next_id and (prev_label or "") == (next_label or ""):
         return
-    if next_tag and previous:
-        summary = f"Tag: {previous.name} → {next_tag.name}"
+    if prev_id == next_id and prev_label != next_label:
+        summary = f"Tag: {prev_label} → {next_label}"
+    elif next_tag and previous:
+        summary = f"Tag: {prev_label} → {next_label}"
     elif next_tag:
-        summary = f"Tag asignado: {next_tag.name}"
+        summary = f"Tag asignado: {next_label}"
     else:
-        summary = f"Tag quitado: {previous.name}" if previous else "Tag quitado"
-    changes = _tag_change_payload(previous, next_tag)
+        summary = f"Tag quitado: {prev_label}" if prev_label else "Tag quitado"
+    changes = {
+        "tag_id": {
+            "from": prev_id,
+            "to": next_id,
+            "from_name": prev_label,
+            "to_name": next_label,
+        }
+    }
     if audit_extra:
         changes = {**changes, **audit_extra}
     record_booking_audit(
@@ -82,6 +86,33 @@ def record_booking_tag_audit(
         user=user,
         request=request,
     )
+
+
+def record_tag_rename_on_bookings(
+    tag: BookingTag,
+    *,
+    previous_name: str,
+    next_name: str,
+    user=None,
+    request=None,
+) -> int:
+    """Fan-out rename audit to every booking still linked to this tag."""
+    if (previous_name or "").strip() == (next_name or "").strip():
+        return 0
+    count = 0
+    for booking in Booking.objects.filter(tag_id=tag.pk).iterator(chunk_size=200):
+        record_booking_tag_audit(
+            booking,
+            previous=tag,
+            next_tag=tag,
+            previous_name=previous_name,
+            next_name=next_name,
+            user=user,
+            request=request,
+            audit_extra={"source": "tag_rename"},
+        )
+        count += 1
+    return count
 
 
 def assign_tag_to_bookings(

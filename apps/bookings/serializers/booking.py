@@ -454,6 +454,12 @@ class BookingUpdateSerializer(serializers.Serializer):
         if clear_tag or tag_name is not None:
             from apps.bookings.services.booking_tag import record_booking_tag_audit
 
+            # Re-read tag after identity/ops updates (avoid stale relation).
+            instance = (
+                type(instance)
+                .objects.select_related("tag")
+                .get(pk=instance.pk)
+            )
             previous = instance.tag
             next_tag = None if clear_tag else get_or_create_tag(tag_name, user=user)
             if instance.tag_id != (next_tag.id if next_tag else None):
@@ -465,6 +471,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                     next_tag=next_tag,
                     user=user,
                     request=request,
+                    audit_extra={"source": "booking_update"},
                 )
 
         return instance

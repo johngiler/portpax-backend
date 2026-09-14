@@ -153,10 +153,11 @@ def _claim_lta_space_booking(
     created_by=None,
 ):
     """
-    Claim reserved LTA capacity in place: update vessel/ETA/ETD/position and
-    move status LTA → CL (Confirmed LTA). Does not cancel or create a new row.
+    Claim reserved LTA capacity in place: update vessel/line (via identity,
+    regenerating booking_code), ETA/ETD/position, then LTA → CL.
     """
     from apps.bookings.models import Booking, BookingStatus
+    from apps.bookings.services.booking.identity import update_booking_identity
     from apps.bookings.services.booking.status import (
         BookingStatusError,
         BookingValidationError,
@@ -164,10 +165,17 @@ def _claim_lta_space_booking(
         update_booking_status,
     )
     from apps.audit.services.record import record_booking_audit
-    from apps.catalogs.models import Vessel
+    from apps.catalogs.models import ShippingLine, Vessel
 
     booking = (
-        Booking.objects.select_related("vessel", "position", "port", "shipping_line")
+        Booking.objects.select_related(
+            "vessel",
+            "position",
+            "port",
+            "shipping_line",
+            "shipping_line__group",
+            "long_term_agreement",
+        )
         .filter(pk=candidate_id, status=BookingStatus.LTA)
         .first()
     )
@@ -176,22 +184,36 @@ def _claim_lta_space_booking(
             "El espacio LTA a reclamar ya no está disponible.",
             "claim_lta_space",
         )
-    if booking.shipping_line_id != shipping_line_id:
-        raise BookingBatchCreateError(
-            "El espacio LTA pertenece a otra naviera.",
-            "claim_lta_space",
-        )
 
-    vessel = Vessel.objects.filter(pk=vessel_id, is_active=True).first()
+    claim_line = (
+        ShippingLine.objects.select_related("group")
+        .filter(pk=shipping_line_id, is_active=True)
+        .first()
+    )
+    if claim_line is None:
+        raise BookingBatchCreateError("Naviera no válida.", "shipping_line_id")
+
+    vessel = (
+        Vessel.objects.filter(pk=vessel_id, is_active=True)
+        .select_related("shipping_line", "shipping_line__group")
+        .first()
+    )
     if vessel is None:
         raise BookingBatchCreateError("Barco no válido.", "vessel_id")
     if vessel.shipping_line_id != shipping_line_id:
         raise BookingBatchCreateError(
-            "El barco no pertenece a la naviera del espacio LTA.",
+            "El barco no pertenece a la naviera de la fila.",
             "vessel_id",
         )
+    booking_group = (
+        booking.shipping_line.group_id if booking.shipping_line_id else None
+    )
+    if booking_group is None or booking_group != claim_line.group_id:
+        raise BookingBatchCreateError(
+            "El espacio LTA pertenece a otro grupo de naviera.",
+            "claim_lta_space",
+        )
 
-    # Unique port/vessel/date — another live booking for the new vessel blocks claim.
     clash = (
         Booking.objects.filter(
             port_id=booking.port_id,
@@ -209,33 +231,23 @@ def _claim_lta_space_booking(
             "vessel_id",
         )
 
-    changes: dict[str, Any] = {"claimed_lta_space": True}
-    vessel_update_fields = ["updated_at"]
-    if booking.vessel_id != vessel_id:
-        changes["vessel_id"] = {
-            "from": booking.vessel_id,
-            "to": vessel_id,
-            "from_name": booking.vessel.name if booking.vessel_id else None,
-            "to_name": vessel.name,
-        }
-        booking.vessel = vessel
-        vessel_update_fields.append("vessel")
-
-    if len(vessel_update_fields) > 1:
-        booking.save(update_fields=vessel_update_fields)
-        record_booking_audit(
-            booking,
-            action="operational_update",
-            summary="Reclamo de espacio LTA: actualización de barco",
-            changes={k: v for k, v in changes.items() if k != "claimed_lta_space"},
-            user=created_by,
-        )
-
     position_id = preferred_position_id
     if position_id is None:
         position_id = booking.position_id
 
     try:
+        # Identity path regenerates booking_code and enforces group fence.
+        # Keep existing LTA FK: claimant vessel may not be on the agreement list.
+        booking = update_booking_identity(
+            booking,
+            user=created_by,
+            shipping_line_id=shipping_line_id,
+            vessel_id=vessel_id,
+            audit_source="mass_import",
+            audit_extra={"claimed_lta_space": True},
+            rematch_lta=False,
+        )
+        booking.refresh_from_db()
         update_booking_operational(
             booking,
             user=created_by,
@@ -267,7 +279,7 @@ def _claim_lta_space_booking(
         booking,
         action="operational_update",
         summary="Espacio LTA reclamado (Confirmada LTA)",
-        changes=changes,
+        changes={"claimed_lta_space": True, "status": {"from": "lta", "to": "cl"}},
         user=created_by,
     )
     return booking
@@ -297,7 +309,7 @@ def create_from_resolved_rows(
     )
 
     from apps.bookings.services.booking_tag import (
-        assign_tag_to_bookings,
+        assign_tag_to_bookings_tracked,
         get_or_create_tag,
     )
 
@@ -424,7 +436,16 @@ def create_from_resolved_rows(
     )
 
     if tag and created_booking_ids:
-        assign_tag_to_bookings(created_booking_ids, tag)
+        assign_tag_to_bookings_tracked(
+            created_booking_ids,
+            tag,
+            user=created_by,
+            audit_extra={
+                "import_batch_id": batch.id,
+                "source": "mass_import",
+            },
+            create_run_batch=False,
+        )
 
     if created:
         from apps.notifications.models import Notification

@@ -28,3 +28,25 @@ class BookingTagSerializer(serializers.ModelSerializer):
             name=validated_data["name"],
             created_by=user,
         )
+
+    def update(self, instance, validated_data):
+        from apps.bookings.services.booking_tag import record_tag_rename_on_bookings
+
+        request = self.context.get("request")
+        user = (
+            request.user
+            if request and getattr(request.user, "is_authenticated", False)
+            else None
+        )
+        previous_name = instance.name
+        instance = super().update(instance, validated_data)
+        next_name = instance.name
+        if previous_name != next_name:
+            record_tag_rename_on_bookings(
+                instance,
+                previous_name=previous_name,
+                next_name=next_name,
+                user=user,
+                request=request,
+            )
+        return instance

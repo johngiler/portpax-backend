@@ -55,11 +55,13 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
         "name",
         "port__code",
         "port__name",
+        "shipping_line_group__code",
+        "shipping_line_group__name",
         "shipping_line__code",
         "shipping_line__name",
     ]
     ordering_fields = ["code", "name", "created_at", "valid_from", "linked_bookings_count"]
-    ordering = ["port__name", "shipping_line__name", "code"]
+    ordering = ["port__name", "shipping_line_group__name", "code"]
 
     def get_serializer_class(self):
         if self.action == "retrieve":
@@ -69,6 +71,7 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
     queryset = LongTermAgreement.objects.select_related(
         "port",
         "shipping_line",
+        "shipping_line_group",
     ).prefetch_related("vessels", "positions")
 
     def get_queryset(self):
@@ -82,6 +85,9 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
         port_id = self.request.query_params.get("port")
         if port_id:
             qs = qs.filter(port_id=port_id)
+        group_id = self.request.query_params.get("shipping_line_group")
+        if group_id:
+            qs = qs.filter(shipping_line_group_id=group_id)
         line_id = self.request.query_params.get("shipping_line")
         if line_id:
             qs = qs.filter(shipping_line_id=line_id)
@@ -102,7 +108,9 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
     def perform_create(self, serializer):
         agreement = serializer.save()
         agreement = (
-            LongTermAgreement.objects.select_related("port", "shipping_line")
+            LongTermAgreement.objects.select_related(
+                "port", "shipping_line", "shipping_line_group"
+            )
             .prefetch_related("vessels", "positions")
             .get(pk=agreement.pk)
         )
@@ -130,7 +138,9 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
         before = snapshot_lta(serializer.instance)
         agreement = serializer.save()
         agreement = (
-            LongTermAgreement.objects.select_related("port", "shipping_line")
+            LongTermAgreement.objects.select_related(
+                "port", "shipping_line", "shipping_line_group"
+            )
             .prefetch_related("vessels", "positions")
             .get(pk=agreement.pk)
         )
