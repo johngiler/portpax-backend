@@ -37,12 +37,17 @@ def find_claimable_lta_booking(
     port_id: int,
     call_date: date,
     shipping_line_id: int,
+    preferred_position_id: int | None = None,
 ) -> Booking | None:
     """
     LTA-only placeholder for the same shipping line / port / date.
     Vessel name does not matter — the slot is reserved capacity for that line.
+
+    When preferred_position_id is set, prefer the LTA on that pier (so claiming
+    Icon→P1 takes Adventure on P1, not an older LTA on A1). Otherwise the
+    oldest LTA for the line that day.
     """
-    return (
+    qs = (
         Booking.objects.filter(
             port_id=port_id,
             call_date=call_date,
@@ -51,8 +56,12 @@ def find_claimable_lta_booking(
         )
         .select_related("vessel", "position", "port", "shipping_line")
         .order_by("id")
-        .first()
     )
+    if preferred_position_id is not None:
+        on_pier = qs.filter(position_id=preferred_position_id).first()
+        if on_pier is not None:
+            return on_pier
+    return qs.first()
 
 
 def count_claimable_lta_bookings(
@@ -114,7 +123,8 @@ def resolve_position_and_lta(
     Suggest a pier position and detect a claimable LTA slot for this line.
     When claim_lta_space is set, lock position to the LTA pier.
     When preferred_position_id is set (paste/edit), it wins over auto-suggest
-    unless LTA claim locks the pier.
+    unless LTA claim locks the pier. Claimable LTA prefers the LTA on the
+    preferred pier when one exists; otherwise the oldest LTA for the line.
     """
     from apps.catalogs.models import Position
 
@@ -122,6 +132,7 @@ def resolve_position_and_lta(
         port_id=port_id,
         call_date=call_date,
         shipping_line_id=shipping_line_id,
+        preferred_position_id=preferred_position_id,
     )
     candidate_payload = (
         serialize_lta_space_candidate(candidate) if candidate else None

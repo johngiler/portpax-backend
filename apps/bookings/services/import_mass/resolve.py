@@ -364,10 +364,23 @@ def _validate_import_booking(
 
     lta_count = int(pos.get("lta_space_count") or 0)
     if claiming and lta_count > 1:
-        warn = (
-            f"Hay {lta_count} reservas LTA de esta naviera en esta fecha; "
-            "se reclamará la más antigua."
-        )
+        cand_pos = (candidate or {}).get("position_code") if candidate else None
+        cand_pos_id = (candidate or {}).get("position_id") if candidate else None
+        if (
+            preferred_position_id is not None
+            and cand_pos_id is not None
+            and int(cand_pos_id) == preferred_position_id
+            and cand_pos
+        ):
+            warn = (
+                f"Hay {lta_count} reservas LTA de esta naviera en esta fecha; "
+                f"se reclamará la de {cand_pos} (posición elegida)."
+            )
+        else:
+            warn = (
+                f"Hay {lta_count} reservas LTA de esta naviera en esta fecha; "
+                "se reclamará la más antigua."
+            )
         if warn not in warnings:
             warnings.append(warn)
 
