@@ -77,6 +77,7 @@ FIELD_LABELS = {
     "notes": "Notas",
     "long_term_agreement": "Acuerdo LTA",
     "long_term_agreement_id": "Acuerdo LTA",
+    "claimed_lta_space": "Espacio LTA reclamado",
     "tag_id": "Tag",
 }
 
