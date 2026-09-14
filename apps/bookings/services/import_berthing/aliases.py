@@ -11,6 +11,7 @@ PORT_BY_KEY: dict[str, str] = {
     "sam": "samana",
     "mel": "melilla",
     "ens": "ensenada",
+    "mot": "motril",
 }
 
 # BERTHING «BERTH ASSIG» → Position short suffix (catalog uses {port}-{suffix}).
@@ -28,6 +29,7 @@ BERTH_ALIAS_BY_PORT_CODE: dict[str, dict[str, str]] = {
     "melilla": {"N3": "NE3", "P1": "NE2"},
     "la_paz": {"P1": "P1", "P2": "P2"},
     "roatan": {"P1": "P1", "P2": "P2", "A1": "A1", "A2": "A2"},
+    "motril": {"P1": "P1", "P2": "P2", "P3": "P3"},
     "ensenada": {},
 }
 
@@ -51,6 +53,7 @@ SHEET_SPECS: list[tuple[str, str, bool]] = [
     ("PZ BOOKING", "paz", False),
     ("SM BOOKING", "sam", False),
     ("MEL BOOKING", "mel", True),
+    ("Motril", "mot", False),
 ]
 
 # Brand / corp codes from Excel → ShippingLine.code (catalog)
@@ -89,6 +92,22 @@ BRAND_TO_LINE_CODE: dict[str, str] = {
     "CUN": "cunard",
     "USCG": "uscgc",
     "USCGC": "uscgc",
+    # Motril / extended papers
+    "STAR": "star_clippers",
+    "SD": "seadream_yacht_club",
+    "OEX": "orient_express",
+    "P&O": "po_cruises_uk",
+    "PO": "po_cruises_uk",
+    "VID": "vidanta_world",
+    "CM": "club_med",
+    "SWAN": "swan_hellenic",
+    "ACS": "aroya_cruises",
+    "AMB": "ambassador_cruise_line",
+    "AEX": "aurora_expeditions",
+    "HEX": "heritage_expeditions",
+    "NG": "lindblad_expeditions",
+    "SCE": "scenic_ocean_cruises",
+    "PW": "peace_boat",
 }
 
 STATUS_MAP: dict[str, str] = {

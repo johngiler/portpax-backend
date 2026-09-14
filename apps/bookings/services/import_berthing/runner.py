@@ -19,6 +19,7 @@ from apps.bookings.services.import_berthing.match import (
     resolve_position,
     resolve_shipping_line,
     resolve_vessel,
+    resolve_vessel_global,
 )
 from apps.bookings.services.import_berthing.parse import parse_berthing_source
 from apps.catalogs.models import Port
@@ -87,6 +88,26 @@ def _resolve_row_catalog(row: dict[str, Any]) -> tuple[dict[str, Any] | None, st
         return None, "port_not_found", f"port_key={row.get('port_key')!r}"
 
     line = resolve_shipping_line(row.get("brand"), row.get("corp"))
+    ship = row.get("ship") or ""
+    vessel = None
+    if line is not None:
+        vessel = resolve_vessel(
+            ship,
+            line,
+            loa_m=row.get("loa_m"),
+            brand=row.get("brand"),
+            corp=row.get("corp"),
+        )
+    if vessel is None:
+        # Homologated vessel name with missing/wrong brand code (e.g. Motril MYS).
+        vessel = resolve_vessel_global(
+            ship,
+            loa_m=row.get("loa_m"),
+            brand=row.get("brand"),
+            corp=row.get("corp"),
+        )
+        if vessel is not None:
+            line = vessel.shipping_line
     if line is None:
         brand = row.get("brand") or ""
         corp = row.get("corp") or ""
@@ -95,15 +116,6 @@ def _resolve_row_catalog(row: dict[str, Any]) -> tuple[dict[str, Any] | None, st
             "shipping_line_not_found",
             f"brand={brand!r} corp={corp!r}",
         )
-
-    ship = row.get("ship") or ""
-    vessel = resolve_vessel(
-        ship,
-        line,
-        loa_m=row.get("loa_m"),
-        brand=row.get("brand"),
-        corp=row.get("corp"),
-    )
     if vessel is None:
         return (
             None,

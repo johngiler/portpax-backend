@@ -148,6 +148,32 @@ def resolve_vessel(
     return None
 
 
+def resolve_vessel_global(
+    ship_raw: str,
+    *,
+    loa_m: object = None,
+    brand: str | None = None,
+    corp: str | None = None,
+) -> Vessel | None:
+    """
+    Unique exact ship-name match across active vessels (any line).
+
+    Used when Excel brand/corp is missing or maps to the wrong line but the
+    vessel name is already homologated in the catalog.
+    """
+    candidates = ship_name_candidates(ship_raw, brand=brand, corp=corp)
+    if not candidates:
+        return None
+
+    qs = Vessel.objects.filter(is_active=True).select_related("shipping_line")
+    loa = _as_loa(loa_m)
+    for name in candidates:
+        matches = list(qs.filter(name__iexact=name)[:3])
+        if len(matches) == 1:
+            return _apply_loa_if_missing(matches[0], loa)
+    return None
+
+
 def _find_position_by_short(port: Port, short: str) -> Position | None:
     """Match catalog position by short suffix (E1, N1, …) or full code."""
     short = short.strip().upper()
