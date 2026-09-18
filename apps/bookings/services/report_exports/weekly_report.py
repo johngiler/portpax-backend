@@ -23,7 +23,11 @@ from apps.bookings.services.report_exports.booking_movements import (
 )
 from apps.bookings.services.report_exports.common import (
     booking_pax,
+    normalize_pax_basis,
+    pax_basis_note,
     scheduled_bookings_qs,
+    PAX_BASIS_CAPACITY,
+    PAX_BASIS_PLANNED,
 )
 from apps.bookings.services.report_exports.report_theme import (
     NAVY,
@@ -129,30 +133,44 @@ def _media_url(request, field) -> str | None:
     return url
 
 
-def _projected_capacity(booking: Booking | None) -> int:
-    """Projected capacity for an arrival (vessel max, else planned_pax)."""
+def _projected_capacity(
+    booking: Booking | None,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
+) -> int:
+    """Projected figure for PAX PROY / REAL (respects Base PAX filter)."""
     if booking is None:
         return 0
+    basis = normalize_pax_basis(pax_basis)
     vessel = getattr(booking, "vessel", None)
     cap = getattr(vessel, "pax_capacity", None) if vessel is not None else None
-    if cap is not None:
-        return int(cap)
-    if booking.planned_pax is not None:
-        return int(booking.planned_pax)
-    return 0
+    planned = int(booking.planned_pax) if booking.planned_pax is not None else None
+    if basis == PAX_BASIS_CAPACITY:
+        if cap is not None:
+            return int(cap)
+        return planned or 0
+    if planned is not None:
+        return planned
+    return int(cap) if cap is not None else 0
 
 
-def _pax_for_kind(entry: BookingAuditEntry, kind: str, booking: Booking | None) -> int:
+def _pax_for_kind(
+    entry: BookingAuditEntry,
+    kind: str,
+    booking: Booking | None,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
+) -> int:
     """Signed PAX attributed to one weekly metric kind."""
     changes = entry.changes or {}
     if kind == "CANCELLATION":
-        base = booking_pax(booking, pax_basis="planned") if booking else 0
+        base = booking_pax(booking, pax_basis=pax_basis) if booking else 0
         return -int(base)
     if kind == "REAL PAX":
-        # Beto: projected capacity − actual manifested PAX of the arrival.
+        # Beto: projected (per Base PAX) − actual manifested PAX of the arrival.
         if booking is None:
             return 0
-        projected = _projected_capacity(booking)
+        projected = _projected_capacity(booking, pax_basis=pax_basis)
         actual: int | None = None
         if "actual_pax" in changes:
             to = (changes.get("actual_pax") or {}).get("to")
@@ -169,7 +187,7 @@ def _pax_for_kind(entry: BookingAuditEntry, kind: str, booking: Booking | None) 
     if kind in ("NEW BOOKING", "SHIP CHANGE"):
         if booking is None:
             return 0
-        return int(booking_pax(booking, pax_basis="planned"))
+        return int(booking_pax(booking, pax_basis=pax_basis))
     return 0
 
 
@@ -178,6 +196,7 @@ def _port_year_totals(
     call_years: list[int],
     allowed: set[int] | None,
     without_lta: bool,
+    pax_basis: str,
 ) -> dict[int, list[int]]:
     """Full-year port PAX totals (not week movements) for each call year column."""
     if not call_years:
@@ -197,7 +216,7 @@ def _port_year_totals(
         if cy is None or cy not in year_index:
             continue
         totals[booking.port_id][year_index[cy]] += booking_pax(
-            booking, pax_basis="planned"
+            booking, pax_basis=pax_basis
         )
     return totals
 
@@ -207,6 +226,7 @@ def build_weekly_report(
     year: int,
     week: int,
     without_lta: bool = False,
+    pax_basis: str = PAX_BASIS_PLANNED,
     allowed_ports: set[int] | list[int] | None = None,
     request=None,
 ) -> dict[str, Any]:
@@ -216,13 +236,15 @@ def build_weekly_report(
     Columns = call years ``year``…``year+3``.
     Blue port row = full-year port PAX totals (all years in the window).
     Metric rows = signed PAX movements registered that week.
-    PAX PROY / REAL = projected capacity − actual_pax for Real updates.
+    PAX PROY / REAL = projected (Base PAX) − actual_pax for Real updates.
     """
     if year < MIN_REPORT_YEAR:
         raise ValueError(f"year debe ser >= {MIN_REPORT_YEAR}.")
     max_w = max_iso_week(year)
     if week < 1 or week > max_w:
         raise ValueError(f"week debe estar entre 1 y {max_w} para {year}.")
+
+    basis = normalize_pax_basis(pax_basis)
 
     allowed: set[int] | None
     if allowed_ports is None:
@@ -288,7 +310,7 @@ def build_weekly_report(
         for kind in kinds:
             if kind not in WEEKLY_KIND_KEYS:
                 continue
-            delta = _pax_for_kind(entry, kind, booking)
+            delta = _pax_for_kind(entry, kind, booking, pax_basis=basis)
             if delta == 0:
                 continue
             pax_map[port_id][kind][yi] += delta
@@ -297,6 +319,7 @@ def build_weekly_report(
         call_years=call_years,
         allowed=allowed,
         without_lta=without_lta,
+        pax_basis=basis,
     )
 
     port_ids = sorted(set(pax_map.keys()) | set(port_year_totals.keys()))
@@ -345,7 +368,8 @@ def build_weekly_report(
     note = (
         "Fila azul = totales PAX del puerto por año de escala (no la suma de la semana). "
         "Filas inferiores = movimientos registrados en la semana ISO. "
-        "PAX PROY / REAL = capacidad proyectada − PAX real del arribo."
+        "PAX PROY / REAL = proyectado (Base PAX) − PAX real del arribo. "
+        f"{pax_basis_note(basis)}"
     )
     if without_lta:
         note = f"{note} Sin LTA."
@@ -359,6 +383,7 @@ def build_weekly_report(
         "week_start": week_start.isoformat(),
         "week_end": week_end.isoformat(),
         "without_lta": without_lta,
+        "pax_basis": basis,
         "call_years": call_years,
         "metric_labels": [label for _, label in WEEKLY_METRICS],
         "ports": port_rows,

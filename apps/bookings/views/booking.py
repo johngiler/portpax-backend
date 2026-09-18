@@ -1540,6 +1540,7 @@ class BookingViewSet(
                 year=year,
                 week=week,
                 without_lta=self._report_without_lta(request),
+                pax_basis=self._report_pax_basis(request),
                 allowed_ports=user_port_ids(request.user),
                 request=request,
             )
@@ -1602,6 +1603,7 @@ class BookingViewSet(
                     year=year,
                     week=week,
                     without_lta=without_lta,
+                    pax_basis=pax_basis,
                     allowed_ports=allowed_ports,
                     request=request,
                 )
