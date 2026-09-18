@@ -63,6 +63,7 @@ def scheduled_bookings_qs(
     date_to: date,
     port_id: int | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_group_id: int | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
     allowed_ports: set[int] | None = None,
@@ -77,7 +78,9 @@ def scheduled_bookings_qs(
     qs = Booking.objects.filter(
         call_date__gte=date_from,
         call_date__lte=date_to,
-    ).select_related("port", "shipping_line", "vessel", "position")  # vessel needed for LOA/PAX
+    ).select_related(
+        "port", "shipping_line", "shipping_line__group", "vessel", "position"
+    )  # vessel needed for LOA/PAX; group for soft-focus
     if status == "completed":
         qs = qs.filter(
             Q(
@@ -99,10 +102,12 @@ def scheduled_bookings_qs(
         qs = qs.filter(port_id__in=allowed_ports)
     if port_id:
         qs = qs.filter(port_id=port_id)
-    if shipping_line_id:
-        qs = qs.filter(shipping_line_id=shipping_line_id)
     if vessel_id:
         qs = qs.filter(vessel_id=vessel_id)
+    elif shipping_line_id:
+        qs = qs.filter(shipping_line_id=shipping_line_id)
+    elif shipping_line_group_id:
+        qs = qs.filter(shipping_line__group_id=shipping_line_group_id)
     if position_id:
         qs = qs.filter(position_id=position_id)
     if without_lta:

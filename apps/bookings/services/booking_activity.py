@@ -465,6 +465,7 @@ def _audit_queryset(
     exclude_sources: tuple[str, ...] = (),
     lta_agreement_only: bool = False,
     booking_id: int | None = None,
+    tag_id: int | None = None,
 ):
     actions = actions if actions is not None else SINGLE_ACTIONS
     if not actions:
@@ -508,6 +509,13 @@ def _audit_queryset(
         qs = qs.filter(user__isnull=True)
     elif actor_user_id is not None:
         qs = qs.filter(user_id=actor_user_id)
+    if tag_id is not None:
+        # Current booking tag, or audit rows that changed to/from this tag.
+        qs = qs.filter(
+            Q(booking__tag_id=tag_id)
+            | Q(changes__tag_id__to=tag_id)
+            | Q(changes__tag_id__from=tag_id)
+        )
     return qs.order_by("-created_at")
 
 
@@ -520,6 +528,7 @@ def _batch_queryset(
     actor_system: bool = False,
     actor_user_id: int | None = None,
     kind: str | None = None,
+    tag_id: int | None = None,
 ):
     qs = BookingImportBatch.objects.select_related("created_by", "tag")
     if kind == "berthing_import":
@@ -536,6 +545,8 @@ def _batch_queryset(
         qs = qs.filter(created_by__isnull=True)
     elif actor_user_id is not None:
         qs = qs.filter(created_by_id=actor_user_id)
+    if tag_id is not None:
+        qs = qs.filter(tag_id=tag_id)
     return qs.order_by("-created_at")
 
 
@@ -548,6 +559,7 @@ def _run_batch_queryset(
     actor_system: bool = False,
     actor_user_id: int | None = None,
     kinds: tuple[str, ...] | None = None,
+    tag_id: int | None = None,
 ):
     qs = BookingRunBatch.objects.select_related("created_by", "tag")
     if kinds is not None:
@@ -564,6 +576,8 @@ def _run_batch_queryset(
         qs = qs.filter(created_by__isnull=True)
     elif actor_user_id is not None:
         qs = qs.filter(created_by_id=actor_user_id)
+    if tag_id is not None:
+        qs = qs.filter(tag_id=tag_id)
     return qs.order_by("-created_at")
 
 
@@ -624,6 +638,7 @@ def build_booking_activity(
     date_to: str | None = None,
     actor: str | None = None,
     booking_id: int | None = None,
+    tag_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
@@ -652,6 +667,7 @@ def build_booking_activity(
             exclude_sources=filters["exclude_sources"],
             lta_agreement_only=filters["lta_agreement_only"],
             booking_id=booking_id,
+            tag_id=tag_id,
         )
         count = qs.count()
         start = (page - 1) * page_size
@@ -676,6 +692,7 @@ def build_booking_activity(
             source=filters["source_filter"],
             exclude_sources=filters["exclude_sources"],
             lta_agreement_only=filters["lta_agreement_only"],
+            tag_id=tag_id,
         )[:500]:
             items.append(_single_item(entry))
 
@@ -688,6 +705,7 @@ def build_booking_activity(
             actor_system=actor_system,
             actor_user_id=actor_user_id,
             kind=filters["batch_kind"],
+            tag_id=tag_id,
         )[:500]:
             items.append(_bulk_item(batch))
 
@@ -700,6 +718,7 @@ def build_booking_activity(
             actor_system=actor_system,
             actor_user_id=actor_user_id,
             kinds=filters["run_kinds"],
+            tag_id=tag_id,
         )[:500]:
             items.append(_run_item(batch))
 

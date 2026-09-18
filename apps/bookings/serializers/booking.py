@@ -16,6 +16,15 @@ from apps.bookings.services.validation.conflict_display import booking_conflict_
 from apps.catalogs.utils.position_code import position_short_code
 
 
+def _shipping_line_group_name(obj: Booking) -> str | None:
+    line = getattr(obj, "shipping_line", None)
+    if line is None or not getattr(line, "group_id", None):
+        return None
+    group = getattr(line, "group", None)
+    name = getattr(group, "name", None) if group is not None else None
+    return str(name).strip() if name else None
+
+
 class BookingAuditEntrySerializer(serializers.ModelSerializer):
     user_display = serializers.SerializerMethodField()
 
@@ -92,6 +101,12 @@ class BookingListSerializer(
     position_code = serializers.SerializerMethodField()
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     confirmation_pdf_url = serializers.SerializerMethodField()
+    shipping_line_group = serializers.IntegerField(
+        source="shipping_line.group_id",
+        read_only=True,
+        allow_null=True,
+    )
+    shipping_line_group_name = serializers.SerializerMethodField()
     tag_id = serializers.SerializerMethodField()
     tag_name = serializers.SerializerMethodField()
 
@@ -108,6 +123,8 @@ class BookingListSerializer(
             "shipping_line",
             "shipping_line_code",
             "shipping_line_name",
+            "shipping_line_group",
+            "shipping_line_group_name",
             "position",
             "position_code",
             "call_date",
@@ -139,6 +156,9 @@ class BookingListSerializer(
     def get_tag_name(self, obj: Booking) -> str | None:
         return obj.tag.name if obj.tag_id else None
 
+    def get_shipping_line_group_name(self, obj: Booking) -> str | None:
+        return _shipping_line_group_name(obj)
+
 
 class BookingSerializer(
     _BookingFileUrlMixin,
@@ -147,6 +167,7 @@ class BookingSerializer(
 ):
     port_code = serializers.CharField(source="port.code", read_only=True)
     port_name = serializers.CharField(source="port.name", read_only=True)
+    port_country = serializers.CharField(source="port.country", read_only=True)
     port_logo = serializers.SerializerMethodField()
     shipping_line_code = serializers.CharField(source="shipping_line.code", read_only=True)
     shipping_line_name = serializers.CharField(source="shipping_line.name", read_only=True)
@@ -156,6 +177,7 @@ class BookingSerializer(
         read_only=True,
         allow_null=True,
     )
+    shipping_line_group_name = serializers.SerializerMethodField()
     vessel_name = serializers.CharField(source="vessel.name", read_only=True)
     vessel_logo = serializers.SerializerMethodField()
     vessel_loa_m = serializers.DecimalField(
@@ -198,12 +220,14 @@ class BookingSerializer(
             "port",
             "port_code",
             "port_name",
+            "port_country",
             "port_logo",
             "shipping_line",
             "shipping_line_code",
             "shipping_line_name",
             "shipping_line_logo",
             "shipping_line_group",
+            "shipping_line_group_name",
             "vessel",
             "vessel_name",
             "vessel_logo",
@@ -276,6 +300,9 @@ class BookingSerializer(
 
     def get_tag_name(self, obj: Booking) -> str | None:
         return obj.tag.name if obj.tag_id else None
+
+    def get_shipping_line_group_name(self, obj: Booking) -> str | None:
+        return _shipping_line_group_name(obj)
 
 
 class BookingUpdateSerializer(serializers.Serializer):

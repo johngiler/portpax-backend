@@ -128,6 +128,7 @@ def _availability_export_bookings(
     date_to: date,
     allowed_ports: set[int] | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_group_id: int | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
@@ -147,6 +148,7 @@ def _availability_export_bookings(
         port_id=port_id,
         allowed_ports=allowed_ports,
         shipping_line_id=shipping_line_id,
+        shipping_line_group_id=shipping_line_group_id,
         vessel_id=vessel_id,
         position_id=position_id,
         status=None,
@@ -159,13 +161,15 @@ def _availability_export_bookings(
             call_date__gte=date_from,
             call_date__lte=date_to,
             port_id=port_id,
-        ).select_related("port", "shipping_line", "vessel", "position")
+        ).select_related("port", "shipping_line", "shipping_line__group", "vessel", "position")
         if allowed_ports is not None:
             base = base.filter(port_id__in=allowed_ports)
-        if shipping_line_id:
-            base = base.filter(shipping_line_id=shipping_line_id)
         if vessel_id:
             base = base.filter(vessel_id=vessel_id)
+        elif shipping_line_id:
+            base = base.filter(shipping_line_id=shipping_line_id)
+        elif shipping_line_group_id:
+            base = base.filter(shipping_line__group_id=shipping_line_group_id)
         if position_id:
             base = base.filter(position_id=position_id)
         qs = apply_booking_status_filters(base, status_filters)
@@ -183,6 +187,7 @@ def _availability_export_rows(
     date_to: date,
     allowed_ports: set[int] | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_group_id: int | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
@@ -194,6 +199,7 @@ def _availability_export_rows(
         date_to=date_to,
         allowed_ports=allowed_ports,
         shipping_line_id=shipping_line_id,
+        shipping_line_group_id=shipping_line_group_id,
         vessel_id=vessel_id,
         position_id=position_id,
         status=status,
@@ -231,8 +237,10 @@ def _conflict_filter_active(
 def _soft_focus_active(
     *,
     shipping_line_id: int | None,
+    shipping_line_group_id: int | None,
     vessel_id: int | None,
     position_id: int | None,
+    tag_ids: list[int] | None,
     status_filters: list[str],
     has_conflict: bool | None,
     conflict_severity: str | None,
@@ -240,8 +248,10 @@ def _soft_focus_active(
 ) -> bool:
     return bool(
         shipping_line_id
+        or shipping_line_group_id
         or vessel_id
         or position_id
+        or tag_ids
         or status_filters
         or _conflict_filter_active(
             has_conflict=has_conflict,
@@ -277,8 +287,10 @@ def _focus_match_queryset(
     date_to: date,
     allowed_ports: set[int] | None,
     shipping_line_id: int | None,
+    shipping_line_group_id: int | None,
     vessel_id: int | None,
     position_id: int | None,
+    tag_ids: list[int] | None,
     status_filters: list[str],
 ):
     """Bookings that satisfy soft-focus filters (day discovery only)."""
@@ -290,7 +302,7 @@ def _focus_match_queryset(
             call_date__gte=date_from,
             call_date__lte=date_to,
             port_id=port_id,
-        ).select_related("port", "shipping_line", "vessel", "position")
+        ).select_related("port", "shipping_line", "shipping_line__group", "vessel", "position")
         if allowed_ports is not None:
             qs = qs.filter(port_id__in=allowed_ports)
     else:
@@ -306,8 +318,12 @@ def _focus_match_queryset(
     elif shipping_line_id:
         # Vessel focus supersedes line (same as FE soft-focus match).
         qs = qs.filter(shipping_line_id=shipping_line_id)
+    elif shipping_line_group_id:
+        qs = qs.filter(shipping_line__group_id=shipping_line_group_id)
     if position_id:
         qs = qs.filter(position_id=position_id)
+    if tag_ids:
+        qs = qs.filter(tag_id__in=tag_ids)
     if status_filters:
         qs = apply_booking_status_filters(qs, status_filters)
     return qs
@@ -320,8 +336,10 @@ def _soft_focus_matching_days(
     date_to: date,
     allowed_ports: set[int] | None,
     shipping_line_id: int | None,
+    shipping_line_group_id: int | None,
     vessel_id: int | None,
     position_id: int | None,
+    tag_ids: list[int] | None,
     status_filters: list[str],
     has_conflict: bool | None,
     conflict_severity: str | None,
@@ -333,8 +351,10 @@ def _soft_focus_matching_days(
         date_to=date_to,
         allowed_ports=allowed_ports,
         shipping_line_id=shipping_line_id,
+        shipping_line_group_id=shipping_line_group_id,
         vessel_id=vessel_id,
         position_id=position_id,
+        tag_ids=tag_ids,
         status_filters=status_filters,
     )
     if not _conflict_filter_active(
@@ -549,8 +569,19 @@ def _place_bookings_by_day(
             "conflict_chips": conflict_display["conflict_chips"],
             "conflict_highlights": conflict_display["conflict_highlights"],
             "position_id": booking.position_id or 0,
+            "tag_id": booking.tag_id or 0,
             "shipping_line_id": booking.shipping_line_id or 0,
+            "shipping_line_group_id": (
+                booking.shipping_line.group_id
+                if booking.shipping_line_id
+                else 0
+            ),
             "shipping_line_name": booking.shipping_line.name,
+            "shipping_line_group_name": (
+                booking.shipping_line.group.name
+                if booking.shipping_line_id and booking.shipping_line.group_id
+                else None
+            ),
             "shipping_line_logo": logo,
             "vessel_id": booking.vessel_id or 0,
             "vessel_name": booking.vessel.name,
@@ -580,8 +611,10 @@ def build_availability_data(
     date_to: date,
     allowed_ports: set[int] | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_group_id: int | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
+    tag_ids: list[int] | None = None,
     status: str | None = None,
     statuses: list[str] | None = None,
     has_conflict: bool | None = None,
@@ -595,9 +628,9 @@ def build_availability_data(
 ) -> dict:
     """JSON payload for the on-screen Availability Chart (day × position).
 
-    Soft-focus filters (vessel/line/position/status/conflict): select matching
-    days in the DB, page those days, then load *all* calls on the page days so
-    neighbors stay visible. Opacity is a FE concern.
+    Soft-focus filters (vessel/line/group/position/tags/status/conflict): select
+    matching days in the DB, page those days, then load *all* calls on the page
+    days so neighbors stay visible. Opacity is a FE concern.
     """
     if allowed_ports is not None and port_id not in allowed_ports:
         raise ValueError("Puerto no permitido.")
@@ -618,10 +651,13 @@ def build_availability_data(
     status_filters = list(statuses or [])
     if status and status not in status_filters:
         status_filters.append(status)
+    focus_tag_ids = list(tag_ids) if tag_ids else None
     soft_focus = _soft_focus_active(
         shipping_line_id=shipping_line_id,
+        shipping_line_group_id=shipping_line_group_id,
         vessel_id=vessel_id,
         position_id=position_id,
+        tag_ids=focus_tag_ids,
         status_filters=status_filters,
         has_conflict=has_conflict,
         conflict_severity=conflict_severity,
@@ -649,8 +685,10 @@ def build_availability_data(
                 date_to=date_to,
                 allowed_ports=allowed_ports,
                 shipping_line_id=shipping_line_id,
+                shipping_line_group_id=shipping_line_group_id,
                 vessel_id=vessel_id,
                 position_id=position_id,
+                tag_ids=focus_tag_ids,
                 status_filters=status_filters,
                 has_conflict=has_conflict,
                 conflict_severity=conflict_severity,
@@ -758,6 +796,7 @@ def build_availability_chart_xlsx(
     date_to: date,
     allowed_ports: set[int] | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_group_id: int | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
@@ -769,6 +808,7 @@ def build_availability_chart_xlsx(
         date_to=date_to,
         allowed_ports=allowed_ports,
         shipping_line_id=shipping_line_id,
+        shipping_line_group_id=shipping_line_group_id,
         vessel_id=vessel_id,
         position_id=position_id,
         status=status,
@@ -799,6 +839,7 @@ def build_availability_chart_csv(
     date_to: date,
     allowed_ports: set[int] | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_group_id: int | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
@@ -810,6 +851,7 @@ def build_availability_chart_csv(
         date_to=date_to,
         allowed_ports=allowed_ports,
         shipping_line_id=shipping_line_id,
+        shipping_line_group_id=shipping_line_group_id,
         vessel_id=vessel_id,
         position_id=position_id,
         status=status,

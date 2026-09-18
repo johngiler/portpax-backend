@@ -167,9 +167,18 @@ class BookingViewSet(
         shipping_line_id = self.request.query_params.get("shipping_line")
         if shipping_line_id:
             qs = qs.filter(shipping_line_id=shipping_line_id)
+        else:
+            shipping_line_group_id = self.request.query_params.get(
+                "shipping_line_group"
+            )
+            if shipping_line_group_id:
+                qs = qs.filter(shipping_line__group_id=shipping_line_group_id)
         vessel_id = self.request.query_params.get("vessel")
         if vessel_id:
             qs = qs.filter(vessel_id=vessel_id)
+        tag_ids = parse_id_list(self.request.query_params.get("tags"))
+        if tag_ids:
+            qs = qs.filter(tag_id__in=tag_ids)
         lta_id = self.request.query_params.get("long_term_agreement")
         if lta_id:
             qs = qs.filter(long_term_agreement_id=lta_id)
@@ -526,6 +535,16 @@ class BookingViewSet(
             except (TypeError, ValueError):
                 booking_id = None
 
+        tag_id_raw = request.query_params.get("tag")
+        tag_id = None
+        if tag_id_raw not in (None, ""):
+            try:
+                tag_id = int(tag_id_raw)
+            except (TypeError, ValueError):
+                tag_id = None
+            if tag_id is not None and tag_id <= 0:
+                tag_id = None
+
         data = build_booking_activity(
             user=request.user,
             allowed_ports=user_port_ids(request.user),
@@ -536,6 +555,7 @@ class BookingViewSet(
             date_to=request.query_params.get("date_to"),
             actor=request.query_params.get("actor"),
             booking_id=booking_id,
+            tag_id=tag_id,
             page=page,
             page_size=page_size,
         )
@@ -1219,12 +1239,16 @@ class BookingViewSet(
         line_id = self._optional_int_param("shipping_line")
         if isinstance(line_id, Response):
             return line_id
+        group_id = self._optional_int_param("shipping_line_group")
+        if isinstance(group_id, Response):
+            return group_id
         vessel_id = self._optional_int_param("vessel")
         if isinstance(vessel_id, Response):
             return vessel_id
         position_id = self._optional_int_param("position")
         if isinstance(position_id, Response):
             return position_id
+        tag_ids = parse_id_list(request.query_params.get("tags"))
         status_values = parse_status_query_params(request.query_params)
         has_conflict_param = request.query_params.get("has_conflict")
         has_conflict_filter = None
@@ -1271,8 +1295,10 @@ class BookingViewSet(
             or conflict_type_filter is not None
             or occupied_only
             or line_id is not None
+            or group_id is not None
             or vessel_id is not None
             or position_id is not None
+            or bool(tag_ids)
             or bool(status_values)
         )
         try:
@@ -1282,8 +1308,10 @@ class BookingViewSet(
                 date_to=date_to,
                 allowed_ports=user_port_ids(request.user),
                 shipping_line_id=line_id,
+                shipping_line_group_id=group_id,
                 vessel_id=vessel_id,
                 position_id=position_id,
+                tag_ids=tag_ids or None,
                 statuses=status_values,
                 has_conflict=has_conflict_filter,
                 conflict_severity=conflict_severity_filter,
@@ -1437,9 +1465,16 @@ class BookingViewSet(
             request.query_params.get("shipping_lines")
             or request.query_params.get("shipping_line")
         )
-        if not shipping_line_ids:
+        shipping_line_group_id = self._optional_int_param("shipping_line_group")
+        if isinstance(shipping_line_group_id, Response):
+            return shipping_line_group_id
+        if not shipping_line_ids and not shipping_line_group_id:
             return Response(
-                {"detail": "shipping_line es obligatorio."},
+                {
+                    "detail": (
+                        "shipping_line o shipping_line_group es obligatorio."
+                    ),
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
@@ -1449,7 +1484,8 @@ class BookingViewSet(
                 port_id=port_id,
                 years=years,
                 tag_ids=tag_ids,
-                shipping_line_ids=shipping_line_ids,
+                shipping_line_ids=shipping_line_ids or None,
+                shipping_line_group_id=shipping_line_group_id,
                 without_lta=self._report_without_lta(request),
                 pax_basis=self._report_pax_basis(request),
                 allowed_ports=user_port_ids(request.user),
@@ -1563,6 +1599,9 @@ class BookingViewSet(
         line_id = self._optional_int_param("shipping_line")
         if isinstance(line_id, Response):
             return line_id
+        group_id = self._optional_int_param("shipping_line_group")
+        if isinstance(group_id, Response):
+            return group_id
         vessel_id = self._optional_int_param("vessel")
         if isinstance(vessel_id, Response):
             return vessel_id
@@ -1596,6 +1635,7 @@ class BookingViewSet(
                     date_to=date_to,
                     allowed_ports=allowed_ports,
                     shipping_line_id=line_id,
+                    shipping_line_group_id=group_id,
                     vessel_id=vessel_id,
                     position_id=position_id,
                     statuses=status_values,
@@ -1661,9 +1701,19 @@ class BookingViewSet(
                     request.query_params.get("shipping_lines")
                     or request.query_params.get("shipping_line")
                 )
-                if not shipping_line_ids:
+                shipping_line_group_id = self._optional_int_param(
+                    "shipping_line_group"
+                )
+                if isinstance(shipping_line_group_id, Response):
+                    return shipping_line_group_id
+                if not shipping_line_ids and not shipping_line_group_id:
                     return Response(
-                        {"detail": "shipping_line es obligatorio."},
+                        {
+                            "detail": (
+                                "shipping_line o shipping_line_group "
+                                "es obligatorio."
+                            ),
+                        },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 payload = build_solicitudes_port_report(
@@ -1672,7 +1722,8 @@ class BookingViewSet(
                     port_id=port_id,
                     years=years,
                     tag_ids=tag_ids,
-                    shipping_line_ids=shipping_line_ids,
+                    shipping_line_ids=shipping_line_ids or None,
+                    shipping_line_group_id=shipping_line_group_id,
                     without_lta=without_lta,
                     pax_basis=pax_basis,
                     allowed_ports=allowed_ports,

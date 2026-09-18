@@ -70,7 +70,16 @@ def _search_shipping_lines(q: str) -> list[dict]:
         .select_related("group")
         .order_by("name")[:_LIMIT]
     )
-    return [{"id": line.id, "name": line.name, "code": line.code} for line in qs]
+    return [
+        {
+            "id": line.id,
+            "name": line.name,
+            "code": line.code,
+            "shipping_line_group_id": line.group_id,
+            "shipping_line_group_name": line.group.name if line.group_id else None,
+        }
+        for line in qs
+    ]
 
 
 def _search_vessels(q: str) -> list[dict]:
@@ -80,7 +89,7 @@ def _search_vessels(q: str) -> list[dict]:
             | Q(vessel_class__icontains=q)
             | Q(shipping_line__name__icontains=q)
         )
-        .select_related("shipping_line")
+        .select_related("shipping_line", "shipping_line__group")
         .order_by("name")[:_LIMIT]
     )
     return [
@@ -90,6 +99,12 @@ def _search_vessels(q: str) -> list[dict]:
             "shipping_line_id": vessel.shipping_line_id,
             "shipping_line_name": vessel.shipping_line.name,
             "shipping_line_code": vessel.shipping_line.code,
+            "shipping_line_group_id": vessel.shipping_line.group_id,
+            "shipping_line_group_name": (
+                vessel.shipping_line.group.name
+                if vessel.shipping_line.group_id
+                else None
+            ),
         }
         for vessel in qs
     ]

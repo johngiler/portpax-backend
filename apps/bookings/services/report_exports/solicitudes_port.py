@@ -146,19 +146,23 @@ def build_solicitudes_port_report(
     years: list[int],
     tag_ids: list[int] | None = None,
     shipping_line_ids: list[int] | None = None,
+    shipping_line_group_id: int | None = None,
     without_lta: bool = False,
     pax_basis: str = "planned",
     allowed_ports: set[int] | list[int] | None = None,
     request=None,
 ) -> dict[str, Any]:
     """
-    Left: occupancy rows per selected calendar year (optional tag/line OR filters).
-    Right: mismas filas filtradas + totales del puerto (sin naviera) + totales naviera.
+    Left: occupancy rows per selected calendar year (optional tag/line/group filters).
+    Right: mismas filas filtradas + totales del puerto (sin naviera) + totales carrier.
     Same status set as other matrix reports (excludes cancelled).
     """
+    from apps.catalogs.models import ShippingLineGroup
+
     pax_basis = normalize_pax_basis(pax_basis)
     tag_ids = list(tag_ids or [])
     shipping_line_ids = list(shipping_line_ids or [])
+    group_id = int(shipping_line_group_id) if shipping_line_group_id else None
     years = [y for y in years if y >= MIN_REPORT_YEAR]
     if not years:
         years = [
@@ -180,12 +184,29 @@ def build_solicitudes_port_report(
     tags = list(BookingTag.objects.filter(pk__in=tag_ids).order_by("name"))
     tag_label = ", ".join(t.name for t in tags) if tags else "Tags"
 
+    group = None
+    if group_id:
+        group = ShippingLineGroup.objects.filter(pk=group_id).first()
+        if group is None:
+            raise ValueError("Grupo de naviera no encontrado.")
+
     lines = list(
-        ShippingLine.objects.filter(pk__in=shipping_line_ids).order_by("name")
+        ShippingLine.objects.filter(pk__in=shipping_line_ids)
+        .select_related("group")
+        .order_by("name")
     )
-    carrier_label = ", ".join(
-        (line.name or line.code or f"#{line.pk}").strip() for line in lines
-    )
+    # Line selection wins; otherwise filter the whole group.
+    carrier_filter_lines = bool(shipping_line_ids)
+    carrier_filter_group = bool(group_id) and not carrier_filter_lines
+
+    if carrier_filter_lines:
+        carrier_label = ", ".join(
+            (line.name or line.code or f"#{line.pk}").strip() for line in lines
+        )
+    elif carrier_filter_group and group is not None:
+        carrier_label = (group.name or group.code or f"#{group.pk}").strip()
+    else:
+        carrier_label = ""
 
     base_kwargs = dict(
         date_from=date_from,
@@ -199,16 +220,20 @@ def build_solicitudes_port_report(
     port_qs = scheduled_bookings_qs(**base_kwargs).select_related("vessel")
     port_by_year = _year_pax_totals(port_qs, years=summary_years, pax_basis=pax_basis)
 
-    # Carrier summary: occupancy at port for selected shipping lines only.
+    # Carrier summary: occupancy at port for selected line(s) or group.
     carrier_by_year: list[dict[str, Any]] = []
-    if shipping_line_ids:
-        carrier_qs = port_qs.filter(shipping_line_id__in=shipping_line_ids)
+    if carrier_filter_lines or carrier_filter_group:
+        carrier_qs = port_qs
+        if carrier_filter_lines:
+            carrier_qs = carrier_qs.filter(shipping_line_id__in=shipping_line_ids)
+        else:
+            carrier_qs = carrier_qs.filter(shipping_line__group_id=group_id)
         carrier_by_year = _year_pax_totals(
             carrier_qs, years=summary_years, pax_basis=pax_basis
         )
         carrier_by_year = [row for row in carrier_by_year if row.get("pax", 0) > 0]
 
-    # Left detail + nuevas: optional tags + shipping lines (OR within each).
+    # Left detail + nuevas: optional tags + line(s) or group.
     detail_qs = (
         scheduled_bookings_qs(**base_kwargs)
         .select_related("vessel", "port", "shipping_line", "tag")
@@ -216,8 +241,10 @@ def build_solicitudes_port_report(
     )
     if tag_ids:
         detail_qs = detail_qs.filter(tag_id__in=tag_ids)
-    if shipping_line_ids:
+    if carrier_filter_lines:
         detail_qs = detail_qs.filter(shipping_line_id__in=shipping_line_ids)
+    elif carrier_filter_group:
+        detail_qs = detail_qs.filter(shipping_line__group_id=group_id)
 
     year_set = set(years)
     rows_by_year: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -288,6 +315,12 @@ def build_solicitudes_port_report(
             (line.name or line.code or f"#{line.pk}").strip() for line in lines
         ],
         "shipping_line_label": carrier_label,
+        "shipping_line_group_id": group.id if group is not None else None,
+        "shipping_line_group_name": (
+            (group.name or group.code or f"#{group.pk}").strip()
+            if group is not None
+            else None
+        ),
         "title": _port_label(port).upper(),
         "subtitle": carrier_label or (tag_label if tags else ""),
         "year_blocks": year_blocks,
@@ -464,10 +497,19 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
             alignment=ALIGN_CENTER,
             border=BORDER_BLACK,
         )
+        line_ids = payload.get("shipping_line_ids") or []
+        compare_header = (
+            "Naviera vs total" if line_ids else "Grupo vs total"
+        )
+        compare_note = (
+            "Naviera seleccionada vs total del puerto"
+            if line_ids
+            else "Grupo seleccionado vs total del puerto"
+        )
         cell = ws.cell(
             row=right_row,
             column=9,
-            value="Naviera vs total",
+            value=compare_header,
         )
         style_cell(
             cell,
@@ -488,7 +530,7 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
         cell = ws.cell(
             row=right_row,
             column=8,
-            value="Naviera seleccionada vs total de navieras",
+            value=compare_note,
         )
         style_cell(
             cell,

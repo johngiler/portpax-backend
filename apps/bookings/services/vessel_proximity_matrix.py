@@ -98,6 +98,11 @@ def _serialize_cell(booking, request) -> dict:
         "shipping_line_name": (
             booking.shipping_line.name if booking.shipping_line_id else ""
         ),
+        "shipping_line_group_name": (
+            booking.shipping_line.group.name
+            if booking.shipping_line_id and booking.shipping_line.group_id
+            else None
+        ),
         "loa_m": str(booking.vessel.loa_m) if booking.vessel.loa_m is not None else None,
         "eta": booking.eta.isoformat() if booking.eta else None,
         "etd": booking.etd.isoformat() if booking.etd else None,
