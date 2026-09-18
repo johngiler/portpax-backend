@@ -595,6 +595,7 @@ def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
         subtitle,
         1 + len(call_years),
         right_flowable=_week_badge_flowable(week),
+        landscape_mode=False,
     )
 
     def _cell(n: int) -> str:
@@ -637,7 +638,9 @@ def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
             )
 
     ncols = len(header)
-    widths = _stretch_col_widths(ncols, first_col_ratio=0.32)
+    widths = _stretch_col_widths(
+        ncols, landscape_mode=False, first_col_ratio=0.32
+    )
     table = Table(data, repeatRows=1, colWidths=widths)
     cmds: list[tuple] = [
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
@@ -665,4 +668,4 @@ def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
         cmds.append(("TEXTCOLOR", (1, r), (-1, r), TEXT))
     table.setStyle(TableStyle(cmds))
     story.append(table)
-    return _build_doc(story)
+    return _build_doc(story, landscape_mode=False)
