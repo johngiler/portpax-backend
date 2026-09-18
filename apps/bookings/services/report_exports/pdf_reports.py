@@ -105,22 +105,75 @@ def _styles():
     return title, subtitle, section, body
 
 
-def _banner_flowables(title: str, subtitle: str | None, col_count: int):
-    """Excel-parity banner: sky fill, title (+ subtitle), no outer box, no spacer row."""
+PDF_SIDE_MARGIN = 1.2 * cm
+
+
+def _page_usable_width(*, landscape_mode: bool = True) -> float:
+    pagesize = landscape(A4) if landscape_mode else A4
+    return float(pagesize[0]) - 2 * PDF_SIDE_MARGIN
+
+
+def _stretch_col_widths(
+    ncols: int,
+    *,
+    landscape_mode: bool = True,
+    first_col_ratio: float = 0.28,
+) -> list[float]:
+    """Force tables to usable page width (avoids narrow content-sized PDFs)."""
+    usable = _page_usable_width(landscape_mode=landscape_mode)
+    if ncols <= 1:
+        return [usable]
+    first_ratio = min(max(first_col_ratio, 0.15), 0.45)
+    first = usable * first_ratio
+    rest = (usable - first) / (ncols - 1)
+    return [first] + [rest] * (ncols - 1)
+
+
+def _week_badge_flowable(week: int | str | None) -> Table:
+    """Peach Sem. card — same language as HTML WeeklyReportSection actions."""
+    _, subtitle_s, _, _ = _styles()
+    badge = Table(
+        [[Paragraph(f"<b>Sem.</b><br/>{week if week is not None else ''}", subtitle_s)]],
+        colWidths=[2.4 * cm],
+    )
+    badge.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FCE4D6")),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    return badge
+
+
+def _banner_flowables(
+    title: str,
+    subtitle: str | None,
+    col_count: int,
+    *,
+    right_flowable: Any | None = None,
+    landscape_mode: bool = True,
+):
+    """Excel-parity banner: sky fill, title (+ subtitle), optional right badge."""
     title_s, subtitle_s, _, _ = _styles()
-    rows = [[Paragraph(title, title_s)]]
+    left_rows = [[Paragraph(title, title_s)]]
     if subtitle and subtitle.strip():
-        rows.append([Paragraph(subtitle.strip(), subtitle_s)])
-    # Stretch to usable page width like Excel col_span.
-    banner = Table(rows, colWidths=["*"])
-    banner.setStyle(
+        left_rows.append([Paragraph(subtitle.strip(), subtitle_s)])
+    usable = _page_usable_width(landscape_mode=landscape_mode)
+    left = Table(left_rows, colWidths=["*"])
+    left.setStyle(
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, -1), SKY_LIGHT),
                 ("TEXTCOLOR", (0, 0), (-1, -1), NAVY),
                 ("LEFTPADDING", (0, 0), (-1, -1), 6),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                # Match side density: less air above the title.
                 ("TOPPADDING", (0, 0), (0, 0), 4),
                 ("BOTTOMPADDING", (0, 0), (0, 0), 2 if subtitle else 4),
                 ("TOPPADDING", (0, 1), (-1, -1), 1),
@@ -129,6 +182,41 @@ def _banner_flowables(title: str, subtitle: str | None, col_count: int):
             ]
         )
     )
+    if right_flowable is None:
+        banner = Table([[left]], colWidths=[usable])
+        banner.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), SKY_LIGHT),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ]
+            )
+        )
+    else:
+        badge_w = 2.6 * cm
+        banner = Table(
+            [[left, right_flowable]],
+            colWidths=[usable - badge_w, badge_w],
+        )
+        banner.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), SKY_LIGHT),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                    ("LEFTPADDING", (0, 0), (0, 0), 0),
+                    ("RIGHTPADDING", (0, 0), (0, 0), 4),
+                    ("LEFTPADDING", (1, 0), (1, 0), 0),
+                    ("RIGHTPADDING", (1, 0), (1, 0), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
     _ = col_count
     return [banner]
 
@@ -138,12 +226,21 @@ def _data_table(
     *,
     emphasize_rows: set[int] | None = None,
     emphasize_last: bool = False,
+    landscape_mode: bool = True,
+    first_col_ratio: float = 0.28,
 ) -> Table:
     """
     Excel-parity data table: navy header band, sky label column,
     subtle right/bottom grid (no outer BOX frame), total/group highlight.
+    Always stretches to usable page width.
     """
-    table = Table(data, repeatRows=1)
+    ncols = max((len(row) for row in data), default=1)
+    widths = _stretch_col_widths(
+        ncols,
+        landscape_mode=landscape_mode,
+        first_col_ratio=first_col_ratio,
+    )
+    table = Table(data, repeatRows=1, colWidths=widths)
     style_cmds: list[tuple] = [
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
@@ -189,15 +286,14 @@ def _data_table(
 def _build_doc(story: list, *, landscape_mode: bool = True) -> bytes:
     buf = BytesIO()
     pagesize = landscape(A4) if landscape_mode else A4
-    side = 1.2 * cm
     # Top: same visual density as sides (less page air + compact banner).
     doc = SimpleDocTemplate(
         buf,
         pagesize=pagesize,
-        leftMargin=side,
-        rightMargin=side,
+        leftMargin=PDF_SIDE_MARGIN,
+        rightMargin=PDF_SIDE_MARGIN,
         topMargin=0.65 * cm,
-        bottomMargin=side,
+        bottomMargin=PDF_SIDE_MARGIN,
     )
     doc.build(story)
     return buf.getvalue()
@@ -431,7 +527,7 @@ def build_booking_movements_pdf(*, year: int, allowed_ports=None) -> bytes:
 def build_solicitudes_port_pdf(payload: dict[str, Any]) -> bytes:
     title = str(payload.get("title") or "RESUMEN")
     subtitle = str(payload.get("subtitle") or "").strip() or None
-    story = _banner_flowables(title, subtitle, 6)
+    story = _banner_flowables(title, subtitle, 6, landscape_mode=False)
 
     for block in payload.get("year_blocks") or []:
         data: list[list[Any]] = [
@@ -465,7 +561,9 @@ def build_solicitudes_port_pdf(payload: dict[str, Any]) -> bytes:
         )
         story.append(sec)
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_data_table(data, emphasize_last=True))
+        story.append(
+            _data_table(data, emphasize_last=True, landscape_mode=False)
+        )
         story.append(Spacer(1, 0.3 * cm))
 
     return _build_doc(story, landscape_mode=False)
@@ -485,36 +583,19 @@ def build_availability_chart_pdf(**kwargs) -> bytes:
 
 
 def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
-    """Reporte Semanal — Sem. badge + port bands + metric rows."""
+    """Reporte Semanal — banner + Sem. badge (right) + wide grid table."""
     call_years = list(payload.get("call_years") or [])
     title = str(
         payload.get("title") or payload.get("report_name") or "Reporte Semanal"
     )
     week = payload.get("week")
-    subtitle = (
-        f"Sem. {week} · {payload.get('week_start')} → {payload.get('week_end')}"
+    subtitle = f"{payload.get('week_start')} → {payload.get('week_end')}"
+    story = _banner_flowables(
+        title,
+        subtitle,
+        1 + len(call_years),
+        right_flowable=_week_badge_flowable(week),
     )
-    story = _banner_flowables(title, subtitle, 1 + len(call_years))
-
-    week_tbl = Table(
-        [[Paragraph(f"<b>Sem.</b><br/>{week}", _styles()[1])]],
-        colWidths=[2.2 * cm],
-    )
-    week_tbl.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FCE4D6")),
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ]
-        )
-    )
-    story.append(week_tbl)
-    story.append(Spacer(1, 0.25 * cm))
 
     def _cell(n: int) -> str:
         if not n:
@@ -555,10 +636,12 @@ def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
                 ]
             )
 
-    table = Table(data, repeatRows=1)
+    ncols = len(header)
+    widths = _stretch_col_widths(ncols, first_col_ratio=0.32)
+    table = Table(data, repeatRows=1, colWidths=widths)
     cmds: list[tuple] = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.white),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#2F5496")),
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), PDF_TABLE_SIZE),
         ("ALIGN", (1, 0), (-1, -1), "CENTER"),
@@ -568,7 +651,9 @@ def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ("FONTNAME", (0, 0), (0, 0), "Helvetica-Oblique"),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.4, GRID),
+        ("LINEAFTER", (0, 0), (-2, -1), 0.4, GRID),
+        ("LINEBELOW", (0, -1), (-1, -1), 0.4, GRID),
     ]
     for r in port_row_idxs:
         cmds.append(("BACKGROUND", (0, r), (-1, r), NAVY))

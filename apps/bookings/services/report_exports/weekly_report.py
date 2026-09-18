@@ -9,7 +9,7 @@ from typing import Any
 
 from django.utils import timezone
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from apps.audit.models import BookingAuditEntry
@@ -31,15 +31,17 @@ from apps.bookings.services.report_exports.common import (
 )
 from apps.bookings.services.report_exports.report_theme import (
     NAVY,
-    TEXT,
     WHITE,
 )
 from apps.bookings.services.report_exports.xlsx_style import (
     ALIGN_CENTER,
     ALIGN_LEFT,
-    BORDER_NONE,
+    BORDER_GRID,
+    FONT_DATA,
     prepare_report_sheet,
     style_cell,
+    write_column_header_band,
+    write_report_banner,
 )
 from apps.bookings.services.validation.legend_labels import port_legend_label
 from apps.catalogs.models import Port
@@ -54,13 +56,9 @@ WEEKLY_METRICS: tuple[tuple[str, str], ...] = (
 
 WEEKLY_KIND_KEYS = tuple(k for k, _ in WEEKLY_METRICS)
 
-_WEEK_FILL = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
 _PORT_FILL = PatternFill(start_color=NAVY, end_color=NAVY, fill_type="solid")
 _PORT_FONT = Font(name="Calibri", size=11, bold=True, color=WHITE)
 _METRIC_FONT = Font(name="Calibri", size=10, italic=True, color="5B9BD5")
-_YEAR_FONT = Font(name="Calibri", size=11, bold=True, color="2F5496")
-_TITLE_FONT = Font(name="Calibri", size=16, bold=True, color="2F5496")
-_THIN = Side(style="thin", color="2F5496")
 
 
 def max_iso_week(year: int) -> int:
@@ -407,97 +405,89 @@ def _fmt_num(n: int) -> str | int:
 def build_weekly_report_xlsx(payload: dict[str, Any]) -> bytes:
     call_years: list[int] = list(payload.get("call_years") or [])
     ports: list[dict[str, Any]] = list(payload.get("ports") or [])
-    col_count = 1 + len(call_years)
+    col_count = max(1, 1 + len(call_years))
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Reporte Semanal"
     prepare_report_sheet(ws)
 
-    # Title + week badge row.
     title = str(payload.get("title") or payload.get("report_name") or "Reporte Semanal")
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(2, col_count - 1))
-    title_cell = ws.cell(row=1, column=1, value=title)
-    title_cell.font = _TITLE_FONT
-    title_cell.alignment = Alignment(horizontal="center", vertical="center")
-    title_cell.border = Border(
-        left=_THIN, right=_THIN, top=_THIN, bottom=_THIN
+    week = payload.get("week")
+    subtitle = f"{payload.get('week_start')} → {payload.get('week_end')}"
+    row = write_report_banner(
+        ws,
+        1,
+        title=title,
+        subtitle=subtitle,
+        col_span=col_count,
+        right_badge=f"Sem.\n{week}" if week is not None else None,
     )
-    for c in range(1, max(2, col_count - 1) + 1):
-        ws.cell(row=1, column=c).border = Border(
-            left=_THIN if c == 1 else None,
-            right=_THIN if c == max(2, col_count - 1) else None,
-            top=_THIN,
-            bottom=_THIN,
-        )
 
-    week_col = col_count
-    week_cell = ws.cell(row=1, column=week_col, value=f"Sem.\n{payload.get('week')}")
-    week_cell.fill = _WEEK_FILL
-    week_cell.font = Font(name="Calibri", size=11, bold=True, color=TEXT)
-    week_cell.alignment = Alignment(
-        horizontal="center", vertical="center", wrap_text=True
+    write_column_header_band(
+        ws,
+        row,
+        ["PUERTO", *[str(y) for y in call_years]],
     )
-    ws.row_dimensions[1].height = 36
+    row += 1
 
-    # Column headers
-    header_row = 3
-    style_cell(
-        ws.cell(row=header_row, column=1, value="PUERTO"),
-        font=Font(name="Calibri", size=10, italic=True, color="2F5496"),
-        fill=None,
-        alignment=ALIGN_LEFT,
-        border=BORDER_NONE,
-    )
-    for i, y in enumerate(call_years):
-        style_cell(
-            ws.cell(row=header_row, column=2 + i, value=y),
-            font=_YEAR_FONT,
-            fill=None,
-            alignment=ALIGN_CENTER,
-            border=BORDER_NONE,
-        )
-
-    row = header_row + 1
     for port in ports:
         label = str(port.get("port_name") or "").strip()
-        cell = ws.cell(row=row, column=1, value=label)
-        cell.fill = _PORT_FILL
-        cell.font = _PORT_FONT
-        cell.alignment = ALIGN_LEFT
-        cell.border = BORDER_NONE
         totals = list(port.get("totals") or [])
-        for i, y in enumerate(call_years):
+        style_cell(
+            ws.cell(row=row, column=1, value=label),
+            font=_PORT_FONT,
+            fill=_PORT_FILL,
+            alignment=ALIGN_LEFT,
+            border=BORDER_GRID,
+        )
+        for i, _y in enumerate(call_years):
             val = int(totals[i] if i < len(totals) else 0)
             c = ws.cell(row=row, column=2 + i, value=val)
-            c.fill = _PORT_FILL
-            c.font = _PORT_FONT
-            c.alignment = ALIGN_CENTER
-            c.border = BORDER_NONE
-            c.number_format = "#,##0"
+            style_cell(
+                c,
+                font=_PORT_FONT,
+                fill=_PORT_FILL,
+                alignment=ALIGN_CENTER,
+                border=BORDER_GRID,
+                number_format="#,##0",
+            )
         row += 1
         for metric in port.get("metrics") or []:
-            mcell = ws.cell(
-                row=row, column=1, value=str(metric.get("label") or "")
+            style_cell(
+                ws.cell(
+                    row=row,
+                    column=1,
+                    value=str(metric.get("label") or ""),
+                ),
+                font=_METRIC_FONT,
+                fill=None,
+                alignment=ALIGN_LEFT,
+                border=BORDER_GRID,
             )
-            mcell.font = _METRIC_FONT
-            mcell.alignment = ALIGN_LEFT
-            mcell.border = BORDER_NONE
             values = list(metric.get("values") or [])
             for i, _y in enumerate(call_years):
-                val = values[i] if i < len(values) else 0
-                c = ws.cell(row=row, column=2 + i, value=_fmt_num(int(val or 0)))
-                c.font = Font(name="Calibri", size=10, color=TEXT)
-                c.alignment = ALIGN_CENTER
-                c.border = BORDER_NONE
-                if isinstance(c.value, int):
-                    c.number_format = "#,##0;-#,##0;"
+                raw = int(values[i] if i < len(values) else 0)
+                c = ws.cell(
+                    row=row,
+                    column=2 + i,
+                    value=raw if raw else "",
+                )
+                style_cell(
+                    c,
+                    font=FONT_DATA,
+                    fill=None,
+                    alignment=ALIGN_CENTER,
+                    border=BORDER_GRID,
+                    number_format="#,##0;-#,##0;",
+                )
             row += 1
-        row += 1  # gap between ports
 
-    ws.column_dimensions["A"].width = 28
+    # Wide columns: few year cols must not look like a skinny strip.
+    ws.column_dimensions["A"].width = 36
+    year_w = max(18, min(28, int(72 / max(len(call_years), 1))))
     for i in range(len(call_years)):
-        ws.column_dimensions[get_column_letter(2 + i)].width = 14
+        ws.column_dimensions[get_column_letter(2 + i)].width = year_w
 
     buf = BytesIO()
     wb.save(buf)

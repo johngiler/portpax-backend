@@ -74,6 +74,8 @@ FILL_HEADER = PatternFill("solid", fgColor=NAVY)
 FILL_ROW_LABEL = PatternFill("solid", fgColor=SKY)
 FILL_TOTAL = PatternFill("solid", fgColor=SKY_LIGHT)
 FILL_ALT = PatternFill("solid", fgColor=WHITE)
+# Weekly Sem. badge (matches HTML WeekBadge / PDF peach card).
+FILL_WEEK_BADGE = PatternFill("solid", fgColor="FCE4D6")
 
 ALIGN_CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 ALIGN_LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
@@ -192,35 +194,86 @@ def write_report_banner(
     title: str,
     subtitle: str | None = None,
     col_span: int,
+    right_badge: str | None = None,
 ) -> int:
     """
     Unified header band spanning exactly ``col_span`` columns (full table width).
     Title + optional subtitle are contiguous filled rows — no blank spacer below.
+    Optional ``right_badge`` (e.g. Sem. card) sits in the last column of the banner.
     Returns the next free row immediately after the banner.
     """
     prepare_report_sheet(ws)
+    badge = (right_badge or "").strip() or None
+    use_badge = bool(badge) and col_span >= 2
+    title_span = col_span - 1 if use_badge else col_span
+
     _paint_merged_band(
         ws,
         start_row,
-        col_span,
+        title_span,
         value=title,
         font=FONT_TITLE,
         fill=FILL_TITLE,
     )
-    ws.row_dimensions[start_row].height = _banner_row_height(title, col_span, base=22)
+    ws.row_dimensions[start_row].height = _banner_row_height(
+        title, title_span, base=22
+    )
     next_row = start_row + 1
     if subtitle and str(subtitle).strip():
         sub = str(subtitle).strip()
         _paint_merged_band(
             ws,
             next_row,
-            col_span,
+            title_span,
             value=sub,
             font=FONT_SUBTITLE,
             fill=FILL_TITLE,
         )
-        ws.row_dimensions[next_row].height = _banner_row_height(sub, col_span, base=18)
+        ws.row_dimensions[next_row].height = _banner_row_height(
+            sub, title_span, base=18
+        )
         next_row += 1
+
+    if use_badge:
+        badge_top = start_row
+        badge_bottom = next_row - 1
+        for r in range(badge_top, badge_bottom + 1):
+            cell = ws.cell(row=r, column=col_span)
+            if r == badge_top:
+                cell.value = badge
+            else:
+                cell.value = None
+            style_cell(
+                cell,
+                font=Font(
+                    name=FONT_FAMILY_XLSX,
+                    size=SUBTITLE_SIZE,
+                    bold=True,
+                    color=TEXT,
+                ),
+                fill=FILL_WEEK_BADGE,
+                alignment=Alignment(
+                    horizontal="center",
+                    vertical="center",
+                    wrap_text=True,
+                ),
+                border=BORDER_NONE,
+            )
+        if badge_bottom > badge_top:
+            ws.merge_cells(
+                start_row=badge_top,
+                start_column=col_span,
+                end_row=badge_bottom,
+                end_column=col_span,
+            )
+        clear_range_borders(
+            ws,
+            min_row=badge_top,
+            max_row=badge_bottom,
+            min_col=col_span,
+            max_col=col_span,
+        )
+
     return next_row
 
 
