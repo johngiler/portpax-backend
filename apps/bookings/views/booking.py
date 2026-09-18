@@ -1539,6 +1539,7 @@ class BookingViewSet(
             data = build_weekly_report(
                 year=year,
                 week=week,
+                without_lta=self._report_without_lta(request),
                 allowed_ports=user_port_ids(request.user),
                 request=request,
             )
@@ -1600,6 +1601,7 @@ class BookingViewSet(
                 payload = build_weekly_report(
                     year=year,
                     week=week,
+                    without_lta=without_lta,
                     allowed_ports=allowed_ports,
                     request=request,
                 )

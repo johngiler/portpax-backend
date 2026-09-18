@@ -13,7 +13,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from apps.audit.models import BookingAuditEntry
-from apps.bookings.models import Booking
+from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.report_exports.booking_movements import (
     MIN_REPORT_YEAR,
     _classify_kinds,
@@ -21,7 +21,10 @@ from apps.bookings.services.report_exports.booking_movements import (
     _resolve_port_id,
     parse_movement_year,
 )
-from apps.bookings.services.report_exports.common import booking_pax
+from apps.bookings.services.report_exports.common import (
+    booking_pax,
+    scheduled_bookings_qs,
+)
 from apps.bookings.services.report_exports.report_theme import (
     NAVY,
     TEXT,
@@ -46,18 +49,6 @@ WEEKLY_METRICS: tuple[tuple[str, str], ...] = (
 )
 
 WEEKLY_KIND_KEYS = tuple(k for k, _ in WEEKLY_METRICS)
-
-# Ops short codes used in berthing papers / weekly spreadsheets.
-_PORT_ABBREV: dict[str, str] = {
-    "roatan": "ROA",
-    "puerto_plata": "POP",
-    "cabo_rojo": "CBR",
-    "samana": "SAM",
-    "la_paz": "PAZ",
-    "melilla": "MEL",
-    "ensenada": "ENS",
-    "motril": "MTR",
-}
 
 _WEEK_FILL = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
 _PORT_FILL = PatternFill(start_color=NAVY, end_color=NAVY, fill_type="solid")
@@ -116,18 +107,14 @@ def parse_weekly_year(raw: str | None) -> int:
 
 
 def port_report_abbrev(port: Port | None) -> str:
+    """Legacy short code helper (exports no longer show abbrevs in labels)."""
     if port is None:
         return ""
-    code = (port.code or "").strip().lower()
-    if code in _PORT_ABBREV:
-        return _PORT_ABBREV[code]
-    compact = code.replace("_", "").replace("-", "")
-    if len(compact) >= 3:
-        return compact[:3].upper()
-    name = (port.name or "").strip()
-    if len(name) >= 3:
-        return name[:3].upper()
-    return (code or "?").upper()[:3]
+    code = (port.code or "").strip().lower().replace("_", "").replace("-", "")
+    if len(code) >= 3:
+        return code[:3].upper()
+    name = (getattr(port, "name", None) or "").strip()
+    return (name[:3] or "?").upper()
 
 
 def _media_url(request, field) -> str | None:
@@ -142,6 +129,19 @@ def _media_url(request, field) -> str | None:
     return url
 
 
+def _projected_capacity(booking: Booking | None) -> int:
+    """Projected capacity for an arrival (vessel max, else planned_pax)."""
+    if booking is None:
+        return 0
+    vessel = getattr(booking, "vessel", None)
+    cap = getattr(vessel, "pax_capacity", None) if vessel is not None else None
+    if cap is not None:
+        return int(cap)
+    if booking.planned_pax is not None:
+        return int(booking.planned_pax)
+    return 0
+
+
 def _pax_for_kind(entry: BookingAuditEntry, kind: str, booking: Booking | None) -> int:
     """Signed PAX attributed to one weekly metric kind."""
     changes = entry.changes or {}
@@ -149,17 +149,23 @@ def _pax_for_kind(entry: BookingAuditEntry, kind: str, booking: Booking | None) 
         base = booking_pax(booking, pax_basis="planned") if booking else 0
         return -int(base)
     if kind == "REAL PAX":
-        if "actual_pax" in changes:
-            ch = changes.get("actual_pax") or {}
-            fr, to = ch.get("from"), ch.get("to")
-            if fr is not None or to is not None:
-                try:
-                    return int(to or 0) - int(fr or 0)
-                except (TypeError, ValueError):
-                    pass
+        # Beto: projected capacity − actual manifested PAX of the arrival.
         if booking is None:
             return 0
-        return int(booking_pax(booking, pax_basis="planned"))
+        projected = _projected_capacity(booking)
+        actual: int | None = None
+        if "actual_pax" in changes:
+            to = (changes.get("actual_pax") or {}).get("to")
+            if to is not None:
+                try:
+                    actual = int(to)
+                except (TypeError, ValueError):
+                    actual = None
+        if actual is None and booking.actual_pax is not None:
+            actual = int(booking.actual_pax)
+        if actual is None:
+            return 0
+        return projected - actual
     if kind in ("NEW BOOKING", "SHIP CHANGE"):
         if booking is None:
             return 0
@@ -167,10 +173,40 @@ def _pax_for_kind(entry: BookingAuditEntry, kind: str, booking: Booking | None) 
     return 0
 
 
+def _port_year_totals(
+    *,
+    call_years: list[int],
+    allowed: set[int] | None,
+    without_lta: bool,
+) -> dict[int, list[int]]:
+    """Full-year port PAX totals (not week movements) for each call year column."""
+    if not call_years:
+        return {}
+    date_from = date(call_years[0], 1, 1)
+    date_to = date(call_years[-1], 12, 31)
+    year_index = {y: i for i, y in enumerate(call_years)}
+    totals: dict[int, list[int]] = defaultdict(lambda: [0] * len(call_years))
+    qs = scheduled_bookings_qs(
+        date_from=date_from,
+        date_to=date_to,
+        allowed_ports=allowed,
+        without_lta=without_lta,
+    ).select_related("vessel")
+    for booking in qs.iterator(chunk_size=500):
+        cy = booking.call_date.year if booking.call_date else None
+        if cy is None or cy not in year_index:
+            continue
+        totals[booking.port_id][year_index[cy]] += booking_pax(
+            booking, pax_basis="planned"
+        )
+    return totals
+
+
 def build_weekly_report(
     *,
     year: int,
     week: int,
+    without_lta: bool = False,
     allowed_ports: set[int] | list[int] | None = None,
     request=None,
 ) -> dict[str, Any]:
@@ -178,8 +214,9 @@ def build_weekly_report(
     Ops activity in ISO week ``week`` of ``year``.
 
     Columns = call years ``year``…``year+3``.
-    Cells = signed PAX by movement kind (NEW / CANCEL / SHIP / PAX PROY·REAL).
-    Port header row = sum of the four metric rows.
+    Blue port row = full-year port PAX totals (all years in the window).
+    Metric rows = signed PAX movements registered that week.
+    PAX PROY / REAL = projected capacity − actual_pax for Real updates.
     """
     if year < MIN_REPORT_YEAR:
         raise ValueError(f"year debe ser >= {MIN_REPORT_YEAR}.")
@@ -233,6 +270,12 @@ def build_weekly_report(
         if not kinds:
             continue
         booking = bookings.get(entry.booking_id) if entry.booking_id else None
+        if (
+            without_lta
+            and booking is not None
+            and booking.status == BookingStatus.LTA
+        ):
+            continue
         port_id = _resolve_port_id(entry, booking)
         if port_id is None:
             continue
@@ -250,7 +293,13 @@ def build_weekly_report(
                 continue
             pax_map[port_id][kind][yi] += delta
 
-    port_ids = sorted(pax_map.keys())
+    port_year_totals = _port_year_totals(
+        call_years=call_years,
+        allowed=allowed,
+        without_lta=without_lta,
+    )
+
+    port_ids = sorted(set(pax_map.keys()) | set(port_year_totals.keys()))
     ports = {
         p.pk: p
         for p in Port.objects.filter(pk__in=port_ids).only(
@@ -268,18 +317,20 @@ def build_weekly_report(
     port_rows: list[dict[str, Any]] = []
     for port_id in port_ids:
         port = ports.get(port_id)
-        kind_map = pax_map[port_id]
+        kind_map = pax_map.get(port_id) or {
+            k: [0] * len(call_years) for k in WEEKLY_KIND_KEYS
+        }
         metrics: list[dict[str, Any]] = []
-        totals = [0] * len(call_years)
-        any_value = False
+        any_movement = False
         for key, label in WEEKLY_METRICS:
             values = list(kind_map.get(key) or [0] * len(call_years))
             if any(values):
-                any_value = True
+                any_movement = True
             metrics.append({"key": key, "label": label, "values": values})
-            for i, v in enumerate(values):
-                totals[i] += v
-        if not any_value and not any(totals):
+        totals = list(
+            port_year_totals.get(port_id) or [0] * len(call_years)
+        )
+        if not any_movement and not any(totals):
             continue
         port_rows.append(
             {
@@ -291,6 +342,14 @@ def build_weekly_report(
             }
         )
 
+    note = (
+        "Fila azul = totales PAX del puerto por año de escala (no la suma de la semana). "
+        "Filas inferiores = movimientos registrados en la semana ISO. "
+        "PAX PROY / REAL = capacidad proyectada − PAX real del arribo."
+    )
+    if without_lta:
+        note = f"{note} Sin LTA."
+
     return {
         "kind": "weekly_report",
         "title": "Reporte Semanal",
@@ -299,14 +358,11 @@ def build_weekly_report(
         "week": week,
         "week_start": week_start.isoformat(),
         "week_end": week_end.isoformat(),
+        "without_lta": without_lta,
         "call_years": call_years,
         "metric_labels": [label for _, label in WEEKLY_METRICS],
         "ports": port_rows,
-        "note": (
-            "Movimientos de la semana ISO (registro). "
-            "Columnas = año de escala. "
-            "Valores = PAX con signo por tipo (alta, cancelación, cambio de barco, PAX proy/real)."
-        ),
+        "note": note,
     }
 
 
@@ -387,14 +443,13 @@ def build_weekly_report_xlsx(payload: dict[str, Any]) -> bytes:
         cell.border = BORDER_NONE
         totals = list(port.get("totals") or [])
         for i, y in enumerate(call_years):
-            val = totals[i] if i < len(totals) else 0
-            c = ws.cell(row=row, column=2 + i, value=_fmt_num(int(val or 0)))
+            val = int(totals[i] if i < len(totals) else 0)
+            c = ws.cell(row=row, column=2 + i, value=val)
             c.fill = _PORT_FILL
             c.font = _PORT_FONT
             c.alignment = ALIGN_CENTER
             c.border = BORDER_NONE
-            if isinstance(c.value, int):
-                c.number_format = "#,##0"
+            c.number_format = "#,##0"
         row += 1
         for metric in port.get("metrics") or []:
             mcell = ws.cell(

@@ -521,6 +521,9 @@ def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
             return ""
         return f"{n:,}"
 
+    def _total_cell(n: int) -> str:
+        return f"{n:,}"
+
     header = ["PUERTO", *[str(y) for y in call_years]]
     data: list[list[Any]] = [header]
     port_row_idxs: list[int] = []
@@ -534,7 +537,7 @@ def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
             [
                 label,
                 *[
-                    _cell(int(totals[i] if i < len(totals) else 0))
+                    _total_cell(int(totals[i] if i < len(totals) else 0))
                     for i in range(len(call_years))
                 ],
             ]
