@@ -4,6 +4,13 @@ from apps.bookings.services.report_exports.availability import (
     build_availability_chart_xlsx,
     build_availability_data,
 )
+from apps.bookings.services.report_exports.csv_reports import (
+    build_booking_movements_csv,
+    build_port_carrier_matrix_csv,
+    build_port_trends_csv,
+    build_ports_totals_matrix_csv,
+    build_solicitudes_port_csv,
+)
 from apps.bookings.services.report_exports.matrix_reports import (
     build_port_carrier_matrix,
     build_port_carrier_matrix_xlsx,
@@ -21,6 +28,15 @@ from apps.bookings.services.report_exports.booking_movements import (
     build_booking_movements_xlsx,
     parse_movement_year,
 )
+from apps.bookings.services.report_exports.pdf_reports import (
+    build_availability_chart_pdf,
+    build_booking_movements_pdf,
+    build_port_carrier_matrix_pdf,
+    build_port_trends_pdf,
+    build_ports_totals_matrix_pdf,
+    build_solicitudes_port_pdf,
+    build_weekly_report_pdf,
+)
 from apps.bookings.services.report_exports.solicitudes_port import (
     build_solicitudes_port_report,
     build_solicitudes_port_xlsx,
@@ -28,28 +44,54 @@ from apps.bookings.services.report_exports.solicitudes_port import (
     parse_report_years,
     solicitudes_port_filename,
 )
+from apps.bookings.services.report_exports.weekly_report import (
+    build_weekly_report,
+    build_weekly_report_csv,
+    build_weekly_report_xlsx,
+    parse_movement_week,
+    parse_weekly_year,
+    weekly_report_filename,
+)
 
 __all__ = [
     "availability_filename",
     "booking_movements_filename",
     "build_availability_chart_csv",
+    "build_availability_chart_pdf",
     "build_availability_chart_xlsx",
     "build_availability_data",
+    "build_booking_movements_csv",
+    "build_booking_movements_pdf",
     "build_booking_movements_report",
     "build_booking_movements_xlsx",
     "build_port_carrier_matrix",
+    "build_port_carrier_matrix_csv",
+    "build_port_carrier_matrix_pdf",
     "build_port_carrier_matrix_xlsx",
     "build_port_trends",
+    "build_port_trends_csv",
+    "build_port_trends_pdf",
     "build_port_trends_xlsx",
     "build_ports_totals_matrix",
+    "build_ports_totals_matrix_csv",
+    "build_ports_totals_matrix_pdf",
     "build_ports_totals_matrix_xlsx",
+    "build_solicitudes_port_csv",
+    "build_solicitudes_port_pdf",
     "build_solicitudes_port_report",
     "build_solicitudes_port_xlsx",
+    "build_weekly_report",
+    "build_weekly_report_csv",
+    "build_weekly_report_pdf",
+    "build_weekly_report_xlsx",
     "parse_id_list",
+    "parse_movement_week",
     "parse_movement_year",
     "parse_report_years",
+    "parse_weekly_year",
     "port_carrier_matrix_filename",
     "port_trends_filename",
     "ports_totals_matrix_filename",
     "solicitudes_port_filename",
+    "weekly_report_filename",
 ]

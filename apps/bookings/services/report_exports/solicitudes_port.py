@@ -8,7 +8,6 @@ from io import BytesIO
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.styles import Border, Font, Side
 from openpyxl.utils import get_column_letter
 
 from apps.bookings.models import BookingTag
@@ -23,6 +22,7 @@ from apps.bookings.services.report_exports.xlsx_style import (
     ALIGN_CENTER,
     ALIGN_LEFT,
     ALIGN_RIGHT,
+    BORDER_ALL,
     FILL_ALT,
     FILL_HEADER,
     FILL_TITLE,
@@ -30,18 +30,15 @@ from apps.bookings.services.report_exports.xlsx_style import (
     FONT_DATA,
     FONT_HEADER,
     FONT_NOTE,
-    FONT_TITLE,
     FONT_TOTAL,
-    NAVY,
+    prepare_report_sheet,
     style_cell,
-    write_title_row,
+    write_column_header_band,
+    write_report_banner,
 )
 from apps.catalogs.models import Port, ShippingLine
 
 MIN_REPORT_YEAR = 2025
-
-_BLACK = Side(style="thin", color="000000")
-BORDER_BLACK = Border(left=_BLACK, right=_BLACK, top=_BLACK, bottom=_BLACK)
 
 
 def _media_url(request, field) -> str | None:
@@ -108,8 +105,7 @@ def _format_arrival(d: date) -> str:
         "Sep",
         "Oct",
         "Nov",
-        "Dec",
-    )
+        "Dec")
     return f"{d.day:02d}-{months[d.month - 1]}-{d.year % 100:02d}"
 
 
@@ -127,8 +123,7 @@ def _year_pax_totals(
     qs,
     *,
     years: list[int],
-    pax_basis: str,
-) -> list[dict[str, Any]]:
+    pax_basis: str) -> list[dict[str, Any]]:
     buckets: dict[int, int] = {y: 0 for y in years}
     for booking in qs.iterator(chunk_size=500):
         year = booking.call_date.year if booking.call_date else None
@@ -150,8 +145,7 @@ def build_solicitudes_port_report(
     without_lta: bool = False,
     pax_basis: str = "planned",
     allowed_ports: set[int] | list[int] | None = None,
-    request=None,
-) -> dict[str, Any]:
+    request=None) -> dict[str, Any]:
     """
     Left: occupancy rows per selected calendar year (optional tag/line/group filters).
     Right: mismas filas filtradas + totales del puerto (sin naviera) + totales carrier.
@@ -213,8 +207,7 @@ def build_solicitudes_port_report(
         date_to=date_to,
         port_id=port_id,
         allowed_ports=set(allowed_ports) if allowed_ports is not None else None,
-        without_lta=without_lta,
-    )
+        without_lta=without_lta)
 
     # Port summary: full occupancy set at port (no tag / naviera filter).
     port_qs = scheduled_bookings_qs(**base_kwargs).select_related("vessel")
@@ -331,64 +324,44 @@ def build_solicitudes_port_report(
     }
 
 
-def solicitudes_port_filename(port_code: str, date_from: date, date_to: date) -> str:
+def solicitudes_port_filename(
+    port_code: str,
+    date_from: date,
+    date_to: date,
+    ext: str = "xlsx",
+) -> str:
     _ = (port_code, date_from, date_to)
-    return "Resumen de movimientos.xlsx"
+    from apps.bookings.services.report_exports.filenames import report_download_filename
+
+    return report_download_filename("solicitudes_port", ext)
 
 
 def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Resumen"
+    prepare_report_sheet(ws)
 
     title = str(payload.get("title") or "RESUMEN")
-    subtitle = str(payload.get("subtitle") or "")
-    write_title_row(ws, 1, title, 6)
-    if subtitle:
-        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=6)
-        cell = ws.cell(row=2, column=1, value=subtitle)
-        style_cell(
-            cell,
-            font=Font(name="Calibri", size=12, bold=True, color=NAVY),
-            fill=FILL_TITLE,
-            alignment=ALIGN_LEFT,
-            border=None,
-        )
-        row = 4
-    else:
-        row = 3
+    subtitle = str(payload.get("subtitle") or "").strip() or None
+    row = write_report_banner(
+        ws, 1, title=title, subtitle=subtitle, col_span=9
+    )
 
     left_start = row
 
-    # Left year blocks (cols 1-6)
     for block in payload.get("year_blocks") or []:
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
         cell = ws.cell(row=row, column=1, value=block.get("title") or "")
-        style_cell(
-            cell,
-            font=FONT_TOTAL,
-            alignment=ALIGN_LEFT,
-            border=None,
-        )
+        style_cell(cell, font=FONT_TOTAL, alignment=ALIGN_LEFT)
         row += 1
 
-        headers = (
-            "Ship",
-            "Port",
-            "Arrival",
-            "Hora llegada",
-            "Hora salida",
-            "Pax",
+        block_start = row
+        write_column_header_band(
+            ws,
+            row,
+            ["Ship", "Port", "Arrival", "Hora llegada", "Hora salida", "Pax"],
         )
-        for col, text in enumerate(headers, start=1):
-            cell = ws.cell(row=row, column=col, value=text)
-            style_cell(
-                cell,
-                font=FONT_HEADER,
-                fill=FILL_HEADER,
-                alignment=ALIGN_CENTER if col > 2 else ALIGN_LEFT,
-                border=BORDER_BLACK,
-            )
         row += 1
 
         for item in block.get("rows") or []:
@@ -410,29 +383,32 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
                     font=FONT_DATA,
                     fill=FILL_ALT,
                     alignment=align,
-                    border=BORDER_BLACK,
+                    border=BORDER_ALL,
                     number_format="#,##0" if col == 6 else None,
                 )
             row += 1
 
         for col in range(1, 6):
-            cell = ws.cell(row=row, column=col, value="")
-            style_cell(cell, border=None)
+            style_cell(
+                ws.cell(row=row, column=col, value=""),
+                border=BORDER_ALL,
+            )
         cell = ws.cell(row=row, column=6, value=int(block.get("pax_total") or 0))
         style_cell(
             cell,
             font=FONT_TOTAL,
             fill=FILL_TOTAL,
             alignment=ALIGN_RIGHT,
-            border=BORDER_BLACK,
+            border=BORDER_ALL,
             number_format="#,##0",
         )
+        _ = block_start
         row += 2
 
     left_end = row
 
-    # Right summary card: port / carrier / Año | Naviera vs total (pct)
     right_row = left_start
+    right_start = right_row
     port_name = str(payload.get("port_name") or "Puerto").strip()
     carrier_label = str(payload.get("shipping_line_label") or "").strip()
     carrier_rows = list(
@@ -452,93 +428,49 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
     summary_years = sorted(set(carrier_by_year) | set(port_by_year_map))
     if carrier_label and summary_years:
         for col in (8, 9):
-            cell = ws.cell(row=right_row, column=col, value="")
-            style_cell(cell, fill=FILL_TITLE, border=BORDER_BLACK)
+            style_cell(ws.cell(row=right_row, column=col, value=""), fill=FILL_TITLE)
         cell = ws.cell(row=right_row, column=8, value=port_name)
         style_cell(
-            cell,
-            font=FONT_TOTAL,
-            fill=FILL_TITLE,
-            alignment=ALIGN_LEFT,
-            border=BORDER_BLACK,
+            cell, font=FONT_TOTAL, fill=FILL_TITLE, alignment=ALIGN_LEFT
         )
         ws.merge_cells(
-            start_row=right_row,
-            start_column=8,
-            end_row=right_row,
-            end_column=9,
+            start_row=right_row, start_column=8, end_row=right_row, end_column=9
         )
         right_row += 1
 
         for col in (8, 9):
-            cell = ws.cell(row=right_row, column=col, value="")
-            style_cell(cell, fill=FILL_TITLE, border=BORDER_BLACK)
+            style_cell(ws.cell(row=right_row, column=col, value=""), fill=FILL_TITLE)
         cell = ws.cell(row=right_row, column=8, value=carrier_label)
         style_cell(
-            cell,
-            font=FONT_DATA,
-            fill=FILL_TITLE,
-            alignment=ALIGN_LEFT,
-            border=BORDER_BLACK,
+            cell, font=FONT_DATA, fill=FILL_TITLE, alignment=ALIGN_LEFT
         )
         ws.merge_cells(
-            start_row=right_row,
-            start_column=8,
-            end_row=right_row,
-            end_column=9,
+            start_row=right_row, start_column=8, end_row=right_row, end_column=9
         )
         right_row += 1
 
         cell = ws.cell(row=right_row, column=8, value="Año")
         style_cell(
-            cell,
-            font=FONT_HEADER,
-            fill=FILL_HEADER,
-            alignment=ALIGN_CENTER,
-            border=BORDER_BLACK,
+            cell, font=FONT_HEADER, fill=FILL_HEADER, alignment=ALIGN_CENTER
         )
         line_ids = payload.get("shipping_line_ids") or []
-        compare_header = (
-            "Naviera vs total" if line_ids else "Grupo vs total"
-        )
+        compare_header = "Naviera vs total" if line_ids else "Grupo vs total"
         compare_note = (
             "Naviera seleccionada vs total del puerto"
             if line_ids
             else "Grupo seleccionado vs total del puerto"
         )
-        cell = ws.cell(
-            row=right_row,
-            column=9,
-            value=compare_header,
-        )
+        cell = ws.cell(row=right_row, column=9, value=compare_header)
         style_cell(
-            cell,
-            font=FONT_HEADER,
-            fill=FILL_HEADER,
-            alignment=ALIGN_CENTER,
-            border=BORDER_BLACK,
+            cell, font=FONT_HEADER, fill=FILL_HEADER, alignment=ALIGN_CENTER
         )
         right_row += 1
 
-        # Help note (UI tooltip equivalent)
         ws.merge_cells(
-            start_row=right_row,
-            start_column=8,
-            end_row=right_row,
-            end_column=9,
+            start_row=right_row, start_column=8, end_row=right_row, end_column=9
         )
-        cell = ws.cell(
-            row=right_row,
-            column=8,
-            value=compare_note,
-        )
-        style_cell(
-            cell,
-            font=FONT_NOTE,
-            fill=FILL_ALT,
-            alignment=ALIGN_LEFT,
-            border=BORDER_BLACK,
-        )
+        cell = ws.cell(row=right_row, column=8, value=compare_note)
+        style_cell(cell, font=FONT_NOTE, fill=FILL_ALT, alignment=ALIGN_LEFT)
         right_row += 1
 
         carrier_total = 0
@@ -554,7 +486,7 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
                 font=FONT_DATA,
                 fill=FILL_ALT,
                 alignment=ALIGN_CENTER,
-                border=BORDER_BLACK,
+                border=BORDER_ALL,
             )
             cell = ws.cell(
                 row=right_row,
@@ -569,7 +501,7 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
                 font=FONT_DATA,
                 fill=FILL_ALT,
                 alignment=ALIGN_RIGHT,
-                border=BORDER_BLACK,
+                border=BORDER_ALL,
             )
             right_row += 1
 
@@ -579,7 +511,7 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
             font=FONT_TOTAL,
             fill=FILL_TOTAL,
             alignment=ALIGN_LEFT,
-            border=BORDER_BLACK,
+            border=BORDER_ALL,
         )
         cell = ws.cell(
             row=right_row,
@@ -594,7 +526,7 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
             font=FONT_TOTAL,
             fill=FILL_TOTAL,
             alignment=ALIGN_RIGHT,
-            border=BORDER_BLACK,
+            border=BORDER_ALL,
         )
 
     widths = [22, 16, 12, 12, 12, 10, 3, 14, 28]

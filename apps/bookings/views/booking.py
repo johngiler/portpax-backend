@@ -60,25 +60,43 @@ from apps.bookings.services.report_exports import (
     availability_filename,
     booking_movements_filename,
     build_availability_chart_csv,
+    build_availability_chart_pdf,
     build_availability_chart_xlsx,
     build_availability_data,
+    build_booking_movements_csv,
+    build_booking_movements_pdf,
     build_booking_movements_report,
     build_booking_movements_xlsx,
     build_port_carrier_matrix,
+    build_port_carrier_matrix_csv,
+    build_port_carrier_matrix_pdf,
     build_port_carrier_matrix_xlsx,
     build_port_trends,
+    build_port_trends_csv,
+    build_port_trends_pdf,
     build_port_trends_xlsx,
     build_ports_totals_matrix,
+    build_ports_totals_matrix_csv,
+    build_ports_totals_matrix_pdf,
     build_ports_totals_matrix_xlsx,
+    build_solicitudes_port_csv,
+    build_solicitudes_port_pdf,
     build_solicitudes_port_report,
     build_solicitudes_port_xlsx,
+    build_weekly_report,
+    build_weekly_report_csv,
+    build_weekly_report_pdf,
+    build_weekly_report_xlsx,
     parse_id_list,
+    parse_movement_week,
     parse_movement_year,
     parse_report_years,
+    parse_weekly_year,
     port_carrier_matrix_filename,
     port_trends_filename,
     ports_totals_matrix_filename,
     solicitudes_port_filename,
+    weekly_report_filename,
 )
 from apps.catalogs.models import Port
 from apps.bookings.services.validation import suggest_positions
@@ -1510,6 +1528,24 @@ class BookingViewSet(
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(data)
 
+    @action(detail=False, methods=["get"], url_path="report-weekly")
+    def report_weekly(self, request):
+        year = parse_weekly_year(
+            request.query_params.get("year")
+            or request.query_params.get("years")
+        )
+        week = parse_movement_week(request.query_params.get("week"), year=year)
+        try:
+            data = build_weekly_report(
+                year=year,
+                week=week,
+                allowed_ports=user_port_ids(request.user),
+                request=request,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(data)
+
     @action(detail=False, methods=["get"], url_path="report-export")
     def report_export(self, request):
         """Structured operational exports (Availability + matrix reports)."""
@@ -1521,40 +1557,71 @@ class BookingViewSet(
             "port_trends",
             "solicitudes_port",
             "booking_movements",
+            "weekly_report",
         }
         if report_type not in allowed:
             return Response(
                 {
                     "detail": (
                         "report_type debe ser availability, ports_totals_matrix, "
-                        "port_carrier_matrix, port_trends, solicitudes_port "
-                        "o booking_movements."
+                        "port_carrier_matrix, port_trends, solicitudes_port, "
+                        "booking_movements o weekly_report."
                     ),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         fmt = (request.query_params.get("export_format") or "xlsx").lower()
-        if fmt not in ("xlsx", "csv"):
+        if fmt not in ("xlsx", "csv", "pdf"):
             return Response(
-                {"detail": "export_format debe ser xlsx o csv."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        matrix_types = {
-            "ports_totals_matrix",
-            "port_carrier_matrix",
-            "port_trends",
-            "solicitudes_port",
-            "booking_movements",
-        }
-        if report_type in matrix_types and fmt != "xlsx":
-            return Response(
-                {"detail": "Los reportes matriciales solo se exportan a Excel (.xlsx)."},
+                {"detail": "export_format debe ser xlsx, csv o pdf."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        content_types = {
+            "xlsx": (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+            "csv": "text/csv; charset=utf-8",
+            "pdf": "application/pdf",
+        }
+
         without_lta = self._report_without_lta(request)
         pax_basis = self._report_pax_basis(request)
+
+        if report_type == "weekly_report":
+            year = parse_weekly_year(
+                request.query_params.get("year")
+                or request.query_params.get("years")
+            )
+            week = parse_movement_week(request.query_params.get("week"), year=year)
+            try:
+                allowed_ports = user_port_ids(request.user)
+                payload = build_weekly_report(
+                    year=year,
+                    week=week,
+                    allowed_ports=allowed_ports,
+                    request=request,
+                )
+                if fmt == "csv":
+                    content = build_weekly_report_csv(payload)
+                elif fmt == "pdf":
+                    content = build_weekly_report_pdf(payload)
+                else:
+                    content = build_weekly_report_xlsx(payload)
+                filename = weekly_report_filename(year, week, ext=fmt)
+            except ValueError as exc:
+                return Response(
+                    {"detail": str(exc)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            response = HttpResponse(content, content_type=content_types[fmt])
+            ascii_name = filename.encode("ascii", "replace").decode("ascii")
+            response["Content-Disposition"] = (
+                f'attachment; filename="{ascii_name}"; '
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+            return response
 
         if report_type == "booking_movements":
             year = parse_movement_year(
@@ -1562,23 +1629,28 @@ class BookingViewSet(
                 or request.query_params.get("years")
             )
             try:
-                payload = build_booking_movements_report(
-                    year=year,
-                    allowed_ports=user_port_ids(request.user),
-                )
-                content = build_booking_movements_xlsx(payload)
-                filename = booking_movements_filename(year)
+                allowed = user_port_ids(request.user)
+                if fmt == "csv":
+                    content = build_booking_movements_csv(
+                        year=year, allowed_ports=allowed
+                    )
+                elif fmt == "pdf":
+                    content = build_booking_movements_pdf(
+                        year=year, allowed_ports=allowed
+                    )
+                else:
+                    payload = build_booking_movements_report(
+                        year=year,
+                        allowed_ports=allowed,
+                    )
+                    content = build_booking_movements_xlsx(payload)
+                filename = booking_movements_filename(year, ext=fmt)
             except ValueError as exc:
                 return Response(
                     {"detail": str(exc)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            response = HttpResponse(
-                content,
-                content_type=(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                ),
-            )
+            response = HttpResponse(content, content_type=content_types[fmt])
             ascii_name = filename.encode("ascii", "replace").decode("ascii")
             response["Content-Disposition"] = (
                 f'attachment; filename="{ascii_name}"; '
@@ -1613,9 +1685,6 @@ class BookingViewSet(
             self._ensure_port_access(port_id)
 
         allowed_ports = user_port_ids(request.user)
-        xlsx_type = (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
 
         try:
             if report_type == "availability":
@@ -1624,12 +1693,7 @@ class BookingViewSet(
                         {"detail": "port es obligatorio para Availability Chart."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                builder = (
-                    build_availability_chart_csv
-                    if fmt == "csv"
-                    else build_availability_chart_xlsx
-                )
-                content = builder(
+                common = dict(
                     port_id=port_id,
                     date_from=date_from,
                     date_to=date_to,
@@ -1640,24 +1704,36 @@ class BookingViewSet(
                     position_id=position_id,
                     statuses=status_values,
                 )
+                if fmt == "csv":
+                    content = build_availability_chart_csv(**common)
+                elif fmt == "pdf":
+                    content = build_availability_chart_pdf(**common)
+                else:
+                    content = build_availability_chart_xlsx(**common)
                 port = Port.objects.get(pk=port_id)
                 filename = availability_filename(port.code, date_from, date_to, fmt)
             elif report_type == "ports_totals_matrix":
-                content = build_ports_totals_matrix_xlsx(
+                common = dict(
                     date_from=date_from,
                     date_to=date_to,
                     without_lta=without_lta,
                     pax_basis=pax_basis,
                     allowed_ports=allowed_ports,
                 )
-                filename = ports_totals_matrix_filename(date_from, date_to)
+                if fmt == "csv":
+                    content = build_ports_totals_matrix_csv(**common)
+                elif fmt == "pdf":
+                    content = build_ports_totals_matrix_pdf(**common)
+                else:
+                    content = build_ports_totals_matrix_xlsx(**common)
+                filename = ports_totals_matrix_filename(date_from, date_to, ext=fmt)
             elif report_type == "port_carrier_matrix":
                 if not port_id:
                     return Response(
                         {"detail": "port es obligatorio."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                content = build_port_carrier_matrix_xlsx(
+                common = dict(
                     date_from=date_from,
                     date_to=date_to,
                     port_id=port_id,
@@ -1665,9 +1741,15 @@ class BookingViewSet(
                     pax_basis=pax_basis,
                     allowed_ports=allowed_ports,
                 )
+                if fmt == "csv":
+                    content = build_port_carrier_matrix_csv(**common)
+                elif fmt == "pdf":
+                    content = build_port_carrier_matrix_pdf(**common)
+                else:
+                    content = build_port_carrier_matrix_xlsx(**common)
                 port = Port.objects.get(pk=port_id)
                 filename = port_carrier_matrix_filename(
-                    port.code, date_from, date_to
+                    port.code, date_from, date_to, ext=fmt
                 )
             elif report_type == "port_trends":
                 if not port_id:
@@ -1675,7 +1757,7 @@ class BookingViewSet(
                         {"detail": "port es obligatorio."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                content = build_port_trends_xlsx(
+                common = dict(
                     date_from=date_from,
                     date_to=date_to,
                     port_id=port_id,
@@ -1683,8 +1765,16 @@ class BookingViewSet(
                     pax_basis=pax_basis,
                     allowed_ports=allowed_ports,
                 )
+                if fmt == "csv":
+                    content = build_port_trends_csv(**common)
+                elif fmt == "pdf":
+                    content = build_port_trends_pdf(**common)
+                else:
+                    content = build_port_trends_xlsx(**common)
                 port = Port.objects.get(pk=port_id)
-                filename = port_trends_filename(port.code, date_from, date_to)
+                filename = port_trends_filename(
+                    port.code, date_from, date_to, ext=fmt
+                )
             elif report_type == "solicitudes_port":
                 if not port_id:
                     return Response(
@@ -1729,9 +1819,16 @@ class BookingViewSet(
                     allowed_ports=allowed_ports,
                     request=request,
                 )
-                content = build_solicitudes_port_xlsx(payload)
+                if fmt == "csv":
+                    content = build_solicitudes_port_csv(payload)
+                elif fmt == "pdf":
+                    content = build_solicitudes_port_pdf(payload)
+                else:
+                    content = build_solicitudes_port_xlsx(payload)
                 port = Port.objects.get(pk=port_id)
-                filename = solicitudes_port_filename(port.code, date_from, date_to)
+                filename = solicitudes_port_filename(
+                    port.code, date_from, date_to, ext=fmt
+                )
             else:
                 return Response(
                     {"detail": "report_type no soportado."},
@@ -1745,10 +1842,7 @@ class BookingViewSet(
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        content_type = (
-            "text/csv; charset=utf-8" if fmt == "csv" else xlsx_type
-        )
-        response = HttpResponse(content, content_type=content_type)
+        response = HttpResponse(content, content_type=content_types[fmt])
         ascii_name = filename.encode("ascii", "replace").decode("ascii")
         response["Content-Disposition"] = (
             f'attachment; filename="{ascii_name}"; '

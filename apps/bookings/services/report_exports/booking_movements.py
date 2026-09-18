@@ -9,7 +9,6 @@ from typing import Any
 
 from django.utils import timezone
 from openpyxl import Workbook
-from openpyxl.styles import Border, Font, Side
 from openpyxl.utils import get_column_letter
 
 from apps.audit.models import BookingAuditEntry
@@ -19,17 +18,16 @@ from apps.bookings.services.report_exports.xlsx_style import (
     ALIGN_CENTER,
     ALIGN_LEFT,
     ALIGN_RIGHT,
+    BORDER_ALL,
     FILL_ALT,
-    FILL_HEADER,
-    FILL_TITLE,
     FILL_TOTAL,
     FONT_DATA,
-    FONT_HEADER,
     FONT_NOTE,
     FONT_TOTAL,
-    NAVY,
+    prepare_report_sheet,
     style_cell,
-    write_title_row,
+    write_column_header_band,
+    write_report_banner,
 )
 from apps.bookings.services.validation.legend_labels import port_legend_label
 from apps.catalogs.models import Port
@@ -70,14 +68,13 @@ _SKIP_ACTIONS = frozenset(
     }
 )
 
-_BLACK = Side(style="thin", color="000000")
-BORDER_BLACK = Border(left=_BLACK, right=_BLACK, top=_BLACK, bottom=_BLACK)
-
 
 def parse_movement_year(raw: str | None) -> int:
-    """Single ops year for the report (min 2025)."""
-    now_y = timezone.localdate().year
-    default = max(MIN_REPORT_YEAR, min(now_y, now_y + 4))
+    """Ops/audit year for movements reports: MIN_REPORT_YEAR … current (no future)."""
+    cal_y = timezone.localdate().year
+    iso_y = int(timezone.localdate().isocalendar().year)
+    max_y = max(cal_y, iso_y)
+    default = max(MIN_REPORT_YEAR, min(cal_y, max_y))
     if raw is None or str(raw).strip() == "":
         return default
     try:
@@ -86,6 +83,8 @@ def parse_movement_year(raw: str | None) -> int:
         return default
     if year < MIN_REPORT_YEAR:
         return MIN_REPORT_YEAR
+    if year > max_y:
+        return max_y
     return year
 
 
@@ -354,36 +353,18 @@ def build_booking_movements_report(
     }
 
 
-def booking_movements_filename(year: int) -> str:
+def booking_movements_filename(year: int, ext: str = "xlsx") -> str:
     _ = year
-    return "Movimientos de bookings.xlsx"
+    from apps.bookings.services.report_exports.filenames import report_download_filename
+
+    return report_download_filename("booking_movements", ext)
 
 
-def _write_matrix_header(ws, row: int, col_span_start: int = 1) -> None:
-    cell = ws.cell(row=row, column=1, value="")
-    style_cell(
-        cell,
-        font=FONT_HEADER,
-        fill=FILL_HEADER,
-        alignment=ALIGN_LEFT,
-        border=BORDER_BLACK,
-    )
-    for i, label in enumerate(MONTH_LABELS_ES, start=2):
-        cell = ws.cell(row=row, column=i, value=label)
-        style_cell(
-            cell,
-            font=FONT_HEADER,
-            fill=FILL_HEADER,
-            alignment=ALIGN_CENTER,
-            border=BORDER_BLACK,
-        )
-    cell = ws.cell(row=row, column=14, value="Total general")
-    style_cell(
-        cell,
-        font=FONT_HEADER,
-        fill=FILL_HEADER,
-        alignment=ALIGN_CENTER,
-        border=BORDER_BLACK,
+def _write_matrix_header(ws, row: int) -> None:
+    write_column_header_band(
+        ws,
+        row,
+        ["", *MONTH_LABELS_ES, "Total general"],
     )
 
 
@@ -400,13 +381,7 @@ def _write_data_row(
     font = FONT_TOTAL if bold else FONT_DATA
     row_fill = fill or FILL_ALT
     cell = ws.cell(row=row, column=1, value=label)
-    style_cell(
-        cell,
-        font=font,
-        fill=row_fill,
-        alignment=ALIGN_LEFT,
-        border=BORDER_BLACK,
-    )
+    style_cell(cell, font=font, fill=row_fill, alignment=ALIGN_LEFT, border=BORDER_ALL)
     for i, value in enumerate(months, start=2):
         cell = ws.cell(row=row, column=i, value=value if value else "")
         style_cell(
@@ -414,7 +389,7 @@ def _write_data_row(
             font=font,
             fill=row_fill,
             alignment=ALIGN_RIGHT,
-            border=BORDER_BLACK,
+            border=BORDER_ALL,
             number_format="#,##0",
         )
     cell = ws.cell(row=row, column=14, value=total if total else "")
@@ -423,14 +398,14 @@ def _write_data_row(
         font=font,
         fill=FILL_TOTAL if bold else row_fill,
         alignment=ALIGN_RIGHT,
-        border=BORDER_BLACK,
+        border=BORDER_ALL,
         number_format="#,##0",
     )
 
 
 def _write_pct_row(ws, row: int, pcts: list[int]) -> None:
     cell = ws.cell(row=row, column=1, value="")
-    style_cell(cell, font=FONT_NOTE, fill=FILL_ALT, border=BORDER_BLACK)
+    style_cell(cell, font=FONT_NOTE, fill=FILL_ALT, border=BORDER_ALL)
     for i, pct in enumerate(pcts, start=2):
         cell = ws.cell(row=row, column=i, value=f"{pct}%" if pct else "")
         style_cell(
@@ -438,38 +413,33 @@ def _write_pct_row(ws, row: int, pcts: list[int]) -> None:
             font=FONT_NOTE,
             fill=FILL_ALT,
             alignment=ALIGN_CENTER,
-            border=BORDER_BLACK,
+            border=BORDER_ALL,
         )
     cell = ws.cell(row=row, column=14, value="")
-    style_cell(cell, font=FONT_NOTE, fill=FILL_ALT, border=BORDER_BLACK)
+    style_cell(cell, font=FONT_NOTE, fill=FILL_ALT, border=BORDER_ALL)
 
 
 def build_booking_movements_xlsx(payload: dict[str, Any]) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Movimientos"
+    prepare_report_sheet(ws)
 
     year = int(payload.get("year") or 0)
-    write_title_row(ws, 1, str(payload.get("title") or "Movimientos de bookings"), 14)
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=14)
-    cell = ws.cell(row=2, column=1, value=f"Año {year}" if year else "")
-    style_cell(
-        cell,
-        font=Font(name="Calibri", size=12, bold=True, color=NAVY),
-        fill=FILL_TITLE,
-        alignment=ALIGN_LEFT,
-        border=None,
-    )
-    note = payload.get("note") or ""
+    note = str(payload.get("note") or "").strip()
+    subtitle_parts = [f"Año {year}"] if year else []
     if note:
-        ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=14)
-        cell = ws.cell(row=3, column=1, value=note)
-        style_cell(cell, font=FONT_NOTE, alignment=ALIGN_LEFT, border=None)
-        row = 5
-    else:
-        row = 4
+        subtitle_parts.append(note)
+    row = write_report_banner(
+        ws,
+        1,
+        title=str(payload.get("title") or "Movimientos de bookings"),
+        subtitle=" · ".join(subtitle_parts) or None,
+        col_span=14,
+    )
 
     # Block A
+    block_a_start = row
     _write_matrix_header(ws, row)
     row += 1
     for item in payload.get("type_rows") or []:
@@ -495,13 +465,14 @@ def build_booking_movements_xlsx(payload: dict[str, Any]) -> bytes:
     row += 1
     cell = ws.cell(
         row=row,
-        column=16,
+        column=1,
         value=f"Promedio por mes: {int(payload.get('type_avg_per_month') or 0):,}",
     )
-    style_cell(cell, font=FONT_TOTAL, alignment=ALIGN_LEFT, border=None)
+    style_cell(cell, font=FONT_TOTAL, alignment=ALIGN_LEFT)
     row += 2
 
     # Block B
+    block_b_start = row
     _write_matrix_header(ws, row)
     row += 1
     for block in payload.get("port_blocks") or []:
@@ -538,15 +509,14 @@ def build_booking_movements_xlsx(payload: dict[str, Any]) -> bytes:
     row += 1
     cell = ws.cell(
         row=row,
-        column=16,
+        column=1,
         value=f"Promedio por mes: {int(payload.get('pax_avg_per_month') or 0):,}",
     )
-    style_cell(cell, font=FONT_TOTAL, alignment=ALIGN_LEFT, border=None)
+    style_cell(cell, font=FONT_TOTAL, alignment=ALIGN_LEFT)
 
     ws.column_dimensions["A"].width = 22
     for col in range(2, 15):
         ws.column_dimensions[get_column_letter(col)].width = 11
-    ws.column_dimensions["P"].width = 28
 
     buf = BytesIO()
     wb.save(buf)

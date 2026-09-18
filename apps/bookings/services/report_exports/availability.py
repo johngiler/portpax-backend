@@ -10,10 +10,12 @@ from typing import Any
 from django.core.files.storage import default_storage
 from django.db.models import Q
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
-from openpyxl.utils import get_column_letter
 
 from apps.bookings.services.report_exports.common import scheduled_bookings_qs
+from apps.bookings.services.report_exports.xlsx_style import (
+    autosize_columns,
+    write_report_table_block,
+)
 from apps.catalogs.models import Port, Position, PositionComponent
 from apps.catalogs.utils.position_code import position_short_code
 from apps.bookings.services.validation.conflict_display import (
@@ -814,19 +816,20 @@ def build_availability_chart_xlsx(
         status=status,
         statuses=statuses,
     )
+    port = Port.objects.get(pk=port_id)
     wb = Workbook()
     ws = wb.active
     ws.title = "Disponibilidad"
-    ws.append(header)
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center", wrap_text=True)
-    for row in rows:
-        ws.append(row)
-    widths = (28, 28, 24, 12, 10, 10, 14)
-    for idx, width in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(idx)].width = width
-    ws.freeze_panes = "A2"
+    write_report_table_block(
+        ws,
+        1,
+        title="Availability Chart",
+        subtitle=f"{port.name} · {date_from.isoformat()} → {date_to.isoformat()}",
+        headers=list(header),
+        rows=rows,
+    )
+    autosize_columns(ws, min_width=10, max_width=28)
+    ws.freeze_panes = "A4"
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -870,4 +873,7 @@ def availability_filename(
     date_to: date,
     ext: str = "xlsx",
 ) -> str:
-    return f"availability_{port_code}_{date_from.isoformat()}_{date_to.isoformat()}.{ext}"
+    _ = (port_code, date_from, date_to)
+    from apps.bookings.services.report_exports.filenames import report_download_filename
+
+    return report_download_filename("availability", ext)
