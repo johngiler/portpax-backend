@@ -2,6 +2,7 @@ from rest_framework import filters, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
 from apps.audit.services.record import record_shipping_line_audit
+from apps.bookings.services.booking.first_arrival import FIRST_ARRIVAL_STATUSES
 from apps.catalogs.models import Vessel
 from apps.catalogs.serializers import VesselSerializer
 from apps.catalogs.services.vessel_audit import (
@@ -88,4 +89,11 @@ class VesselViewSet(viewsets.ModelViewSet):
         )
         if group_id:
             qs = qs.filter(shipping_line__group_id=group_id)
+        without_arrivals = str(
+            self.request.query_params.get("without_arrivals") or ""
+        ).strip().lower()
+        if without_arrivals in {"1", "true", "yes", "si", "sí"}:
+            qs = qs.exclude(
+                bookings__status__in=FIRST_ARRIVAL_STATUSES
+            ).distinct()
         return qs

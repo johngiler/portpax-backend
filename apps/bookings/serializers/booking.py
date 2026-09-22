@@ -137,6 +137,9 @@ class BookingListSerializer(
             "confirmation_pdf_url",
             "tag_id",
             "tag_name",
+            "has_conflict",
+            "conflict_severity",
+            "first_arrival",
             "conflict_chips",
             "conflict_highlights",
         ]
@@ -249,6 +252,7 @@ class BookingSerializer(
             "operation_notes",
             "has_conflict",
             "conflict_severity",
+            "first_arrival",
             "conflict_snapshot",
             "conflict_chips",
             "conflict_highlights",

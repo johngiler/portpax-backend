@@ -351,6 +351,16 @@ def build_dashboard_stats(
         .order_by("-bookings")[:10]
     )
 
+    first_arrival_qs = qs.filter(first_arrival=True)
+    first_arrivals_count = first_arrival_qs.count()
+    first_arrivals_by_port_raw = list(
+        first_arrival_qs.values(
+            "port_id", "port__name", "port__code", "port__commercial_name"
+        )
+        .annotate(bookings=Count("id"))
+        .order_by("-bookings")[:10]
+    )
+
     cancel_base = qs.filter(status=BookingStatus.C).exclude(cancellation_reason="")
     cancel_reasons = list(
         cancel_base.values("cancellation_reason")
@@ -645,6 +655,7 @@ def build_dashboard_stats(
             "planned_pax": planned_pax,
             "actual_pax": actual_pax,
             "ports_count": ports_in_scope.count(),
+            "first_arrivals": first_arrivals_count,
         },
         "conflicts": _conflict_summary(qs),
         "pending_confirm": {
@@ -722,6 +733,15 @@ def build_dashboard_stats(
                 "bookings": row["bookings"],
             }
             for row in by_port
+        ],
+        "first_arrivals_by_port": [
+            {
+                "id": row["port_id"],
+                "name": row["port__commercial_name"] or row["port__name"],
+                "code": row["port__code"],
+                "bookings": row["bookings"],
+            }
+            for row in first_arrivals_by_port_raw
         ],
         "by_cancellation_reason": by_cancellation_reason,
         "by_weekday": by_weekday,

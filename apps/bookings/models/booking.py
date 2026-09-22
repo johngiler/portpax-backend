@@ -68,6 +68,14 @@ class Booking(models.Model):
         db_index=True,
         help_text="True when operational conflicts (non-blocking) are present.",
     )
+    first_arrival = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=(
+            "True when this is the earliest CO/CL/R booking for the same "
+            "vessel + port (primer arribo)."
+        ),
+    )
     conflict_severity = models.CharField(
         max_length=10,
         blank=True,

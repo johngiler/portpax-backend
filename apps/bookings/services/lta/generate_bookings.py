@@ -186,6 +186,11 @@ def materialize_agreement_bookings(
 
     for booking in created:
         refresh_related_booking_conflicts(booking, user=user)
+        from apps.bookings.services.booking.first_arrival import (
+            recalculate_first_arrival_for_booking,
+        )
+
+        recalculate_first_arrival_for_booking(booking)
 
     run_batch = None
     if created:

@@ -11,6 +11,8 @@ from rest_framework.response import Response
 from apps.accounts.permissions import DenyViewerWrites, IsFrontendAppUser
 from apps.audit.models import ShippingLineAuditEntry
 from apps.audit.services.record import record_shipping_line_audit
+from apps.bookings.models import Booking
+from apps.bookings.services.booking.first_arrival import FIRST_ARRIVAL_STATUSES
 from apps.catalogs.models import ShippingLine, Vessel
 from apps.catalogs.serializers import ShippingLineDetailSerializer, ShippingLineSerializer
 from apps.catalogs.services.shipping_line_activity import (
@@ -45,7 +47,25 @@ class ShippingLineViewSet(viewsets.ModelViewSet):
         return ShippingLineSerializer
 
     def get_queryset(self):
-        vessels_qs = Vessel.objects.order_by("name")
+        vessels_qs = Vessel.objects.order_by("name").prefetch_related(
+            Prefetch(
+                "bookings",
+                queryset=Booking.objects.filter(status__in=FIRST_ARRIVAL_STATUSES)
+                .select_related("port")
+                .only(
+                    "id",
+                    "vessel_id",
+                    "port_id",
+                    "status",
+                    "port__id",
+                    "port__name",
+                    "port__country",
+                    "port__logo",
+                    "port__code",
+                ),
+                to_attr="_arrival_bookings",
+            )
+        )
         base = ShippingLine.objects.select_related("group").annotate(
             vessel_count=Count("vessels", distinct=True),
         )

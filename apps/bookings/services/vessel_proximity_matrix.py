@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from django.db.models import F
 from django.utils import timezone
 
 from apps.accounts.permissions import user_port_ids
@@ -113,6 +114,7 @@ def _serialize_cell(booking, request) -> dict:
         "conflict_highlights": conflict_display["conflict_highlights"],
         "cell_status": _cell_status_from_snapshot(snapshot),
         "issues": _geo_issues_from_snapshot(snapshot),
+        "first_arrival": bool(booking.first_arrival),
     }
 
 
@@ -128,6 +130,7 @@ def build_vessel_proximity_matrix(
     has_conflict: bool | None = None,
     conflict_severity: str | None = None,
     conflict_type: str | None = None,
+    first_arrival: bool | None = None,
     call_dates: list[date] | None = None,
     page: int | None = None,
     page_size: int = DEFAULT_MATRIX_PAGE_SIZE,
@@ -178,7 +181,13 @@ def build_vessel_proximity_matrix(
 
     # Always expose every accessible port as a column (empty cells if no call).
     # Filtering by conflict/status only affects cells, not which ports appear.
-    ports_qs = Port.objects.filter(is_active=True).order_by("name")
+    # Columns: west → east by longitude so nearby ports sit adjacent (same map
+    # geometry as PortProximity / Proximidad entre puertos).
+    ports_qs = Port.objects.filter(is_active=True).order_by(
+        F("longitude").asc(nulls_last=True),
+        F("latitude").asc(nulls_last=True),
+        "name",
+    )
     if allowed_ports is not None:
         ports_qs = ports_qs.filter(id__in=allowed_ports)
     if port_id:
@@ -194,6 +203,8 @@ def build_vessel_proximity_matrix(
 
     for booking in bookings:
         if port_id and booking.port_id != port_id:
+            continue
+        if first_arrival is not None and bool(booking.first_arrival) != first_arrival:
             continue
         filter_ctx = booking_conflict_filter_ctx(booking)
         if conflict_filter_active and not cell_matches_conflict_filter(
@@ -211,6 +222,7 @@ def build_vessel_proximity_matrix(
             "id": port.id,
             "name": port.name,
             "code": port.code,
+            "country": port.country or "",
         }
         for port in ports
     ]
@@ -299,6 +311,17 @@ def parse_vessel_proximity_matrix_params(query_params) -> dict:
     if conflict_type not in CONFLICT_TYPES:
         conflict_type = None
 
+    first_arrival = None
+    first_arrival_raw = query_params.get("first_arrival")
+    if first_arrival_raw is not None and str(first_arrival_raw).strip() != "":
+        first_arrival = str(first_arrival_raw).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "si",
+            "sí",
+        }
+
     from apps.bookings.utils.call_dates_query import parse_call_dates_param
 
     call_dates = parse_call_dates_param(query_params.get("call_dates"))
@@ -328,6 +351,7 @@ def parse_vessel_proximity_matrix_params(query_params) -> dict:
         "has_conflict": has_conflict,
         "conflict_severity": conflict_severity,
         "conflict_type": conflict_type,
+        "first_arrival": first_arrival,
         "call_dates": call_dates or None,
         "page": page,
         "page_size": page_size,

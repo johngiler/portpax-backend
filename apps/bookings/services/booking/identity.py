@@ -286,9 +286,17 @@ def update_booking_identity(
         request=request,
     )
 
+    from apps.bookings.services.booking.first_arrival import (
+        recalculate_first_arrival_for_booking,
+    )
     from apps.bookings.services.validation.conflicts import (
         refresh_related_booking_conflicts,
     )
 
     refresh_related_booking_conflicts(booking, user=user, request=request)
+    recalculate_first_arrival_for_booking(
+        booking,
+        previous_vessel_id=old_vessel.id if old_vessel.id != booking.vessel_id else None,
+        previous_port_id=old_port.id if old_port.id != booking.port_id else None,
+    )
     return booking

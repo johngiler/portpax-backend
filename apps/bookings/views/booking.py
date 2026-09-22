@@ -206,6 +206,10 @@ class BookingViewSet(
         if has_conflict is not None and str(has_conflict).strip() != "":
             flag = str(has_conflict).strip().lower() in {"1", "true", "yes", "si", "sí"}
             qs = qs.filter(has_conflict=flag)
+        first_arrival = self.request.query_params.get("first_arrival")
+        if first_arrival is not None and str(first_arrival).strip() != "":
+            fa = str(first_arrival).strip().lower() in {"1", "true", "yes", "si", "sí"}
+            qs = qs.filter(first_arrival=fa)
         conflict_severity = str(
             self.request.query_params.get("conflict_severity") or ""
         ).strip().lower()
@@ -888,6 +892,7 @@ class BookingViewSet(
                 has_conflict=params["has_conflict"],
                 conflict_severity=params["conflict_severity"],
                 conflict_type=params["conflict_type"],
+                first_arrival=params.get("first_arrival"),
                 call_dates=params.get("call_dates"),
                 page=params["page"],
                 page_size=params["page_size"],
@@ -1292,6 +1297,16 @@ class BookingViewSet(
         conflict_type_filter = (
             conflict_type_raw if conflict_type_raw in CONFLICT_TYPES else None
         )
+        first_arrival_param = request.query_params.get("first_arrival")
+        first_arrival_filter = None
+        if first_arrival_param is not None and str(first_arrival_param).strip() != "":
+            first_arrival_filter = str(first_arrival_param).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "si",
+                "sí",
+            }
         ships_per_day = self._optional_int_param("ships_per_day")
         if isinstance(ships_per_day, Response):
             return ships_per_day
@@ -1311,6 +1326,7 @@ class BookingViewSet(
             or has_conflict_filter is not None
             or conflict_severity_filter is not None
             or conflict_type_filter is not None
+            or first_arrival_filter is not None
             or occupied_only
             or line_id is not None
             or group_id is not None
@@ -1334,6 +1350,7 @@ class BookingViewSet(
                 has_conflict=has_conflict_filter,
                 conflict_severity=conflict_severity_filter,
                 conflict_type=conflict_type_filter,
+                first_arrival=first_arrival_filter,
                 ships_per_day=ships_per_day,
                 occupied_only=occupied_only,
                 page=page if paged else None,

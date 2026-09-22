@@ -281,6 +281,11 @@ def create_booking_batch(
             save_confirmation_pdf(booking)
             booking.save(update_fields=["confirmation_pdf", "updated_at"])
         refresh_related_booking_conflicts(booking, user=created_by)
+        from apps.bookings.services.booking.first_arrival import (
+            recalculate_first_arrival_for_booking,
+        )
+
+        recalculate_first_arrival_for_booking(booking)
         changes = dict(audit_changes or {})
         changes.setdefault("source", "wizard")
         record_booking_audit(

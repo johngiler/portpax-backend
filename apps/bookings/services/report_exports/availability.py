@@ -247,6 +247,7 @@ def _soft_focus_active(
     has_conflict: bool | None,
     conflict_severity: str | None,
     conflict_type: str | None,
+    first_arrival: bool | None = None,
 ) -> bool:
     return bool(
         shipping_line_id
@@ -255,6 +256,7 @@ def _soft_focus_active(
         or position_id
         or tag_ids
         or status_filters
+        or first_arrival is not None
         or _conflict_filter_active(
             has_conflict=has_conflict,
             conflict_severity=conflict_severity,
@@ -294,6 +296,7 @@ def _focus_match_queryset(
     position_id: int | None,
     tag_ids: list[int] | None,
     status_filters: list[str],
+    first_arrival: bool | None = None,
 ):
     """Bookings that satisfy soft-focus filters (day discovery only)."""
     from apps.bookings.models import Booking
@@ -326,6 +329,8 @@ def _focus_match_queryset(
         qs = qs.filter(position_id=position_id)
     if tag_ids:
         qs = qs.filter(tag_id__in=tag_ids)
+    if first_arrival is not None:
+        qs = qs.filter(first_arrival=first_arrival)
     if status_filters:
         qs = apply_booking_status_filters(qs, status_filters)
     return qs
@@ -346,6 +351,7 @@ def _soft_focus_matching_days(
     has_conflict: bool | None,
     conflict_severity: str | None,
     conflict_type: str | None,
+    first_arrival: bool | None = None,
 ) -> list[date]:
     qs = _focus_match_queryset(
         port_id=port_id,
@@ -358,6 +364,7 @@ def _soft_focus_matching_days(
         position_id=position_id,
         tag_ids=tag_ids,
         status_filters=status_filters,
+        first_arrival=first_arrival,
     )
     if not _conflict_filter_active(
         has_conflict=has_conflict,
@@ -597,6 +604,7 @@ def _place_bookings_by_day(
             "etd": booking.etd.isoformat() if booking.etd else None,
             "actual_pax": booking.actual_pax,
             "planned_pax": booking.planned_pax,
+            "first_arrival": bool(getattr(booking, "first_arrival", False)),
         }
         for cell_index in cell_indexes:
             existing = day_cells[cell_index]
@@ -622,6 +630,7 @@ def build_availability_data(
     has_conflict: bool | None = None,
     conflict_severity: str | None = None,
     conflict_type: str | None = None,
+    first_arrival: bool | None = None,
     ships_per_day: int | None = None,
     occupied_only: bool = False,
     page: int | None = None,
@@ -664,6 +673,7 @@ def build_availability_data(
         has_conflict=has_conflict,
         conflict_severity=conflict_severity,
         conflict_type=conflict_type,
+        first_arrival=first_arrival,
     )
     paged_mode = soft_focus or occupied_only or ships_per_day is not None
 
@@ -695,6 +705,7 @@ def build_availability_data(
                 has_conflict=has_conflict,
                 conflict_severity=conflict_severity,
                 conflict_type=conflict_type,
+                first_arrival=first_arrival,
             )
             if ships_per_day is not None:
                 density_days = set(

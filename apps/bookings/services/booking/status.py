@@ -170,11 +170,15 @@ def update_booking_status(
 
     booking.save(update_fields=list(dict.fromkeys(update_fields)))
 
+    from apps.bookings.services.booking.first_arrival import (
+        recalculate_first_arrival_for_booking,
+    )
     from apps.bookings.services.validation.conflicts import (
         refresh_related_booking_conflicts,
     )
 
     refresh_related_booking_conflicts(booking, user=user, request=request)
+    recalculate_first_arrival_for_booking(booking)
 
     status_changes: dict = {"status": {"from": old_status, "to": new_status}}
     status_changes.update(reactivation_clears)
