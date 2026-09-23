@@ -1,16 +1,17 @@
+from django.db.models import Count
 from rest_framework import filters, status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import DenyViewerWrites
-from apps.bookings.models import Booking, BookingImportBatch, BookingRunBatch, BookingTag
+from apps.bookings.models import Booking, BookingTag
 from apps.bookings.serializers.booking_tag import BookingTagSerializer
 
 
 class BookingTagViewSet(viewsets.ModelViewSet):
     """CRUD for reusable booking operator tags."""
 
-    queryset = BookingTag.objects.all()
+    queryset = BookingTag.objects.annotate(booking_count=Count("bookings"))
     serializer_class = BookingTagSerializer
     permission_classes = [IsAuthenticated, DenyViewerWrites]
     pagination_class = None
@@ -22,15 +23,12 @@ class BookingTagViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         tag = self.get_object()
-        still_used = (
-            Booking.objects.filter(tag=tag).exists()
-            or BookingImportBatch.objects.filter(tag=tag).exists()
-            or BookingRunBatch.objects.filter(tag=tag).exists()
-        )
-        if still_used:
+        # History batches keep a snapshot FK (SET_NULL on delete). They must
+        # not block removal once no booking still uses the tag.
+        if Booking.objects.filter(tag=tag).exists():
             return Response(
                 {
-                    "detail": "No se puede eliminar: el tag está asociado a reservas o lotes.",
+                    "detail": "No se puede eliminar: el tag está asociado a reservas.",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )

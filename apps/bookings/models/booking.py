@@ -19,6 +19,7 @@ class CancellationReason(models.TextChoices):
     BAD_WEATHER = "bad_weather", "Mal tiempo"
     SHIPPING_LINE_DECISION = "shipping_line_decision", "Decisión naviera"
     ITM_DECISION = "itm_decision", "Decisión ITM"
+    LTA_CLAIMED = "lta_claimed", "Reclamo LTA"
 
 
 class Booking(models.Model):

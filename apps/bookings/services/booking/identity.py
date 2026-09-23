@@ -188,6 +188,7 @@ def update_booking_identity(
                 call_date=new_call_date,
             )
             .exclude(pk=booking.pk)
+            .exclude(status=BookingStatus.C)
             .first()
         )
         if clash is not None:

@@ -38,6 +38,7 @@ def find_claimable_lta_booking(
     call_date: date,
     shipping_line_id: int,
     preferred_position_id: int | None = None,
+    exclude_booking_id: int | None = None,
 ) -> Booking | None:
     """
     LTA placeholder for the same shipping-line group / port / date.
@@ -59,6 +60,8 @@ def find_claimable_lta_booking(
         call_date=call_date,
         status=BookingStatus.LTA,
     ).select_related("vessel", "position", "port", "shipping_line")
+    if exclude_booking_id:
+        qs = qs.exclude(pk=exclude_booking_id)
     if group_id is not None:
         qs = qs.filter(shipping_line__group_id=group_id)
     else:
@@ -76,6 +79,7 @@ def count_claimable_lta_bookings(
     port_id: int,
     call_date: date,
     shipping_line_id: int,
+    exclude_booking_id: int | None = None,
 ) -> int:
     from apps.catalogs.models import ShippingLine
 
@@ -89,6 +93,8 @@ def count_claimable_lta_bookings(
         call_date=call_date,
         status=BookingStatus.LTA,
     )
+    if exclude_booking_id:
+        qs = qs.exclude(pk=exclude_booking_id)
     if group_id is not None:
         qs = qs.filter(shipping_line__group_id=group_id)
     else:
@@ -136,6 +142,7 @@ def resolve_position_and_lta(
     call_date: date,
     preferred_position_id: int | None,
     claim_lta_space: bool,
+    exclude_booking_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Suggest a pier position and detect a claimable LTA slot for this line.
@@ -151,6 +158,7 @@ def resolve_position_and_lta(
         call_date=call_date,
         shipping_line_id=shipping_line_id,
         preferred_position_id=preferred_position_id,
+        exclude_booking_id=exclude_booking_id,
     )
     candidate_payload = (
         serialize_lta_space_candidate(candidate) if candidate else None
@@ -205,6 +213,7 @@ def resolve_position_and_lta(
         port_id=port_id,
         call_date=call_date,
         shipping_line_id=shipping_line_id,
+        exclude_booking_id=exclude_booking_id,
     )
 
     return {

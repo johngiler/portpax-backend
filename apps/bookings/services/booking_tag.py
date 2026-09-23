@@ -261,13 +261,8 @@ def set_run_batch_tag(
 
 
 def delete_unused_tag(tag: BookingTag) -> bool:
-    """Delete tag if no bookings/batches reference it. Returns whether deleted."""
-    still_used = (
-        Booking.objects.filter(tag=tag).exists()
-        or BookingImportBatch.objects.filter(tag=tag).exists()
-        or BookingRunBatch.objects.filter(tag=tag).exists()
-    )
-    if still_used:
+    """Delete tag if no booking still uses it. History batches SET_NULL."""
+    if Booking.objects.filter(tag=tag).exists():
         return False
     tag.delete()
     return True

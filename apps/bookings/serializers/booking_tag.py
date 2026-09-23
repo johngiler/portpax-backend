@@ -5,10 +5,12 @@ from apps.bookings.services.booking_tag import normalize_tag_name
 
 
 class BookingTagSerializer(serializers.ModelSerializer):
+    booking_count = serializers.IntegerField(read_only=True, default=0)
+
     class Meta:
         model = BookingTag
-        fields = ["id", "name", "created_at"]
-        read_only_fields = ["id", "created_at"]
+        fields = ["id", "name", "booking_count", "created_at"]
+        read_only_fields = ["id", "booking_count", "created_at"]
 
     def validate_name(self, value: str) -> str:
         cleaned = normalize_tag_name(value)

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from datetime import date, time
 
+from django.db import transaction
+
 from apps.bookings.models import Booking, BookingRunBatch, BookingStatus
+from apps.bookings.services.booking.bulk_edit_lta import (
+    attach_bulk_edit_lta_claim,
+    claim_candidate_id,
+    consume_claimed_lta_placeholder,
+)
 from apps.bookings.services.booking.identity import (
     GROUP_MISMATCH_MESSAGE,
     update_booking_identity,
@@ -140,9 +147,11 @@ def _identity_blocking_issues(
             call_date=call_date,
         )
         .exclude(pk=booking.pk)
+        .exclude(status=BookingStatus.C)
         .first()
     )
-    if clash is not None:
+    # LTA ghost on that slot is claimed via «Reclamar espacio LTA», not a hard dup.
+    if clash is not None and clash.status != BookingStatus.LTA:
         issues.append(
             {
                 "code": "duplicate_port_vessel_date",
@@ -228,6 +237,9 @@ def revalidate_bulk_edit_row(payload: dict) -> dict:
     position_id = int(position_raw) if position_raw not in (None, "", 0) else None
     status_value = payload.get("status") or booking.status
     notes = payload.get("notes") if "notes" in payload else booking.notes
+    claim_lta_space = bool(
+        payload.get("claim_lta_space") or payload.get("replace_lta")
+    )
 
     blocking = _identity_blocking_issues(
         booking,
@@ -255,6 +267,35 @@ def revalidate_bulk_edit_row(payload: dict) -> dict:
     else:
         warnings = []
 
+    status_value, lta_pos = attach_bulk_edit_lta_claim(
+        port_id=port_id,
+        vessel_id=vessel_id,
+        shipping_line_id=shipping_line_id,
+        call_date=call_date,
+        preferred_position_id=position_id,
+        claim_lta_space=claim_lta_space,
+        exclude_booking_id=booking.id,
+        blocking=blocking,
+        warnings=warnings,
+        status_value=status_value,
+    )
+    if lta_pos.get("claim_lta_space") and lta_pos.get("position_id"):
+        position_id = lta_pos["position_id"]
+
+    # Claiming the LTA ghost is not a duplicate of this ship — it is the slot.
+    if lta_pos.get("claim_lta_space"):
+        cand = lta_pos.get("lta_space_candidate") or {}
+        cand_id = cand.get("id") if isinstance(cand, dict) else None
+        blocking[:] = [
+            item
+            for item in blocking
+            if not (
+                isinstance(item, dict)
+                and item.get("code") == "duplicate_port_vessel_date"
+                and cand_id
+            )
+        ]
+
     selectable = len(blocking) == 0 and booking.status != BookingStatus.C
     port = Port.objects.filter(pk=port_id).first()
     shipping_line = ShippingLine.objects.filter(pk=shipping_line_id).first()
@@ -262,6 +303,15 @@ def revalidate_bulk_edit_row(payload: dict) -> dict:
     position = (
         Position.objects.filter(pk=position_id).first() if position_id else None
     )
+    position_code = lta_pos.get("position_code")
+    if not position_code and position is not None:
+        from apps.catalogs.utils.position_code import position_short_code
+
+        position_code = (
+            position_short_code(port.code, position.code)
+            if port is not None
+            else position.code
+        )
     return {
         "booking_id": booking.id,
         "booking_code": booking.booking_code,
@@ -279,9 +329,11 @@ def revalidate_bulk_edit_row(payload: dict) -> dict:
         "eta": eta.strftime("%H:%M") if eta else None,
         "etd": etd.strftime("%H:%M") if etd else None,
         "position_id": position_id,
-        "position_code": position.code if position else None,
+        "position_code": position_code,
         "status": status_value,
         "notes": notes or "",
+        "claim_lta_space": bool(lta_pos.get("claim_lta_space")),
+        "lta_space_candidate": lta_pos.get("lta_space_candidate"),
         "blocking_issues": blocking,
         "warnings": warnings,
         "selectable": selectable,
@@ -367,6 +419,13 @@ def apply_bulk_edit_rows(
             else:
                 position_id = booking.position_id
             new_status = payload.get("status")
+            claim_candidate = claim_candidate_id(payload)
+            claiming = claim_candidate is not None
+            if claiming:
+                new_status = BookingStatus.CL
+                cand = payload.get("lta_space_candidate") or {}
+                if isinstance(cand, dict) and cand.get("position_id"):
+                    position_id = int(cand["position_id"])
 
             if port_id != booking.port_id:
                 changed_fields.add("port_id")
@@ -391,44 +450,60 @@ def apply_bulk_edit_rows(
             ):
                 changed_fields.add("status")
 
-            booking = update_booking_identity(
-                booking,
-                user=user,
-                request=request,
-                port_id=port_id,
-                shipping_line_id=shipping_line_id,
-                vessel_id=vessel_id,
-                call_date=call_date,
-                notes=notes,
-                audit_source="bulk_edit",
-                audit_extra=audit_extra,
-            )
-            booking = update_booking_operational(
-                booking,
-                user=user,
-                request=request,
-                position_id=position_id,
-                eta=eta,
-                etd=etd,
-                port_operator_override=port_operator_override,
-                override_reason=override_reason,
-                audit_source="bulk_edit",
-                audit_extra=audit_extra,
-            )
-            if (
-                new_status
-                and new_status != booking.status
-                and new_status in EDITABLE_STATUSES
-            ):
-                booking = update_booking_status(
+            with transaction.atomic():
+                claimed_agreement_id = None
+                if claiming and claim_candidate != booking.id:
+                    claimed_agreement_id = consume_claimed_lta_placeholder(
+                        claim_candidate,
+                        claimed_by=booking,
+                        user=user,
+                        request=request,
+                        audit_extra=audit_extra,
+                    )
+                    changed_fields.add("claimed_lta_space")
+                booking = update_booking_identity(
                     booking,
-                    new_status,
                     user=user,
                     request=request,
-                    require_lta_agreement=False,
+                    port_id=port_id,
+                    shipping_line_id=shipping_line_id,
+                    vessel_id=vessel_id,
+                    call_date=call_date,
+                    notes=notes,
                     audit_source="bulk_edit",
                     audit_extra=audit_extra,
                 )
+                booking = update_booking_operational(
+                    booking,
+                    user=user,
+                    request=request,
+                    position_id=position_id,
+                    eta=eta,
+                    etd=etd,
+                    port_operator_override=port_operator_override,
+                    override_reason=override_reason,
+                    audit_source="bulk_edit",
+                    audit_extra=audit_extra,
+                )
+                if claimed_agreement_id and not booking.long_term_agreement_id:
+                    booking.long_term_agreement_id = claimed_agreement_id
+                    booking.save(
+                        update_fields=["long_term_agreement", "updated_at"]
+                    )
+                if (
+                    new_status
+                    and new_status != booking.status
+                    and new_status in EDITABLE_STATUSES
+                ):
+                    booking = update_booking_status(
+                        booking,
+                        new_status,
+                        user=user,
+                        request=request,
+                        require_lta_agreement=False,
+                        audit_source="bulk_edit",
+                        audit_extra=audit_extra,
+                    )
             updated.append(
                 {
                     "booking_id": booking.id,
