@@ -178,6 +178,12 @@ BOOKING_STATUS_LABELS = {
 }
 
 
+def _cancellation_reason_labels() -> dict[str, str]:
+    from apps.bookings.models import CancellationReason
+
+    return dict(CancellationReason.choices)
+
+
 def _vessel_code_name(pk: int) -> tuple[str, str]:
     vessel = Vessel.objects.filter(pk=pk).first()
     if vessel is None:
@@ -196,11 +202,21 @@ def _lta_code_name(pk: int) -> tuple[str, str]:
     return (code, code)
 
 
-def enrich_booking_audit_changes(changes: dict[str, Any] | None) -> dict[str, Any] | None:
+def enrich_booking_audit_changes(
+    changes: dict[str, Any] | None,
+    *,
+    booking: Any = None,
+) -> dict[str, Any] | None:
     """Booking history must never paint raw FKs / PKs to operators."""
     if not changes or not isinstance(changes, dict):
         return changes
     out = deepcopy(changes)
+    if booking is not None and "cancellation_reason" not in out:
+        reason = getattr(booking, "cancellation_reason", "") or ""
+        status_chg = out.get("status")
+        to_status = status_chg.get("to") if isinstance(status_chg, dict) else None
+        if reason and to_status == "c":
+            out["cancellation_reason"] = {"from": None, "to": reason}
     if "port_id" in out:
         out["port_id"] = enrich_named_fk_change(
             out["port_id"],
@@ -225,6 +241,11 @@ def enrich_booking_audit_changes(changes: dict[str, Any] | None) -> dict[str, An
         )
     if "status" in out:
         out["status"] = enrich_choice_change(out["status"], BOOKING_STATUS_LABELS)
+    if "cancellation_reason" in out:
+        out["cancellation_reason"] = enrich_choice_change(
+            out["cancellation_reason"],
+            _cancellation_reason_labels(),
+        )
     if "tag_id" in out:
         out["tag_id"] = enrich_named_fk_change(
             out["tag_id"],

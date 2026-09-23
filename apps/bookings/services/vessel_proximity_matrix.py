@@ -16,7 +16,12 @@ from apps.bookings.services.validation.conflict_display import (
     cell_matches_conflict_filter,
 )
 from apps.bookings.services.validation.conflict_type_filters import CONFLICT_TYPES
-from apps.bookings.utils.status_query import apply_booking_status_filters, parse_status_query_params
+from apps.bookings.utils.status_query import (
+    apply_booking_status_filters,
+    apply_cancellation_reason_filter,
+    parse_cancellation_reason_param,
+    parse_status_query_params,
+)
 from apps.catalogs.models import Port, Vessel
 from apps.catalogs.utils.position_code import position_short_code
 
@@ -115,6 +120,7 @@ def _serialize_cell(booking, request) -> dict:
         "cell_status": _cell_status_from_snapshot(snapshot),
         "issues": _geo_issues_from_snapshot(snapshot),
         "first_arrival": bool(booking.first_arrival),
+        "cancellation_reason": booking.cancellation_reason or "",
     }
 
 
@@ -131,6 +137,7 @@ def build_vessel_proximity_matrix(
     conflict_severity: str | None = None,
     conflict_type: str | None = None,
     first_arrival: bool | None = None,
+    cancellation_reason: str | None = None,
     call_dates: list[date] | None = None,
     page: int | None = None,
     page_size: int = DEFAULT_MATRIX_PAGE_SIZE,
@@ -172,6 +179,7 @@ def build_vessel_proximity_matrix(
 
     statuses = status_values if status_values else list(ACTIVE_BOOKING_STATUSES)
     qs = apply_booking_status_filters(qs, statuses)
+    qs = apply_cancellation_reason_filter(qs, statuses, cancellation_reason)
 
     allow_dates = set(call_dates or [])
     if allow_dates:
@@ -352,6 +360,7 @@ def parse_vessel_proximity_matrix_params(query_params) -> dict:
         "conflict_severity": conflict_severity,
         "conflict_type": conflict_type,
         "first_arrival": first_arrival,
+        "cancellation_reason": parse_cancellation_reason_param(query_params),
         "call_dates": call_dates or None,
         "page": page,
         "page_size": page_size,

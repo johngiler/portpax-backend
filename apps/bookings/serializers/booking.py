@@ -47,7 +47,9 @@ class BookingAuditEntrySerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         raw = instance.changes if isinstance(instance.changes, dict) else {}
-        data["changes"] = enrich_booking_audit_changes(raw) or {}
+        data["changes"] = (
+            enrich_booking_audit_changes(raw, booking=instance.booking) or {}
+        )
         return data
 
 
@@ -140,6 +142,7 @@ class BookingListSerializer(
             "has_conflict",
             "conflict_severity",
             "first_arrival",
+            "cancellation_reason",
             "conflict_chips",
             "conflict_highlights",
         ]

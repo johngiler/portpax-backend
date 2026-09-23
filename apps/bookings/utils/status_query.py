@@ -6,7 +6,7 @@ from django.db.models import Q, QuerySet
 from django.utils import timezone
 
 from apps.bookings.constants import ACTIVE_BOOKING_STATUSES
-from apps.bookings.models import BookingStatus
+from apps.bookings.models import BookingStatus, CancellationReason
 
 # Real status codes + list-only virtual filters.
 KNOWN_STATUS_FILTERS = frozenset(
@@ -71,3 +71,26 @@ def apply_booking_status_filters(qs: QuerySet, statuses: list[str]) -> QuerySet:
     if q is None:
         return qs
     return qs.filter(q)
+
+
+def parse_cancellation_reason_param(query_params) -> str | None:
+    raw = str(query_params.get("cancellation_reason") or "").strip()
+    if raw and raw in CancellationReason.values:
+        return raw
+    return None
+
+
+def apply_cancellation_reason_filter(
+    qs: QuerySet,
+    statuses: list[str],
+    reason: str | None,
+) -> QuerySet:
+    """Keep non-cancelled matches; cancelled rows must use the selected reason."""
+    if not reason or reason not in CancellationReason.values:
+        return qs
+    if BookingStatus.C not in statuses:
+        return qs
+    return qs.filter(
+        ~Q(status=BookingStatus.C)
+        | Q(status=BookingStatus.C, cancellation_reason=reason)
+    )

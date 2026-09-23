@@ -19,6 +19,8 @@ from apps.accounts.permissions import DenyViewerWrites, user_can_access_port, us
 from apps.bookings.models import Booking, BookingImportBatch, BookingRunBatch, BookingStatus
 from apps.bookings.utils.status_query import (
     apply_booking_status_filters,
+    apply_cancellation_reason_filter,
+    parse_cancellation_reason_param,
     parse_status_query_params,
 )
 from apps.bookings.serializers import (
@@ -202,6 +204,11 @@ class BookingViewSet(
             qs = qs.filter(long_term_agreement_id=lta_id)
         status_values = parse_status_query_params(self.request.query_params)
         qs = apply_booking_status_filters(qs, status_values)
+        qs = apply_cancellation_reason_filter(
+            qs,
+            status_values,
+            parse_cancellation_reason_param(self.request.query_params),
+        )
         has_conflict = self.request.query_params.get("has_conflict")
         if has_conflict is not None and str(has_conflict).strip() != "":
             flag = str(has_conflict).strip().lower() in {"1", "true", "yes", "si", "sí"}
@@ -893,6 +900,7 @@ class BookingViewSet(
                 conflict_severity=params["conflict_severity"],
                 conflict_type=params["conflict_type"],
                 first_arrival=params.get("first_arrival"),
+                cancellation_reason=params.get("cancellation_reason"),
                 call_dates=params.get("call_dates"),
                 page=params["page"],
                 page_size=params["page_size"],
@@ -1203,6 +1211,11 @@ class BookingViewSet(
             qs = qs.filter(shipping_line_id=shipping_line_id)
         status_values = parse_status_query_params(request.query_params)
         qs = apply_booking_status_filters(qs, status_values)
+        qs = apply_cancellation_reason_filter(
+            qs,
+            status_values,
+            parse_cancellation_reason_param(request.query_params),
+        )
 
         bookings = list(qs)
         if not bookings:
@@ -1307,6 +1320,9 @@ class BookingViewSet(
                 "si",
                 "sí",
             }
+        cancellation_reason_filter = parse_cancellation_reason_param(
+            request.query_params
+        )
         ships_per_day = self._optional_int_param("ships_per_day")
         if isinstance(ships_per_day, Response):
             return ships_per_day
@@ -1327,6 +1343,7 @@ class BookingViewSet(
             or conflict_severity_filter is not None
             or conflict_type_filter is not None
             or first_arrival_filter is not None
+            or cancellation_reason_filter is not None
             or occupied_only
             or line_id is not None
             or group_id is not None
@@ -1351,6 +1368,7 @@ class BookingViewSet(
                 conflict_severity=conflict_severity_filter,
                 conflict_type=conflict_type_filter,
                 first_arrival=first_arrival_filter,
+                cancellation_reason=cancellation_reason_filter,
                 ships_per_day=ships_per_day,
                 occupied_only=occupied_only,
                 page=page if paged else None,

@@ -279,7 +279,9 @@ def _single_item(entry: BookingAuditEntry) -> dict[str, Any]:
     if not code and entry.booking_id and entry.booking is not None:
         code = entry.booking.booking_code
     raw_changes = entry.changes if isinstance(entry.changes, dict) else {}
-    changes = enrich_booking_audit_changes(raw_changes) or {}
+    changes = (
+        enrich_booking_audit_changes(raw_changes, booking=entry.booking) or {}
+    )
     entity = changes.get("entity") if isinstance(changes, dict) else None
     return {
         "kind": "single",

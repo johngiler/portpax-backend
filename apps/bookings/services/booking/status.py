@@ -121,6 +121,7 @@ def update_booking_status(
             booking.long_term_agreement = agreement
 
     old_status = booking.status
+    old_cancellation_reason = booking.cancellation_reason or None
     cleared_lta_code: str | None = None
     booking.status = new_status
 
@@ -182,6 +183,11 @@ def update_booking_status(
 
     status_changes: dict = {"status": {"from": old_status, "to": new_status}}
     status_changes.update(reactivation_clears)
+    if new_status == BookingStatus.C:
+        status_changes["cancellation_reason"] = {
+            "from": old_cancellation_reason,
+            "to": booking.cancellation_reason or None,
+        }
     if cleared_lta_code is not None:
         status_changes["long_term_agreement"] = {
             "from": cleared_lta_code,

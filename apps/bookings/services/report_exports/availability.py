@@ -248,6 +248,7 @@ def _soft_focus_active(
     conflict_severity: str | None,
     conflict_type: str | None,
     first_arrival: bool | None = None,
+    cancellation_reason: str | None = None,
 ) -> bool:
     return bool(
         shipping_line_id
@@ -257,6 +258,7 @@ def _soft_focus_active(
         or tag_ids
         or status_filters
         or first_arrival is not None
+        or cancellation_reason
         or _conflict_filter_active(
             has_conflict=has_conflict,
             conflict_severity=conflict_severity,
@@ -297,10 +299,14 @@ def _focus_match_queryset(
     tag_ids: list[int] | None,
     status_filters: list[str],
     first_arrival: bool | None = None,
+    cancellation_reason: str | None = None,
 ):
     """Bookings that satisfy soft-focus filters (day discovery only)."""
     from apps.bookings.models import Booking
-    from apps.bookings.utils.status_query import apply_booking_status_filters
+    from apps.bookings.utils.status_query import (
+        apply_booking_status_filters,
+        apply_cancellation_reason_filter,
+    )
 
     if "c" in status_filters:
         qs = Booking.objects.filter(
@@ -333,6 +339,9 @@ def _focus_match_queryset(
         qs = qs.filter(first_arrival=first_arrival)
     if status_filters:
         qs = apply_booking_status_filters(qs, status_filters)
+        qs = apply_cancellation_reason_filter(
+            qs, status_filters, cancellation_reason
+        )
     return qs
 
 
@@ -352,6 +361,7 @@ def _soft_focus_matching_days(
     conflict_severity: str | None,
     conflict_type: str | None,
     first_arrival: bool | None = None,
+    cancellation_reason: str | None = None,
 ) -> list[date]:
     qs = _focus_match_queryset(
         port_id=port_id,
@@ -365,6 +375,7 @@ def _soft_focus_matching_days(
         tag_ids=tag_ids,
         status_filters=status_filters,
         first_arrival=first_arrival,
+        cancellation_reason=cancellation_reason,
     )
     if not _conflict_filter_active(
         has_conflict=has_conflict,
@@ -605,6 +616,7 @@ def _place_bookings_by_day(
             "actual_pax": booking.actual_pax,
             "planned_pax": booking.planned_pax,
             "first_arrival": bool(getattr(booking, "first_arrival", False)),
+            "cancellation_reason": booking.cancellation_reason or "",
         }
         for cell_index in cell_indexes:
             existing = day_cells[cell_index]
@@ -631,6 +643,7 @@ def build_availability_data(
     conflict_severity: str | None = None,
     conflict_type: str | None = None,
     first_arrival: bool | None = None,
+    cancellation_reason: str | None = None,
     ships_per_day: int | None = None,
     occupied_only: bool = False,
     page: int | None = None,
@@ -674,6 +687,7 @@ def build_availability_data(
         conflict_severity=conflict_severity,
         conflict_type=conflict_type,
         first_arrival=first_arrival,
+        cancellation_reason=cancellation_reason,
     )
     paged_mode = soft_focus or occupied_only or ships_per_day is not None
 
@@ -706,6 +720,7 @@ def build_availability_data(
                 conflict_severity=conflict_severity,
                 conflict_type=conflict_type,
                 first_arrival=first_arrival,
+                cancellation_reason=cancellation_reason,
             )
             if ships_per_day is not None:
                 density_days = set(
