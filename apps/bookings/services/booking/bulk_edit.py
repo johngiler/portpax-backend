@@ -501,6 +501,7 @@ def apply_bulk_edit_rows(
                         user=user,
                         request=request,
                         require_lta_agreement=False,
+                        allow_lta_claim=claiming,
                         audit_source="bulk_edit",
                         audit_extra=audit_extra,
                     )

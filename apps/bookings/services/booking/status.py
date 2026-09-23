@@ -51,10 +51,19 @@ def update_booking_status(
     etd_real=None,
     acknowledge_combined_red: bool = False,
     require_lta_agreement: bool = True,
+    allow_lta_claim: bool = False,
     audit_source: str | None = None,
     audit_extra: dict | None = None,
 ) -> Booking:
-    allowed = ALLOWED_TRANSITIONS.get(booking.status, set())
+    allowed = set(ALLOWED_TRANSITIONS.get(booking.status, set()))
+    # Mass-edit claim: a CO/H booking takes the LTA slot → Confirmada LTA.
+    if (
+        allow_lta_claim
+        and new_status == BookingStatus.CL
+        and booking.status
+        in {BookingStatus.NR, BookingStatus.H, BookingStatus.CO}
+    ):
+        allowed.add(BookingStatus.CL)
     if new_status not in allowed:
         current = booking.get_status_display()
         target = dict(BookingStatus.choices).get(new_status, new_status)
