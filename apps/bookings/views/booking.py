@@ -69,6 +69,10 @@ from apps.bookings.services.report_exports import (
     build_booking_movements_pdf,
     build_booking_movements_report,
     build_booking_movements_xlsx,
+    build_carrier_panorama,
+    build_carrier_panorama_csv,
+    build_carrier_panorama_pdf,
+    build_carrier_panorama_xlsx,
     build_port_carrier_matrix,
     build_port_carrier_matrix_csv,
     build_port_carrier_matrix_pdf,
@@ -89,6 +93,7 @@ from apps.bookings.services.report_exports import (
     build_weekly_report_csv,
     build_weekly_report_pdf,
     build_weekly_report_xlsx,
+    carrier_panorama_filename,
     parse_id_list,
     parse_movement_week,
     parse_movement_year,
@@ -1563,6 +1568,33 @@ class BookingViewSet(
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(data)
 
+    @action(detail=False, methods=["get"], url_path="report-carrier-panorama")
+    def report_carrier_panorama(self, request):
+        date_from, err = self._parse_iso_date_param("date_from")
+        if err:
+            return err
+        date_to, err = self._parse_iso_date_param("date_to")
+        if err:
+            return err
+        shipping_line_id = self._optional_int_param("shipping_line")
+        if isinstance(shipping_line_id, Response):
+            return shipping_line_id
+        shipping_line_group_id = self._optional_int_param("shipping_line_group")
+        if isinstance(shipping_line_group_id, Response):
+            return shipping_line_group_id
+        return Response(
+            build_carrier_panorama(
+                date_from=date_from,
+                date_to=date_to,
+                shipping_line_id=shipping_line_id,
+                shipping_line_group_id=shipping_line_group_id,
+                without_lta=self._report_without_lta(request),
+                pax_basis=self._report_pax_basis(request),
+                allowed_ports=user_port_ids(request.user),
+                request=request,
+            )
+        )
+
     @action(detail=False, methods=["get"], url_path="report-weekly")
     def report_weekly(self, request):
         year = parse_weekly_year(
@@ -1595,6 +1627,7 @@ class BookingViewSet(
             "solicitudes_port",
             "booking_movements",
             "weekly_report",
+            "carrier_panorama",
         }
         if report_type not in allowed:
             return Response(
@@ -1602,7 +1635,7 @@ class BookingViewSet(
                     "detail": (
                         "report_type debe ser availability, ports_totals_matrix, "
                         "port_carrier_matrix, port_trends, solicitudes_port, "
-                        "booking_movements o weekly_report."
+                        "booking_movements, weekly_report o carrier_panorama."
                     ),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1868,6 +1901,24 @@ class BookingViewSet(
                 filename = solicitudes_port_filename(
                     port.code, date_from, date_to, ext=fmt
                 )
+            elif report_type == "carrier_panorama":
+                payload = build_carrier_panorama(
+                    date_from=date_from,
+                    date_to=date_to,
+                    shipping_line_id=line_id,
+                    shipping_line_group_id=group_id,
+                    without_lta=without_lta,
+                    pax_basis=pax_basis,
+                    allowed_ports=allowed_ports,
+                    request=request,
+                )
+                if fmt == "csv":
+                    content = build_carrier_panorama_csv(payload)
+                elif fmt == "pdf":
+                    content = build_carrier_panorama_pdf(payload)
+                else:
+                    content = build_carrier_panorama_xlsx(payload)
+                filename = carrier_panorama_filename(ext=fmt)
             else:
                 return Response(
                     {"detail": "report_type no soportado."},

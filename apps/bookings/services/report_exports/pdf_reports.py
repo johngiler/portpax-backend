@@ -669,3 +669,104 @@ def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
     table.setStyle(TableStyle(cmds))
     story.append(table)
     return _build_doc(story, landscape_mode=False)
+
+
+def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
+    years = list(payload.get("years") or [])
+    kpis = payload.get("kpis") or {}
+    title = str(payload.get("title") or "Panorama Navieras")
+    subtitle = str(payload.get("subtitle") or "").strip() or None
+    landscape_mode = len(years) >= 4
+
+    def _num(n: Any) -> str:
+        try:
+            value = int(n or 0)
+        except (TypeError, ValueError):
+            return ""
+        return f"{value:,}"
+
+    story = _banner_flowables(title, subtitle, 4, landscape_mode=landscape_mode)
+    story.append(
+        _data_table(
+            [
+                ["Indicador", "Valor"],
+                ["Arribos totales", _num(kpis.get("total_calls"))],
+                ["PAX totales", _num(kpis.get("total_pax"))],
+                [
+                    "Puertos con programación",
+                    f"{kpis.get('ports_with_calls') or 0} de {kpis.get('ports_total') or 0}",
+                ],
+            ],
+            landscape_mode=landscape_mode,
+            first_col_ratio=0.42,
+        )
+    )
+    story.append(Spacer(1, 0.25 * cm))
+
+    share_data: list[list[Any]] = [["Puerto", "Arribos", "PAX", "%"]]
+    for item in payload.get("port_share") or []:
+        share_data.append(
+            [
+                item.get("port_name") or "",
+                _num(item.get("calls")),
+                _num(item.get("pax")),
+                f"{item.get('share_pct') or 0}%",
+            ]
+        )
+    if len(share_data) > 1:
+        story.append(
+            _data_table(
+                share_data,
+                landscape_mode=landscape_mode,
+                first_col_ratio=0.36,
+            )
+        )
+        story.append(Spacer(1, 0.25 * cm))
+
+    header = ["Puerto"]
+    for year in years:
+        header.extend([f"{year} arribos", f"{year} PAX"])
+    header.extend(["Total arribos", "Total PAX"])
+
+    def _matrix_row(label: str, item: dict[str, Any]) -> list[Any]:
+        by_year = {cell["year"]: cell for cell in item.get("by_year") or []}
+        values: list[Any] = [label]
+        for year in years:
+            cell = by_year.get(year) or {}
+            values.extend([_num(cell.get("calls")), _num(cell.get("pax"))])
+        values.extend([_num(item.get("total_calls")), _num(item.get("total_pax"))])
+        return values
+
+    matrix_title = str(
+        payload.get("matrix_title")
+        or "Arribos y pasajeros totales programados por puerto"
+    )
+    _, _, section_style, _ = _styles()
+    sec = Table([[Paragraph(matrix_title, section_style)]])
+    sec.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), NAVY_MID),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(sec)
+    story.append(Spacer(1, 0.1 * cm))
+
+    data: list[list[Any]] = [header]
+    for item in payload.get("rows") or []:
+        data.append(_matrix_row(str(item.get("port_name") or ""), item))
+    totals = payload.get("totals") or {}
+    data.append(_matrix_row("TOTAL", totals))
+    story.append(
+        _data_table(
+            data,
+            emphasize_last=True,
+            landscape_mode=landscape_mode,
+            first_col_ratio=0.18,
+        )
+    )
+    return _build_doc(story, landscape_mode=landscape_mode)

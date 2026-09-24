@@ -4,6 +4,12 @@ from apps.bookings.services.report_exports.availability import (
     build_availability_chart_xlsx,
     build_availability_data,
 )
+from apps.bookings.services.report_exports.carrier_panorama import (
+    build_carrier_panorama,
+    build_carrier_panorama_csv,
+    build_carrier_panorama_xlsx,
+    carrier_panorama_filename,
+)
 from apps.bookings.services.report_exports.csv_reports import (
     build_booking_movements_csv,
     build_port_carrier_matrix_csv,
@@ -31,6 +37,7 @@ from apps.bookings.services.report_exports.booking_movements import (
 from apps.bookings.services.report_exports.pdf_reports import (
     build_availability_chart_pdf,
     build_booking_movements_pdf,
+    build_carrier_panorama_pdf,
     build_port_carrier_matrix_pdf,
     build_port_trends_pdf,
     build_ports_totals_matrix_pdf,
@@ -56,10 +63,15 @@ from apps.bookings.services.report_exports.weekly_report import (
 __all__ = [
     "availability_filename",
     "booking_movements_filename",
+    "carrier_panorama_filename",
     "build_availability_chart_csv",
     "build_availability_chart_pdf",
     "build_availability_chart_xlsx",
     "build_availability_data",
+    "build_carrier_panorama",
+    "build_carrier_panorama_csv",
+    "build_carrier_panorama_pdf",
+    "build_carrier_panorama_xlsx",
     "build_booking_movements_csv",
     "build_booking_movements_pdf",
     "build_booking_movements_report",

@@ -13,6 +13,7 @@ REPORT_MANAGED_NAMES: dict[str, str] = {
     "solicitudes_port": "Resumen de movimientos",
     "booking_movements": "Movimientos de bookings",
     "weekly_report": "Reporte Semanal",
+    "carrier_panorama": "Panorama Navieras",
     "availability": "Availability Chart",
 }
 
