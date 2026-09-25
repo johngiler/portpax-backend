@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from datetime import date
 from io import BytesIO
@@ -100,21 +101,64 @@ def _media_url(request, field) -> str | None:
     return url
 
 
-def _port_logo_map(port_ids: list[int], request=None) -> dict[int, str | None]:
+def _logo_fs_path(field) -> str | None:
+    if not field:
+        return None
+    try:
+        path = field.path
+    except Exception:
+        return None
+    return path if path and os.path.isfile(path) else None
+
+
+def _logo_storage_name(field) -> str | None:
+    if not field:
+        return None
+    name = getattr(field, "name", None) or ""
+    return name or None
+
+
+def _logo_assets(field, request=None) -> dict[str, str | None]:
+    return {
+        "url": _media_url(request, field),
+        "name": _logo_storage_name(field),
+        "path": _logo_fs_path(field),
+    }
+
+
+def _port_logo_assets(
+    port_ids: list[int], request=None
+) -> dict[int, dict[str, str | None]]:
     if not port_ids:
         return {}
     return {
-        port.id: _media_url(request, port.logo)
+        port.id: _logo_assets(port.logo, request)
         for port in Port.objects.filter(id__in=port_ids).only("id", "logo")
     }
 
 
-def _line_logo_map(line_ids: list[int], request=None) -> dict[int, str | None]:
+def _line_logo_assets(
+    line_ids: list[int], request=None
+) -> dict[int, dict[str, str | None]]:
     if not line_ids:
         return {}
     return {
-        line.id: _media_url(request, line.logo)
+        line.id: _logo_assets(line.logo, request)
         for line in ShippingLine.objects.filter(id__in=line_ids).only("id", "logo")
+    }
+
+
+def _port_logo_map(port_ids: list[int], request=None) -> dict[int, str | None]:
+    return {
+        port_id: assets["url"]
+        for port_id, assets in _port_logo_assets(port_ids, request).items()
+    }
+
+
+def _line_logo_map(line_ids: list[int], request=None) -> dict[int, str | None]:
+    return {
+        line_id: assets["url"]
+        for line_id, assets in _line_logo_assets(line_ids, request).items()
     }
 
 
@@ -412,6 +456,8 @@ def _matrix_section(
     is_total: bool = False,
     logo: str | None = None,
     logo_kind: str | None = None,
+    logo_name: str | None = None,
+    logo_path: str | None = None,
 ) -> dict[str, Any]:
     section: dict[str, Any] = {
         "label": label,
@@ -423,6 +469,10 @@ def _matrix_section(
         section["logo_kind"] = logo_kind
     if logo:
         section["logo"] = logo
+    if logo_name:
+        section["logo_name"] = logo_name
+    if logo_path:
+        section["logo_path"] = logo_path
     return section
 
 
@@ -456,15 +506,18 @@ def build_ports_totals_matrix(
         port_data.keys(),
         key=lambda pid: (port_meta.get(pid, ("", ""))[1] or "").lower(),
     )
-    port_logos = _port_logo_map(port_ids, request)
+    port_logos = _port_logo_assets(port_ids, request)
     for port_id in port_ids:
         code, name = port_meta.get(port_id, ("", f"Puerto {port_id}"))
+        assets = port_logos.get(port_id) or {}
         sections.append(
             _matrix_section(
                 name or code,
                 port_data[port_id],
                 years,
-                logo=port_logos.get(port_id),
+                logo=assets.get("url"),
+                logo_name=assets.get("name"),
+                logo_path=assets.get("path"),
                 logo_kind="port",
             )
         )
@@ -518,7 +571,7 @@ def build_port_carrier_matrix(
     combined = _combined_line_month_agg(line_data, years) if line_data else {}
     if not combined:
         combined = defaultdict(lambda: defaultdict(lambda: {"calls": 0, "pax": 0}))
-    port_logo = _media_url(request, port.logo)
+    port_assets = _logo_assets(port.logo, request)
     port_label = _port_friendly_name(port)
     sections.append(
         _matrix_section(
@@ -526,7 +579,9 @@ def build_port_carrier_matrix(
             combined,
             years,
             is_total=True,
-            logo=port_logo,
+            logo=port_assets["url"],
+            logo_name=port_assets["name"],
+            logo_path=port_assets["path"],
             logo_kind="port",
         )
     )
@@ -535,15 +590,18 @@ def build_port_carrier_matrix(
         line_data.keys(),
         key=lambda lid: (line_meta.get(lid, ("", ""))[1] or "").lower(),
     )
-    line_logos = _line_logo_map(line_ids, request)
+    line_logos = _line_logo_assets(line_ids, request)
     for line_id in line_ids:
         code, name = line_meta.get(line_id, ("", f"Línea {line_id}"))
+        assets = line_logos.get(line_id) or {}
         sections.append(
             _matrix_section(
                 name or code,
                 line_data[line_id],
                 years,
-                logo=line_logos.get(line_id),
+                logo=assets.get("url"),
+                logo_name=assets.get("name"),
+                logo_path=assets.get("path"),
                 logo_kind="shipping_line",
             )
         )

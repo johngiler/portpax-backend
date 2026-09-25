@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from io import BytesIO
 from typing import Any
 
+from django.core.files.storage import default_storage
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
+    Image,
+    KeepTogether,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -118,15 +123,72 @@ def _stretch_col_widths(
     *,
     landscape_mode: bool = True,
     first_col_ratio: float = 0.28,
+    usable: float | None = None,
 ) -> list[float]:
     """Force tables to usable page width (avoids narrow content-sized PDFs)."""
-    usable = _page_usable_width(landscape_mode=landscape_mode)
+    usable_w = (
+        usable if usable is not None else _page_usable_width(landscape_mode=landscape_mode)
+    )
     if ncols <= 1:
-        return [usable]
+        return [usable_w]
     first_ratio = min(max(first_col_ratio, 0.15), 0.45)
-    first = usable * first_ratio
-    rest = (usable - first) / (ncols - 1)
+    first = usable_w * first_ratio
+    rest = (usable_w - first) / (ncols - 1)
     return [first] + [rest] * (ncols - 1)
+
+
+def _fmt_matrix_num(value: Any) -> str:
+    """Thousands separators; decimals only when the value is not a whole number."""
+    if value is None or value == "":
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number == 0:
+        return "—"
+    if abs(number - round(number)) < 1e-9:
+        return f"{int(round(number)):,}"
+    return f"{number:,.2f}".rstrip("0").rstrip(".")
+
+
+def _logo_flowable(section: dict[str, Any], size: float = 0.9 * cm) -> Image | None:
+    raw: bytes | None = None
+    path = section.get("logo_path")
+    name = section.get("logo_name")
+    if path and os.path.isfile(path):
+        try:
+            with open(path, "rb") as handle:
+                raw = handle.read()
+        except OSError:
+            raw = None
+    if raw is None and name:
+        try:
+            with default_storage.open(name, "rb") as handle:
+                raw = handle.read()
+        except Exception:
+            raw = None
+    if not raw:
+        return None
+    head = raw[:400].lstrip()
+    if head.startswith(b"<svg") or (head.startswith(b"<?xml") and b"<svg" in head):
+        return None
+    bio = BytesIO(raw)
+    try:
+        reader = ImageReader(bio)
+        width_px, height_px = reader.getSize()
+        if not width_px or not height_px:
+            return None
+        if width_px >= height_px:
+            width, height = size, size * (height_px / width_px)
+        else:
+            height, width = size, size * (width_px / height_px)
+        bio.seek(0)
+        image = Image(bio, width=width, height=height)
+        image.hAlign = "LEFT"
+        return image
+    except Exception:
+        return None
 
 
 def _week_badge_flowable(week: int | str | None) -> Table:
@@ -228,6 +290,7 @@ def _data_table(
     emphasize_last: bool = False,
     landscape_mode: bool = True,
     first_col_ratio: float = 0.28,
+    usable_width: float | None = None,
 ) -> Table:
     """
     Excel-parity data table: navy header band, sky label column,
@@ -239,6 +302,7 @@ def _data_table(
         ncols,
         landscape_mode=landscape_mode,
         first_col_ratio=first_col_ratio,
+        usable=usable_width,
     )
     table = Table(data, repeatRows=1, colWidths=widths)
     style_cmds: list[tuple] = [
@@ -322,21 +386,96 @@ def _matrix_pdf(
         subtitle,
         14,
     )
-    _, _, section_style, _ = _styles()
+    _, _, _, body_style = _styles()
+    title_style = ParagraphStyle(
+        "MatrixPortTitle",
+        parent=body_style,
+        fontName="Helvetica-Bold",
+        fontSize=SECTION_SIZE,
+        textColor=NAVY,
+        leading=SECTION_SIZE + 2,
+    )
+    kicker_style = ParagraphStyle(
+        "MatrixPortKicker",
+        parent=body_style,
+        fontName="Helvetica-Bold",
+        fontSize=7,
+        textColor=NAVY_MID,
+        leading=9,
+    )
+    metric_style = ParagraphStyle(
+        "MatrixMetricLabel",
+        parent=body_style,
+        fontName="Helvetica-Bold",
+        fontSize=SECTION_SIZE - 1,
+        textColor=NAVY,
+        leading=SECTION_SIZE + 1,
+    )
 
-    def _section_banner(label: str) -> Table:
-        sec = Table([[Paragraph(str(label), section_style)]])
-        sec.setStyle(
+    usable = _page_usable_width()
+    inset = 8
+    inner = usable - 2 * inset
+
+    def _section_kicker(section: dict[str, Any]) -> str:
+        if section.get("is_total") and not section.get("logo") and not section.get(
+            "logo_name"
+        ):
+            return "CONSOLIDADO"
+        if section.get("logo_kind") == "shipping_line":
+            return "NAVIERA"
+        if section.get("is_total"):
+            return "CONSOLIDADO"
+        return "PUERTO"
+
+    def _port_header(section: dict[str, Any]) -> Table:
+        kicker = Paragraph(_section_kicker(section), kicker_style)
+        title = Paragraph(str(section.get("label") or ""), title_style)
+        labels = Table([[kicker], [title]], colWidths=["*"])
+        labels.setStyle(
             TableStyle(
                 [
-                    ("BACKGROUND", (0, 0), (-1, -1), NAVY_MID),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ]
+            )
+        )
+        logo = _logo_flowable(section)
+        if logo:
+            logo_w = 1.15 * cm
+            header = Table([[logo, labels]], colWidths=[logo_w, inner - logo_w])
+        else:
+            header = Table([[labels]], colWidths=[inner])
+        header.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), WHITE),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 6),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ]
+            )
+        )
+        return header
+
+    def _metric_banner(label: str) -> Table:
+        banner = Table([[Paragraph(str(label), metric_style)]], colWidths=[inner])
+        banner.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), SKY),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                     ("TOPPADDING", (0, 0), (-1, -1), 4),
                     ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
                 ]
             )
         )
-        return sec
+        return banner
 
     def _metric_table(section: dict[str, Any], metric_key: str) -> Table:
         data = [["AÑO", *MONTH_LABELS, "TOTAL"]]
@@ -346,24 +485,57 @@ def _matrix_pdf(
                 if data_row.get("year") == "total"
                 else str(data_row.get("year") or "")
             )
-            data.append(
+            months = [_fmt_matrix_num(value) for value in (data_row.get("months") or [])]
+            data.append([label, *months, _fmt_matrix_num(data_row.get("total") or 0)])
+        return _data_table(
+            data,
+            emphasize_last=True,
+            first_col_ratio=0.12,
+            usable_width=inner,
+        )
+
+    def _port_block(section: dict[str, Any]) -> Table:
+        inner_table = Table(
+            [
+                [_port_header(section)],
+                [_metric_banner("Call summary")],
+                [_metric_table(section, "calls")],
+                [_metric_banner("Passenger summary")],
+                [_metric_table(section, "pax")],
+            ],
+            colWidths=[inner],
+        )
+        inner_table.setStyle(
+            TableStyle(
                 [
-                    label,
-                    *(data_row.get("months") or []),
-                    data_row.get("total") or 0,
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (0, 0), 0),
+                    ("BOTTOMPADDING", (0, 0), (0, 0), 6),
+                    ("TOPPADDING", (0, 1), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LINEBELOW", (0, 0), (-1, 0), 0.6, GRID),
                 ]
             )
-        return _data_table(data, emphasize_last=True)
+        )
+        card = Table([[inner_table]], colWidths=[usable])
+        card.setStyle(
+            TableStyle(
+                [
+                    ("BOX", (0, 0), (-1, -1), 1.15, NAVY_MID),
+                    ("BACKGROUND", (0, 0), (-1, -1), SKY_LIGHT),
+                    ("LEFTPADDING", (0, 0), (-1, -1), inset),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), inset),
+                    ("TOPPADDING", (0, 0), (-1, -1), inset),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), inset),
+                ]
+            )
+        )
+        return card
 
     for section in report.get("sections") or []:
-        story.append(_section_banner(section.get("label") or ""))
-        story.append(Spacer(1, 0.1 * cm))
-        story.append(_section_banner("Call summary"))
-        story.append(_metric_table(section, "calls"))
-        story.append(Spacer(1, 0.18 * cm))
-        story.append(_section_banner("Passenger summary"))
-        story.append(_metric_table(section, "pax"))
-        story.append(Spacer(1, 0.35 * cm))
+        story.append(KeepTogether([_port_block(section), Spacer(1, 0.38 * cm)]))
     return _build_doc(story)
 
 
