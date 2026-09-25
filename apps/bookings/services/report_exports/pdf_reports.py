@@ -315,42 +315,55 @@ def _matrix_pdf(
         subtitle_parts.append(note)
     subtitle = " · ".join(subtitle_parts) or None
 
-    story: list = []
-    for metric_key, title in (("calls", calls_title), ("pax", pax_title)):
-        story.extend(_banner_flowables(title, subtitle, 14))
-        for section in report.get("sections") or []:
-            _, _, section_style, _ = _styles()
-            sec = Table(
-                [[Paragraph(str(section.get("label") or ""), section_style)]],
+    # Same order as HTML ReportDualMatrix: per section, calls then pax.
+    _ = pax_title
+    story: list = _banner_flowables(
+        str(report.get("title") or calls_title),
+        subtitle,
+        14,
+    )
+    _, _, section_style, _ = _styles()
+
+    def _section_banner(label: str) -> Table:
+        sec = Table([[Paragraph(str(label), section_style)]])
+        sec.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), NAVY_MID),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
             )
-            sec.setStyle(
-                TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, -1), NAVY_MID),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                        ("TOPPADDING", (0, 0), (-1, -1), 4),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                    ]
-                )
+        )
+        return sec
+
+    def _metric_table(section: dict[str, Any], metric_key: str) -> Table:
+        data = [["AÑO", *MONTH_LABELS, "TOTAL"]]
+        for data_row in section.get(metric_key) or []:
+            label = (
+                "TOTAL"
+                if data_row.get("year") == "total"
+                else str(data_row.get("year") or "")
             )
-            story.append(sec)
-            data = [["AÑO", *MONTH_LABELS, "TOTAL"]]
-            for data_row in section.get(metric_key) or []:
-                label = (
-                    "TOTAL"
-                    if data_row.get("year") == "total"
-                    else str(data_row.get("year") or "")
-                )
-                data.append(
-                    [
-                        label,
-                        *(data_row.get("months") or []),
-                        data_row.get("total") or 0,
-                    ]
-                )
-            story.append(_data_table(data, emphasize_last=True))
-            story.append(Spacer(1, 0.25 * cm))
-        story.append(Spacer(1, 0.3 * cm))
+            data.append(
+                [
+                    label,
+                    *(data_row.get("months") or []),
+                    data_row.get("total") or 0,
+                ]
+            )
+        return _data_table(data, emphasize_last=True)
+
+    for section in report.get("sections") or []:
+        story.append(_section_banner(section.get("label") or ""))
+        story.append(Spacer(1, 0.1 * cm))
+        story.append(_section_banner("Call summary"))
+        story.append(_metric_table(section, "calls"))
+        story.append(Spacer(1, 0.18 * cm))
+        story.append(_section_banner("Passenger summary"))
+        story.append(_metric_table(section, "pax"))
+        story.append(Spacer(1, 0.35 * cm))
     return _build_doc(story)
 
 
