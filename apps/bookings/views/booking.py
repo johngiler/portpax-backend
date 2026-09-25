@@ -1261,6 +1261,26 @@ class BookingViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+    def _optional_int_list_param(self, key: str) -> list[int] | Response:
+        raw = self.request.query_params.get(key)
+        if not raw:
+            return []
+        ids: list[int] = []
+        for part in str(raw).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                value = int(part)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": f"{key} debe ser id(s) enteros separados por coma."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if value > 0 and value not in ids:
+                ids.append(value)
+        return ids
+
     @action(detail=False, methods=["get"], url_path="report-availability")
     def report_availability(self, request):
         date_from, err = self._parse_iso_date_param("date_from")
@@ -1582,6 +1602,11 @@ class BookingViewSet(
         shipping_line_group_id = self._optional_int_param("shipping_line_group")
         if isinstance(shipping_line_group_id, Response):
             return shipping_line_group_id
+        port_ids = self._optional_int_list_param("ports")
+        if isinstance(port_ids, Response):
+            return port_ids
+        for port_id in port_ids:
+            self._ensure_port_access(port_id)
         return Response(
             build_carrier_panorama(
                 date_from=date_from,
@@ -1590,6 +1615,7 @@ class BookingViewSet(
                 shipping_line_group_id=shipping_line_group_id,
                 without_lta=self._report_without_lta(request),
                 pax_basis=self._report_pax_basis(request),
+                port_ids=port_ids or None,
                 allowed_ports=user_port_ids(request.user),
                 request=request,
             )
@@ -1740,6 +1766,9 @@ class BookingViewSet(
         port_id = self._optional_int_param("port")
         if isinstance(port_id, Response):
             return port_id
+        port_ids = self._optional_int_list_param("ports")
+        if isinstance(port_ids, Response):
+            return port_ids
         line_id = self._optional_int_param("shipping_line")
         if isinstance(line_id, Response):
             return line_id
@@ -1902,6 +1931,8 @@ class BookingViewSet(
                     port.code, date_from, date_to, ext=fmt
                 )
             elif report_type == "carrier_panorama":
+                for scoped_port_id in port_ids:
+                    self._ensure_port_access(scoped_port_id)
                 payload = build_carrier_panorama(
                     date_from=date_from,
                     date_to=date_to,
@@ -1909,6 +1940,7 @@ class BookingViewSet(
                     shipping_line_group_id=group_id,
                     without_lta=without_lta,
                     pax_basis=pax_basis,
+                    port_ids=port_ids or None,
                     allowed_ports=allowed_ports,
                     request=request,
                 )

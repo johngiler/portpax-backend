@@ -620,7 +620,7 @@ def build_port_carrier_matrix(
             "id": port.id,
             "code": port.code,
             "name": port_label,
-            "logo": port_logo,
+            "logo": port_assets["url"],
         },
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),

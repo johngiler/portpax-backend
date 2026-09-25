@@ -34,10 +34,12 @@ from apps.bookings.services.report_exports.booking_movements import (
     build_booking_movements_xlsx,
     parse_movement_year,
 )
+from apps.bookings.services.report_exports.carrier_panorama_pdf import (
+    build_carrier_panorama_pdf,
+)
 from apps.bookings.services.report_exports.pdf_reports import (
     build_availability_chart_pdf,
     build_booking_movements_pdf,
-    build_carrier_panorama_pdf,
     build_port_carrier_matrix_pdf,
     build_port_trends_pdf,
     build_ports_totals_matrix_pdf,

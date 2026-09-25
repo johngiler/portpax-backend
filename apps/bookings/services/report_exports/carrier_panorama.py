@@ -36,20 +36,9 @@ from apps.bookings.services.report_exports.xlsx_style import (
     write_report_banner,
     write_section_banner,
 )
+from apps.bookings.services.report_exports.matrix_reports import _logo_assets
 from apps.bookings.services.validation.legend_labels import port_legend_label
 from apps.catalogs.models import Port, ShippingLine, ShippingLineGroup
-
-
-def _media_url(request, field) -> str | None:
-    if not field:
-        return None
-    try:
-        url = field.url
-    except ValueError:
-        return None
-    if request is not None:
-        return request.build_absolute_uri(url)
-    return url
 
 
 def _port_friendly_name(port: Port | None) -> str:
@@ -114,6 +103,7 @@ def build_carrier_panorama(
     shipping_line_group_id: int | None = None,
     without_lta: bool = False,
     pax_basis: str = "planned",
+    port_ids: set[int] | list[int] | None = None,
     allowed_ports: set[int] | list[int] | None = None,
     request=None,
 ) -> dict[str, Any]:
@@ -124,11 +114,18 @@ def build_carrier_panorama(
         shipping_line_group_id=shipping_line_group_id,
     )
 
+    scoped: set[int] | None = (
+        set(allowed_ports) if allowed_ports is not None else None
+    )
+    wanted = {int(pid) for pid in (port_ids or []) if pid}
+    if wanted:
+        scoped = wanted if scoped is None else scoped & wanted
+
     ports_qs = Port.objects.filter(is_active=True).only(
         "id", "name", "code", "commercial_name", "logo"
     )
-    if allowed_ports is not None:
-        ports_qs = ports_qs.filter(id__in=allowed_ports)
+    if scoped is not None:
+        ports_qs = ports_qs.filter(id__in=scoped)
     ports = list(ports_qs.order_by("name"))
 
     cells: dict[int, dict[int, dict[str, int]]] = defaultdict(
@@ -139,7 +136,7 @@ def build_carrier_panorama(
         date_to=date_to,
         shipping_line_id=shipping_line_id,
         shipping_line_group_id=shipping_line_group_id,
-        allowed_ports=set(allowed_ports) if allowed_ports is not None else None,
+        allowed_ports=scoped,
         without_lta=without_lta,
     )
     for booking in qs.iterator(chunk_size=500):
@@ -173,11 +170,14 @@ def build_carrier_panorama(
             ports_with_calls += 1
         grand_calls += row_calls
         grand_pax += row_pax
+        assets = _logo_assets(port.logo, request)
         rows.append(
             {
                 "port_id": port.id,
                 "port_name": _port_friendly_name(port),
-                "logo": _media_url(request, port.logo),
+                "logo": assets["url"],
+                "logo_name": assets["name"],
+                "logo_path": assets["path"],
                 "by_year": by_year,
                 "total_calls": row_calls,
                 "total_pax": row_pax,
