@@ -115,6 +115,11 @@ from apps.bookings.services.vessel_proximity_matrix import (
     build_vessel_proximity_matrix,
     parse_vessel_proximity_matrix_params,
 )
+from apps.bookings.services.booking_recap import (
+    match_recap_rows,
+    parse_recap_tsv,
+    parse_recap_workbook,
+)
 from apps.bookings.services.import_mass import (
     ItmParseError,
     create_from_resolved_rows,
@@ -245,6 +250,18 @@ class BookingViewSet(
         )
         if call_dates:
             qs = qs.filter(call_date__in=call_dates)
+        ids_raw = self.request.query_params.get("ids")
+        if ids_raw is not None and str(ids_raw).strip() != "":
+            booking_ids: list[int] = []
+            for part in str(ids_raw).split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    booking_ids.append(int(part))
+                except (TypeError, ValueError):
+                    continue
+            qs = qs.filter(id__in=booking_ids or [0])
         ordering = self.request.query_params.get("ordering", "call_date_proximity")
         return apply_booking_list_ordering(qs, ordering)
 
@@ -878,6 +895,44 @@ class BookingViewSet(
         except Exception:
             return Response(
                 {"detail": "No se pudo leer los datos de disponibilidad."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(payload)
+
+    @action(detail=False, methods=["post"], url_path="bulk-import/booking-recap")
+    def bulk_import_booking_recap(self, request):
+        """Match pasted or Excel recap rows to existing bookings. Does not write."""
+        upload = request.FILES.get("file")
+        paste_text = ""
+        if not upload:
+            if isinstance(request.data, dict):
+                paste_text = request.data.get("text") or request.data.get("tsv") or ""
+            paste_text = str(paste_text).strip()
+        if not upload and not paste_text:
+            return Response(
+                {"detail": "Adjunta un Excel (.xlsx) o pega el recap."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            if upload:
+                name = (upload.name or "").lower()
+                if not name.endswith((".xlsx", ".xlsm")):
+                    return Response(
+                        {"detail": "El archivo debe ser Excel (.xlsx)."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                rows = parse_recap_workbook(upload)
+            else:
+                rows = parse_recap_tsv(paste_text)
+            payload = match_recap_rows(
+                rows,
+                allowed_ports=user_port_ids(request.user),
+            )
+        except ItmParseError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            return Response(
+                {"detail": "No se pudo leer el recap de reservas."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(payload)
