@@ -67,6 +67,7 @@ def update_booking_identity(
     old_line = booking.shipping_line
     old_vessel = booking.vessel
     old_call_date = booking.call_date
+    old_position_id = booking.position_id
     old_code = booking.booking_code
     old_lta_id = booking.long_term_agreement_id
     old_notes = booking.notes
@@ -294,7 +295,13 @@ def update_booking_identity(
         refresh_related_booking_conflicts,
     )
 
-    refresh_related_booking_conflicts(booking, user=user, request=request)
+    refresh_related_booking_conflicts(
+        booking,
+        user=user,
+        request=request,
+        previous_position_id=old_position_id,
+        previous_call_date=old_call_date,
+    )
     recalculate_first_arrival_for_booking(
         booking,
         previous_vessel_id=old_vessel.id if old_vessel.id != booking.vessel_id else None,

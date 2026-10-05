@@ -318,20 +318,35 @@ def refresh_booking_conflicts(
     return snapshot
 
 
+def _conflict_chip_label(code: str) -> str:
+    from apps.bookings.services.validation.conflict_display import (
+        CONFLICT_CHIP_LABEL_BY_CODE,
+    )
+
+    return CONFLICT_CHIP_LABEL_BY_CODE.get(code) or code
+
+
 def _conflict_detected_summary(snapshot: list[dict]) -> str:
-    codes = [str(i.get("code") or "") for i in snapshot if i.get("code")]
-    if not codes:
+    labels: list[str] = []
+    for item in snapshot:
+        code = str(item.get("code") or "")
+        if not code:
+            continue
+        label = _conflict_chip_label(code)
+        if label not in labels:
+            labels.append(label)
+    if not labels:
         return "Conflicto operativo detectado"
-    if len(codes) == 1:
-        return f"Conflicto detectado: {codes[0]}"
-    return f"Conflictos detectados ({len(codes)}): {', '.join(codes[:4])}"
+    if len(labels) == 1:
+        return f"Conflicto detectado: {labels[0]}"
+    return f"Conflictos detectados ({len(labels)}): {', '.join(labels[:4])}"
 
 
 def _conflict_updated_summary(prev: list[dict], nxt: list[dict]) -> str:
-    prev_codes = {str(i.get("code") or "") for i in prev}
-    next_codes = {str(i.get("code") or "") for i in nxt}
-    added = sorted(next_codes - prev_codes)
-    removed = sorted(prev_codes - next_codes)
+    prev_codes = {str(i.get("code") or "") for i in prev if i.get("code")}
+    next_codes = {str(i.get("code") or "") for i in nxt if i.get("code")}
+    added = [_conflict_chip_label(code) for code in sorted(next_codes - prev_codes)]
+    removed = [_conflict_chip_label(code) for code in sorted(prev_codes - next_codes)]
     parts: list[str] = []
     if added:
         parts.append(f"+{', '.join(added[:3])}")
@@ -401,26 +416,57 @@ def refresh_booking_conflicts_after_port_proximity_change(
     return total
 
 
-def refresh_related_booking_conflicts(
-    booking,
+def _refresh_pier_day_neighbors(
     *,
+    position_id: int,
+    call_date,
+    refreshed_ids: set[int],
     user=None,
     request=None,
-    notify: bool = True,
 ) -> None:
-    """Refresh this booking and others that may share its conflicts.
+    """Recompute conflicts for other live calls on this pier day.
 
-    Covers:
-    - same-day related pier slots (occupation, FILO, combined components)
-    - same-day LOA recalc siblings
-    - same-vessel itinerary / geo neighbors in the proximity window
-
-    Primary booking uses notify; neighbors refresh silently to avoid duplicate
-    campanita noise for the same operational change.
+    Includes combined/component siblings and LOA-recalc pairs. Does not
+    change anyone's assigned position — only the conflict snapshot.
     """
-    from datetime import timedelta
-
     from django.db.models import Q
+
+    from apps.bookings.constants import OCCUPATION_CONFLICT_STATUSES
+    from apps.bookings.models import Booking
+    from apps.bookings.services.validation.rules import related_position_ids
+    from apps.catalogs.models import PositionLoaRecalcRule
+
+    position_ids = related_position_ids(position_id)
+    for rule in PositionLoaRecalcRule.objects.filter(is_active=True).filter(
+        Q(position_a_id=position_id) | Q(position_b_id=position_id)
+    ):
+        position_ids.add(rule.position_a_id)
+        position_ids.add(rule.position_b_id)
+
+    for other in Booking.objects.filter(
+        call_date=call_date,
+        position_id__in=position_ids,
+        status__in=OCCUPATION_CONFLICT_STATUSES,
+    ).exclude(pk__in=refreshed_ids):
+        refresh_booking_conflicts(
+            other,
+            user=user,
+            request=request,
+            notify=False,
+            notify_updates=False,
+        )
+        refreshed_ids.add(other.pk)
+
+
+def _refresh_vessel_window_neighbors(
+    *,
+    vessel_id: int,
+    call_date,
+    refreshed_ids: set[int],
+    user=None,
+    request=None,
+) -> None:
+    from datetime import timedelta
 
     from apps.bookings.constants import (
         MAX_GEO_PROXIMITY_WINDOW_DAYS,
@@ -428,9 +474,47 @@ def refresh_related_booking_conflicts(
         VESSEL_ITINERARY_BUFFER_DAYS,
     )
     from apps.bookings.models import Booking
-    from apps.bookings.services.validation.rules import related_position_ids
-    from apps.catalogs.models import PositionLoaRecalcRule
 
+    window = max(VESSEL_ITINERARY_BUFFER_DAYS, MAX_GEO_PROXIMITY_WINDOW_DAYS)
+    neighbors = Booking.objects.filter(
+        vessel_id=vessel_id,
+        call_date__gte=call_date - timedelta(days=window),
+        call_date__lte=call_date + timedelta(days=window),
+        status__in=OCCUPATION_CONFLICT_STATUSES,
+    ).exclude(pk__in=refreshed_ids)
+    for other in neighbors:
+        refresh_booking_conflicts(
+            other,
+            user=user,
+            request=request,
+            notify=False,
+            notify_updates=False,
+        )
+        refreshed_ids.add(other.pk)
+
+
+def refresh_related_booking_conflicts(
+    booking,
+    *,
+    user=None,
+    request=None,
+    notify: bool = True,
+    previous_position_id: int | None = None,
+    previous_call_date=None,
+) -> None:
+    """Refresh this booking and others that may share its conflicts.
+
+    Covers:
+    - same-day related pier slots (occupation, FILO, combined components)
+    - same-day LOA recalc siblings
+    - same-vessel itinerary / geo neighbors in the proximity window
+    - the pier/day this booking just left (so the call that stayed does not
+      keep a stale position conflict until the cron)
+
+    Primary booking uses notify; neighbors refresh silently to avoid duplicate
+    campanita noise for the same operational change. Position assignments are
+    never cleared here.
+    """
     refresh_booking_conflicts(
         booking,
         user=user,
@@ -441,41 +525,33 @@ def refresh_related_booking_conflicts(
 
     refreshed_ids = {booking.pk}
 
+    pier_days: list[tuple[int, object]] = []
     if booking.position_id and booking.call_date:
-        position_ids = related_position_ids(booking.position_id)
-        for rule in PositionLoaRecalcRule.objects.filter(is_active=True).filter(
-            Q(position_a_id=booking.position_id) | Q(position_b_id=booking.position_id)
-        ):
-            position_ids.add(rule.position_a_id)
-            position_ids.add(rule.position_b_id)
+        pier_days.append((booking.position_id, booking.call_date))
+    if previous_position_id and previous_call_date:
+        abandoned = (previous_position_id, previous_call_date)
+        if abandoned not in pier_days:
+            pier_days.append(abandoned)
+    for position_id, call_date in pier_days:
+        _refresh_pier_day_neighbors(
+            position_id=position_id,
+            call_date=call_date,
+            refreshed_ids=refreshed_ids,
+            user=user,
+            request=request,
+        )
 
-        for other in Booking.objects.filter(
-            call_date=booking.call_date,
-            position_id__in=position_ids,
-            status__in=OCCUPATION_CONFLICT_STATUSES,
-        ).exclude(pk__in=refreshed_ids):
-            refresh_booking_conflicts(
-                other,
+    call_dates = []
+    if booking.call_date:
+        call_dates.append(booking.call_date)
+    if previous_call_date and previous_call_date not in call_dates:
+        call_dates.append(previous_call_date)
+    if booking.vessel_id:
+        for call_date in call_dates:
+            _refresh_vessel_window_neighbors(
+                vessel_id=booking.vessel_id,
+                call_date=call_date,
+                refreshed_ids=refreshed_ids,
                 user=user,
                 request=request,
-                notify=False,
-                notify_updates=False,
-            )
-            refreshed_ids.add(other.pk)
-
-    if booking.vessel_id and booking.call_date:
-        window = max(VESSEL_ITINERARY_BUFFER_DAYS, MAX_GEO_PROXIMITY_WINDOW_DAYS)
-        neighbors = Booking.objects.filter(
-            vessel_id=booking.vessel_id,
-            call_date__gte=booking.call_date - timedelta(days=window),
-            call_date__lte=booking.call_date + timedelta(days=window),
-            status__in=OCCUPATION_CONFLICT_STATUSES,
-        ).exclude(pk__in=refreshed_ids)
-        for other in neighbors:
-            refresh_booking_conflicts(
-                other,
-                user=user,
-                request=request,
-                notify=False,
-                notify_updates=False,
             )

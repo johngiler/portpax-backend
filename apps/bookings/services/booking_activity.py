@@ -14,6 +14,12 @@ from apps.audit.utils.activity_actor import actor_options_from_ids, parse_actor_
 from apps.audit.utils.friendly_changes import enrich_booking_audit_changes
 from apps.bookings.models import Booking, BookingImportBatch, BookingRunBatch
 
+CONFLICT_AUDIT_ACTIONS = (
+    "conflict_detected",
+    "conflict_updated",
+    "conflict_resolved",
+)
+
 SINGLE_ACTIONS = (
     "created",
     "operational_update",
@@ -22,6 +28,7 @@ SINGLE_ACTIONS = (
     "lta_linked",
     "lta_unlinked",
     "deleted",
+    *CONFLICT_AUDIT_ACTIONS,
 )
 
 CREATE_AUDIT_ACTIONS = ("created",)
@@ -31,6 +38,7 @@ UPDATE_AUDIT_ACTIONS = (
     "status_change",
     "lta_linked",
     "lta_unlinked",
+    *CONFLICT_AUDIT_ACTIONS,
 )
 DELETE_AUDIT_ACTIONS = ("deleted",)
 LTA_LINK_ACTIONS = ("lta_linked", "lta_unlinked")

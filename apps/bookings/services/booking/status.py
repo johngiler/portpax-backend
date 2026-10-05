@@ -248,6 +248,8 @@ def update_booking_operational(
     update_fields = ["updated_at"]
     position_changed = False
     schedule_changed = False
+    prior_position_id = booking.position_id
+    prior_call_date = booking.call_date
 
     pending_position = position_id is not None and position_id != booking.position_id
     pending_eta = eta is not None and eta != booking.eta
@@ -436,6 +438,12 @@ def update_booking_operational(
             refresh_related_booking_conflicts,
         )
 
-        refresh_related_booking_conflicts(booking, user=user, request=request)
+        refresh_related_booking_conflicts(
+            booking,
+            user=user,
+            request=request,
+            previous_position_id=prior_position_id,
+            previous_call_date=prior_call_date,
+        )
 
     return booking
