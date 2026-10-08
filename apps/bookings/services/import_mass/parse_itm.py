@@ -1,10 +1,10 @@
 """Parse mass-booking Excel or pasted TSV.
 
-Canonical paste (homologated with booking recap):
-  Naviera, Ship, Port, Arrival Date, ETA, ETD [, Assignment]
+Canonical paste (homologated with booking recap; Spanish UI headers):
+  Naviera, Barco, Puerto, Fecha, ETA, ETD [, Posición]
 
-Legacy ITM still accepted:
-  Ship, Port, Arrival, Departure [, Position…]
+English / legacy ITM still accepted:
+  Shipping Line, Ship, Port, Arrival Date… / Ship, Port, Arrival, Departure
 """
 
 from __future__ import annotations
@@ -48,15 +48,15 @@ _ARRIVAL_DATE_STRICT = frozenset(
 _ARRIVAL_DATE_LOOSE = frozenset({"fecha", "date"})
 _ETA = frozenset({"eta", "arrive time", "hora llegada", "hora de llegada"})
 _ETD = frozenset({"etd", "depart time", "hora salida", "hora de salida"})
-_ASSIGNMENT = frozenset(
+_POSITION = frozenset(
     {
-        "assignment",
         "position",
         "posición",
         "posicion",
         "position code",
         "berth",
         "pos",
+        "assignment",  # legacy Fernanda / older paste label
     }
 )
 _ARRIVAL = frozenset({"arrival", "llegada", "arrive"})
@@ -146,7 +146,7 @@ def _parse_itm_table(
     date_loose_i = _index(header_map, _ARRIVAL_DATE_LOOSE)
     eta_i = _index(header_map, _ETA)
     etd_i = _index(header_map, _ETD)
-    assignment_i = _index(header_map, _ASSIGNMENT)
+    position_i = _index(header_map, _POSITION)
     arrival_i = _index(header_map, _ARRIVAL)
     departure_i = _index(header_map, _DEPARTURE)
     vendor_i = header_map.get("vendor name")
@@ -166,8 +166,8 @@ def _parse_itm_table(
     )
     if not split_format and not legacy_format:
         raise ItmParseError(
-            "Faltan columnas. Formato: Naviera, Ship, Port, Arrival Date, ETA, ETD "
-            "[, Assignment]. También se acepta el legacy Ship, Port, Arrival, Departure."
+            "Faltan columnas. Formato: Naviera, Barco, Puerto, Fecha, ETA, ETD "
+            "[, Posición]. También se acepta Ship, Port, Arrival, Departure."
         )
 
     parsed: list[dict[str, Any]] = []
@@ -190,7 +190,7 @@ def _parse_itm_table(
             if vendor_i is not None
             else ""
         )
-        # Prefer dedicated Naviera column; Vendor Name remains a fallback alias.
+        # Prefer dedicated Shipping Line column; Vendor Name remains a fallback alias.
         line_raw = naviera_raw or vendor
         call_type = (
             _cell_str(cell(call_type_i))
@@ -198,8 +198,8 @@ def _parse_itm_table(
             else ""
         )
         position_raw = (
-            _cell_str(cell(assignment_i))
-            if assignment_i is not None
+            _cell_str(cell(position_i))
+            if position_i is not None
             else ""
         )
 
@@ -268,13 +268,13 @@ def parse_itm_tsv(text: str) -> list[dict[str, Any]]:
     raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not raw:
         raise ItmParseError(
-            "Pega al menos una fila con Naviera, Ship, Port, Arrival Date, ETA y ETD."
+            "Pega al menos una fila con Naviera, Barco, Puerto, Fecha, ETA y ETD."
         )
 
     lines = [ln for ln in raw.split("\n") if ln.strip()]
     if not lines:
         raise ItmParseError(
-            "Pega al menos una fila con Naviera, Ship, Port, Arrival Date, ETA y ETD."
+            "Pega al menos una fila con Naviera, Barco, Puerto, Fecha, ETA y ETD."
         )
 
     vertical = _reshape_vertical_itm_lines(lines)
@@ -294,7 +294,7 @@ def parse_itm_tsv(text: str) -> list[dict[str, Any]]:
     body = [(i, split_line(line)) for i, line in enumerate(lines[1:], start=2)]
     if not body:
         raise ItmParseError(
-            "Incluye la fila de encabezados (Naviera, Ship, Port, Arrival Date, ETA, ETD) "
+            "Incluye la fila de encabezados (Naviera, Barco, Puerto, Fecha, ETA, ETD) "
             "y al menos una fila de datos."
         )
     return _parse_itm_table(headers, body)
@@ -302,39 +302,50 @@ def parse_itm_tsv(text: str) -> list[dict[str, Any]]:
 
 _VERTICAL_ITM_HEADERS = (
     "Naviera",
-    "Ship",
-    "Port",
-    "Arrival Date",
+    "Barco",
+    "Puerto",
+    "Fecha",
     "ETA",
     "ETD",
-    "Assignment",
+    "Posición",
     "Arrival",
     "Departure",
     "Vendor Name",
     "Call Type",
-    "Position",
 )
 _VERTICAL_ITM_KEYS = {h.lower(): h for h in _VERTICAL_ITM_HEADERS}
 _VERTICAL_ITM_KEYS.update(
     {
         "naviera": "Naviera",
+        "shipping line": "Naviera",
+        "shipping_line": "Naviera",
         "group": "Naviera",
         "grupo": "Naviera",
-        "shipping line": "Naviera",
         "carrier": "Naviera",
+        "line": "Naviera",
         "vendor name": "Naviera",
-        "arrival date": "Arrival Date",
-        "berth date": "Arrival Date",
-        "fecha": "Arrival Date",
+        "barco": "Barco",
+        "ship": "Barco",
+        "ship name": "Barco",
+        "vessel": "Barco",
+        "puerto": "Puerto",
+        "port": "Puerto",
+        "port name": "Puerto",
+        "fecha": "Fecha",
+        "arrival date": "Fecha",
+        "berth date": "Fecha",
+        "call date": "Fecha",
+        "fecha de escala": "Fecha",
+        "date": "Fecha",
         "arrive time": "ETA",
         "depart time": "ETD",
-        "posición": "Assignment",
-        "posicion": "Assignment",
-        "position code": "Assignment",
-        "assignment": "Assignment",
-        "berth": "Assignment",
-        "pos": "Assignment",
-        "position": "Assignment",
+        "posición": "Posición",
+        "posicion": "Posición",
+        "position": "Posición",
+        "position code": "Posición",
+        "assignment": "Posición",
+        "berth": "Posición",
+        "pos": "Posición",
     }
 )
 

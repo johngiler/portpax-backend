@@ -1,4 +1,4 @@
-"""Parse a booking recap sheet (Naviera, Ship, Port, date, ETA/ETD — no position)."""
+"""Parse a booking recap sheet (Naviera, Barco, Puerto, Fecha, ETA/ETD — no Posición)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from openpyxl import load_workbook
 from apps.bookings.services.import_mass.parse_dates import parse_flexible_datetime
 from apps.bookings.services.import_mass.parse_itm import (
     ItmParseError,
-    _ASSIGNMENT,
     _ARRIVAL,
     _ARRIVAL_DATE_LOOSE,
     _ARRIVAL_DATE_STRICT,
@@ -19,6 +18,7 @@ from apps.bookings.services.import_mass.parse_itm import (
     _ETD,
     _NAVIERA,
     _PORT,
+    _POSITION,
     _SHIP,
     _as_time,
     _cell_str,
@@ -33,8 +33,8 @@ def _parse_table(
     body_rows: Iterable[tuple[int, list[Any]]],
 ) -> list[dict[str, Any]]:
     header_map = {header_key(h): i for i, h in enumerate(headers) if h}
-    # Recap never uses Assignment; ignore if pasted by mistake.
-    _ = _index(header_map, _ASSIGNMENT)
+    # Recap never uses Position; ignore if pasted by mistake.
+    _ = _index(header_map, _POSITION)
     ship_i = _index(header_map, _SHIP)
     port_i = _index(header_map, _PORT)
     naviera_i = _index(header_map, _NAVIERA)
@@ -51,8 +51,8 @@ def _parse_table(
 
     if ship_i is None or port_i is None or (date_i is None and arrival_i is None):
         raise ItmParseError(
-            "Faltan columnas. Usa Naviera, Ship, Port, Arrival Date, ETA y ETD "
-            "(sin posición). También vale Ship, Port, Arrival y Departure."
+            "Faltan columnas. Usa Naviera, Barco, Puerto, Fecha, ETA y ETD "
+            "(sin Posición). También vale Ship, Port, Arrival y Departure."
         )
 
     parsed: list[dict[str, Any]] = []
@@ -140,7 +140,7 @@ def parse_recap_tsv(text: str) -> list[dict[str, Any]]:
     raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not raw:
         raise ItmParseError(
-            "Pega al menos una fila con Naviera, Ship, Port y Arrival Date."
+            "Pega al menos una fila con Naviera, Barco, Puerto y Fecha."
         )
     lines = [ln for ln in raw.split("\n") if ln.strip()]
 
