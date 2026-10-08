@@ -8,7 +8,7 @@ from typing import Any
 from apps.bookings.models import Booking
 from apps.bookings.services.import_mass.resolve import (
     resolve_port,
-    resolve_shipping_line_group,
+    resolve_shipping_line,
     resolve_vessel,
 )
 from apps.bookings.services.validation.legend_labels import port_legend_label
@@ -138,13 +138,15 @@ def match_recap_rows(
     for row in rows:
         ship = (row.get("ship") or "").strip()
         port_raw = (row.get("port_raw") or "").strip()
-        group_raw = (row.get("group_raw") or "").strip()
+        line_raw = str(
+            row.get("line_raw") or row.get("group_raw") or ""
+        ).strip()
         call_date = row.get("call_date")
         base = {
             "row_number": row.get("row_number"),
             "ship": ship,
             "port": port_raw,
-            "group": group_raw or None,
+            "line": line_raw or None,
             "call_date": call_date.isoformat() if isinstance(call_date, date) else None,
             "eta": _hhmm(row.get("eta")) if isinstance(row.get("eta"), time) else None,
             "etd": _hhmm(row.get("etd")) if isinstance(row.get("etd"), time) else None,
@@ -153,16 +155,16 @@ def match_recap_rows(
             unmatched.append({**base, "reason": "Fecha de escala no válida."})
             continue
         port = resolve_port(port_raw)
-        group = resolve_shipping_line_group(group_raw) if group_raw else None
-        if group_raw and group is None:
+        line = resolve_shipping_line(line_raw) if line_raw else None
+        if line_raw and line is None:
             unmatched.append(
-                {**base, "reason": f"Grupo de naviera no encontrado: «{group_raw}»."}
+                {**base, "reason": f"Naviera no encontrada: «{line_raw}»."}
             )
             continue
         vessel = (
             resolve_vessel(
                 ship,
-                shipping_line_group_id=group.id if group is not None else None,
+                line.id if line is not None else None,
             )
             if ship
             else None
@@ -174,12 +176,12 @@ def match_recap_rows(
             unmatched.append({**base, "reason": f"Sin acceso a {_port_label(port)}."})
             continue
         if vessel is None:
-            if group is not None:
+            if line is not None:
                 unmatched.append(
                     {
                         **base,
                         "reason": (
-                            f"Barco no encontrado en el grupo «{group.name}»: «{ship}»."
+                            f"Barco no encontrado en la naviera «{line.name}»: «{ship}»."
                         ),
                     }
                 )
@@ -225,6 +227,10 @@ def match_recap_rows(
                     "row_number": row.get("row_number"),
                     "ship": row.get("ship") or "",
                     "port": row.get("port_raw") or "",
+                    "line": (
+                        str(row.get("line_raw") or row.get("group_raw") or "").strip()
+                        or None
+                    ),
                     "call_date": call_date.isoformat() if isinstance(call_date, date) else None,
                     "eta": _hhmm(row.get("eta")) if isinstance(row.get("eta"), time) else None,
                     "etd": _hhmm(row.get("etd")) if isinstance(row.get("etd"), time) else None,

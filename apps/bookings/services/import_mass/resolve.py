@@ -199,7 +199,7 @@ def _unresolved_vessel_issue(
         if qs.exists():
             return (
                 f"«{ship}» existe en otra naviera. "
-                "Elige el grupo o la naviera correcta."
+                "Elige la naviera correcta."
             )
         return f"Barco no encontrado en esta naviera: «{ship}»."
     if shipping_line_group_id:
@@ -220,7 +220,7 @@ def _unresolved_vessel_issue(
     if qs.count() > 1:
         return (
             f"Hay varios barcos llamados «{ship}». "
-            "Elige un grupo de naviera para resolverlo."
+            "Indica la naviera (columna Naviera) para resolverlo."
         )
     return f"Barco no encontrado: «{ship}»."
 
@@ -486,47 +486,41 @@ def resolve_itm_rows(
             issues.append("Fecha/hora de Departure inválida.")
 
         port = resolve_port(port_raw) if port_raw else None
-        group_raw = str(raw.get("group_raw") or "").strip()
-        vendor_name = str(raw.get("vendor_name") or "").strip()
+        line_raw = str(
+            raw.get("line_raw") or raw.get("vendor_name") or ""
+        ).strip()
+        vendor_name = line_raw
         row_line = forced_line
         row_group = forced_group
-        group_missing = False
-        # Pasted Group column forces shipping-line-group scope (homonyms).
-        if row_group is None and group_raw:
-            row_group = resolve_shipping_line_group(group_raw)
-            if row_group is None:
-                group_missing = True
-                issues.append(f"Grupo de naviera no encontrado: «{group_raw}».")
-        if row_line is None and vendor_name and not group_raw:
-            guessed_line = resolve_shipping_line(vendor_name)
-            if guessed_line is not None and (
-                row_group is None or guessed_line.group_id == row_group.id
-            ):
-                row_line = guessed_line
-                if row_group is None:
-                    row_group = guessed_line.group
-        if row_group is None and vendor_name and not group_raw:
-            row_group = resolve_shipping_line_group(vendor_name)
+        line_missing = False
+        # Pasted Naviera column scopes the vessel to that shipping line (homonyms).
+        if row_line is None and line_raw:
+            row_line = resolve_shipping_line(line_raw)
+            if row_line is None:
+                line_missing = True
+                issues.append(f"Naviera no encontrada: «{line_raw}».")
+            elif row_group is None:
+                row_group = row_line.group
         line_id = row_line.id if row_line else None
         group_id = row_group.id if row_group else None
         vessel = (
             resolve_vessel(
                 ship,
                 line_id,
-                shipping_line_group_id=group_id,
+                shipping_line_group_id=group_id if line_id is None else None,
             )
-            if ship and not group_missing
+            if ship and not line_missing
             else None
         )
 
         if port_raw and port is None:
             issues.append(f"Puerto no encontrado: «{port_raw}».")
-        if ship and vessel is None and not group_missing:
+        if ship and vessel is None and not line_missing:
             issues.append(
                 _unresolved_vessel_issue(
                     ship,
                     line_id,
-                    shipping_line_group_id=group_id,
+                    shipping_line_group_id=group_id if line_id is None else None,
                 )
             )
 
@@ -683,12 +677,16 @@ def resolve_preview_row_edit(payload: dict[str, Any]) -> dict[str, Any]:
         except ValueError:
             departure = None
 
+    line_hint = str(
+        payload.get("line_raw") or payload.get("vendor_name") or ""
+    ).strip()
     raw = {
         "ship": ship,
         "port_raw": port_raw,
         "arrival": arrival,
         "departure": departure,
-        "vendor_name": payload.get("vendor_name") or "",
+        "line_raw": line_hint,
+        "vendor_name": line_hint,
         "call_type": payload.get("call_type") or "",
         "row_number": row_number,
     }

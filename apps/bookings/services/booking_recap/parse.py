@@ -1,4 +1,4 @@
-"""Parse a booking recap sheet (Group, Ship, Port, date, ETA/ETD — no position)."""
+"""Parse a booking recap sheet (Naviera, Ship, Port, date, ETA/ETD — no position)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from apps.bookings.services.import_mass.parse_itm import (
     _DEPARTURE,
     _ETA,
     _ETD,
-    _GROUP,
+    _NAVIERA,
     _PORT,
     _SHIP,
     _as_time,
@@ -37,7 +37,7 @@ def _parse_table(
     _ = _index(header_map, _ASSIGNMENT)
     ship_i = _index(header_map, _SHIP)
     port_i = _index(header_map, _PORT)
-    group_i = _index(header_map, _GROUP)
+    naviera_i = _index(header_map, _NAVIERA)
     date_strict_i = _index(header_map, _ARRIVAL_DATE_STRICT)
     date_loose_i = _index(header_map, _ARRIVAL_DATE_LOOSE)
     eta_i = _index(header_map, _ETA)
@@ -51,7 +51,7 @@ def _parse_table(
 
     if ship_i is None or port_i is None or (date_i is None and arrival_i is None):
         raise ItmParseError(
-            "Faltan columnas. Usa Group, Ship, Port, Arrival Date, ETA y ETD "
+            "Faltan columnas. Usa Naviera, Ship, Port, Arrival Date, ETA y ETD "
             "(sin posición). También vale Ship, Port, Arrival y Departure."
         )
 
@@ -67,7 +67,7 @@ def _parse_table(
         if not ship and not port:
             continue
 
-        group_raw = _cell_str(cell(group_i)) if group_i is not None else ""
+        line_raw = _cell_str(cell(naviera_i)) if naviera_i is not None else ""
         berth = parse_flexible_datetime(cell(date_i)) if date_i is not None else None
         arrival = (
             parse_flexible_datetime(cell(arrival_i)) if arrival_i is not None else None
@@ -84,7 +84,7 @@ def _parse_table(
                     "row_number": excel_row,
                     "ship": ship,
                     "port_raw": port,
-                    "group_raw": group_raw,
+                    "line_raw": line_raw,
                     "call_date": None,
                     "eta": None,
                     "etd": None,
@@ -104,7 +104,7 @@ def _parse_table(
                 "row_number": excel_row,
                 "ship": ship,
                 "port_raw": port,
-                "group_raw": group_raw,
+                "line_raw": line_raw,
                 "call_date": call_dt.date() if isinstance(call_dt, datetime) else call_dt,
                 "eta": eta,
                 "etd": etd,
@@ -140,7 +140,7 @@ def parse_recap_tsv(text: str) -> list[dict[str, Any]]:
     raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not raw:
         raise ItmParseError(
-            "Pega al menos una fila con Group, Ship, Port y Arrival Date."
+            "Pega al menos una fila con Naviera, Ship, Port y Arrival Date."
         )
     lines = [ln for ln in raw.split("\n") if ln.strip()]
 
