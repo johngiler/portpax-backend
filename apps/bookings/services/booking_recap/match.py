@@ -241,6 +241,7 @@ def match_recap_rows(
         used.add(chosen.id)
         avisos = _avisos(chosen, row)
         match_percent, match_reason = _match_summary(chosen, row)
+        # Recap schedule for FE live re-score when the operator edits ETA/ETD/date.
         matches.append(
             {
                 "booking_id": chosen.id,
@@ -249,6 +250,19 @@ def match_recap_rows(
                 "match_percent": match_percent,
                 "match_reason": match_reason,
                 "avisos": avisos,
+                "recap_call_date": (
+                    call_date.isoformat() if isinstance(call_date, date) else None
+                ),
+                "recap_eta": (
+                    _hhmm(row.get("eta"))
+                    if isinstance(row.get("eta"), time)
+                    else None
+                ),
+                "recap_etd": (
+                    _hhmm(row.get("etd"))
+                    if isinstance(row.get("etd"), time)
+                    else None
+                ),
             }
         )
 
