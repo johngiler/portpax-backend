@@ -366,7 +366,7 @@ class BookingViewSet(
             return Response(
                 {
                     "detail": "Adjunta un Excel (.xlsx) o pega las celdas "
-                    "(Ship, Port, Arrival, Departure)."
+                    "(Group, Ship, Port, Arrival Date, ETA, ETD)."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )

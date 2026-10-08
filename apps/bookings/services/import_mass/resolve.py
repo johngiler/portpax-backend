@@ -486,10 +486,18 @@ def resolve_itm_rows(
             issues.append("Fecha/hora de Departure inválida.")
 
         port = resolve_port(port_raw) if port_raw else None
+        group_raw = str(raw.get("group_raw") or "").strip()
         vendor_name = str(raw.get("vendor_name") or "").strip()
         row_line = forced_line
         row_group = forced_group
-        if row_line is None and vendor_name:
+        group_missing = False
+        # Pasted Group column forces shipping-line-group scope (homonyms).
+        if row_group is None and group_raw:
+            row_group = resolve_shipping_line_group(group_raw)
+            if row_group is None:
+                group_missing = True
+                issues.append(f"Grupo de naviera no encontrado: «{group_raw}».")
+        if row_line is None and vendor_name and not group_raw:
             guessed_line = resolve_shipping_line(vendor_name)
             if guessed_line is not None and (
                 row_group is None or guessed_line.group_id == row_group.id
@@ -497,7 +505,7 @@ def resolve_itm_rows(
                 row_line = guessed_line
                 if row_group is None:
                     row_group = guessed_line.group
-        if row_group is None and vendor_name:
+        if row_group is None and vendor_name and not group_raw:
             row_group = resolve_shipping_line_group(vendor_name)
         line_id = row_line.id if row_line else None
         group_id = row_group.id if row_group else None
@@ -507,13 +515,13 @@ def resolve_itm_rows(
                 line_id,
                 shipping_line_group_id=group_id,
             )
-            if ship
+            if ship and not group_missing
             else None
         )
 
         if port_raw and port is None:
             issues.append(f"Puerto no encontrado: «{port_raw}».")
-        if ship and vessel is None:
+        if ship and vessel is None and not group_missing:
             issues.append(
                 _unresolved_vessel_issue(
                     ship,

@@ -6,7 +6,11 @@ from datetime import date, time, timedelta
 from typing import Any
 
 from apps.bookings.models import Booking
-from apps.bookings.services.import_mass.resolve import resolve_port, resolve_vessel
+from apps.bookings.services.import_mass.resolve import (
+    resolve_port,
+    resolve_shipping_line_group,
+    resolve_vessel,
+)
 from apps.bookings.services.validation.legend_labels import port_legend_label
 
 _WEEKDAYS = ("Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom")
@@ -134,11 +138,13 @@ def match_recap_rows(
     for row in rows:
         ship = (row.get("ship") or "").strip()
         port_raw = (row.get("port_raw") or "").strip()
+        group_raw = (row.get("group_raw") or "").strip()
         call_date = row.get("call_date")
         base = {
             "row_number": row.get("row_number"),
             "ship": ship,
             "port": port_raw,
+            "group": group_raw or None,
             "call_date": call_date.isoformat() if isinstance(call_date, date) else None,
             "eta": _hhmm(row.get("eta")) if isinstance(row.get("eta"), time) else None,
             "etd": _hhmm(row.get("etd")) if isinstance(row.get("etd"), time) else None,
@@ -147,7 +153,20 @@ def match_recap_rows(
             unmatched.append({**base, "reason": "Fecha de escala no válida."})
             continue
         port = resolve_port(port_raw)
-        vessel = resolve_vessel(ship) if ship else None
+        group = resolve_shipping_line_group(group_raw) if group_raw else None
+        if group_raw and group is None:
+            unmatched.append(
+                {**base, "reason": f"Grupo de naviera no encontrado: «{group_raw}»."}
+            )
+            continue
+        vessel = (
+            resolve_vessel(
+                ship,
+                shipping_line_group_id=group.id if group is not None else None,
+            )
+            if ship
+            else None
+        )
         if port is None:
             unmatched.append({**base, "reason": f"Puerto no encontrado: «{port_raw}»."})
             continue
@@ -155,7 +174,17 @@ def match_recap_rows(
             unmatched.append({**base, "reason": f"Sin acceso a {_port_label(port)}."})
             continue
         if vessel is None:
-            unmatched.append({**base, "reason": f"Barco no encontrado: «{ship}»."})
+            if group is not None:
+                unmatched.append(
+                    {
+                        **base,
+                        "reason": (
+                            f"Barco no encontrado en el grupo «{group.name}»: «{ship}»."
+                        ),
+                    }
+                )
+            else:
+                unmatched.append({**base, "reason": f"Barco no encontrado: «{ship}»."})
             continue
         window_start = call_date - _DATE_WINDOW
         window_end = call_date + _DATE_WINDOW
