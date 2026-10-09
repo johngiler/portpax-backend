@@ -237,15 +237,18 @@ def validate_vessel_itinerary_buffer(
     exclude_booking_id: int | None = None,
 ) -> list[ValidationIssue]:
     """
-    Soft buffer: warn when the same vessel has another active call within
+    Soft buffer: warn when the same vessel has another peer call within
     ±VESSEL_ITINERARY_BUFFER_DAYS (any port, including the same).
+
+    Peers are only H / CO / CL (ITINERARY_PEER_STATUSES). LTA ghost slots,
+    NR and LTD do not trigger this aviso.
 
     Non-blocking — ops can still create/update; not persisted as a conflict chip.
     """
     from datetime import timedelta
 
     from apps.bookings.constants import (
-        ACTIVE_BOOKING_STATUSES,
+        ITINERARY_PEER_STATUSES,
         VESSEL_ITINERARY_BUFFER_DAYS,
     )
     from apps.bookings.services.validation.legend_labels import port_legend_label
@@ -257,7 +260,7 @@ def validate_vessel_itinerary_buffer(
             vessel_id=vessel_id,
             call_date__gte=window_start,
             call_date__lte=window_end,
-            status__in=ACTIVE_BOOKING_STATUSES,
+            status__in=ITINERARY_PEER_STATUSES,
         )
         .select_related("port")
         .order_by("call_date", "id")

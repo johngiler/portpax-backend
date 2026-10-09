@@ -9,6 +9,10 @@ ACTIVE_BOOKING_STATUSES = ("nr", "h", "co", "cl", "lta", "ltd")
 # Same-day position conflicts: include Real (berth was used that day).
 OCCUPATION_CONFLICT_STATUSES = ("nr", "h", "co", "cl", "lta", "ltd", "r")
 
+# Same-vessel itinerary buffer (±days): only confirmed / in-evaluation peers.
+# Ghost LTA slots (and NR/LTD) do not count — ops request (Fernanda).
+ITINERARY_PEER_STATUSES = ("h", "co", "cl")
+
 # LTA horizon / covered-window without agreement: soft-fail when creating Hold.
 LTA_SOFT_FAIL_CODES = frozenset(
     {"lta_beyond_horizon", "lta_horizon_denied", "lta_policy_denied"}
