@@ -1,4 +1,5 @@
 from django.db.models import Count, Prefetch, Q
+from django.http import HttpResponse
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -28,6 +29,11 @@ from apps.bookings.tasks_lta import (
     lta_link_matching,
     lta_regenerate_bookings,
     lta_resync_agreement,
+)
+from apps.bookings.services.lta.export_linked import (
+    build_linked_bookings_csv,
+    build_linked_bookings_xlsx,
+    export_linked_filename,
 )
 from apps.bookings.services.lta.generate_bookings import (
     LtaGenerateError,
@@ -327,3 +333,26 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
     def regenerate_bookings(self, request, pk=None):
         """Enqueue resync set-diff + materialize missing LTA slots."""
         return self._enqueue_generate(request, regenerate=True)
+
+    @action(detail=True, methods=["get"], url_path="export-bookings")
+    def export_bookings(self, request, pk=None):
+        """Download all non-cancelled bookings linked to this agreement."""
+        agreement = self.get_object()
+        fmt = (request.query_params.get("export_format") or "xlsx").strip().lower()
+        if fmt not in ("xlsx", "csv"):
+            return Response(
+                {"detail": "export_format debe ser xlsx o csv."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if fmt == "csv":
+            payload = build_linked_bookings_csv(agreement)
+            content_type = "text/csv; charset=utf-8"
+        else:
+            payload = build_linked_bookings_xlsx(agreement)
+            content_type = (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        filename = export_linked_filename(agreement, fmt)
+        response = HttpResponse(payload, content_type=content_type)
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response

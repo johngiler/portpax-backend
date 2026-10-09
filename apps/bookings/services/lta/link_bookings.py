@@ -199,12 +199,41 @@ def _desired_booking_ids(agreement: LongTermAgreement) -> set[int]:
 
     desired: set[int] = set()
     for booking in candidates:
-        # Claimed / progressed slots (e.g. LTA→CL) keep the link even when the
-        # vessel is outside the explicit agreement list (same-group claim).
+        # Claimed / progressed slots (e.g. LTA→CL) may keep the link when the
+        # vessel left the explicit list (same-group claim) — but never when
+        # validity / weekday / cadence / position no longer fit, and never when
+        # another agreement is a better pier match (stale FK after berth move).
         if (
             booking.long_term_agreement_id == agreement.pk
             and booking.status != BookingStatus.LTA
         ):
+            if not agreement_covers_validity(agreement, booking.call_date):
+                continue
+            if not agreement_covers_call_date(agreement, booking.call_date):
+                continue
+            # Pier-scoped agreements must still match position; port-wide (no
+            # positions configured) keep the previous loose position check.
+            has_positions = bool(agreement.positions.all())
+            if not agreement_covers_position(
+                agreement,
+                booking.position,
+                require_position=has_positions,
+            ):
+                continue
+            if not agreement_covers_vessel(agreement, booking.vessel):
+                line = getattr(booking.vessel, "shipping_line", None)
+                group_id = getattr(line, "group_id", None) if line else None
+                if group_id != agreement.shipping_line_group_id:
+                    continue
+            best_claimed = find_best_matching_agreement(
+                port_id=booking.port_id,
+                shipping_line_id=booking.shipping_line_id,
+                vessel=booking.vessel,
+                call_date=booking.call_date,
+                position=booking.position,
+            )
+            if best_claimed is not None and best_claimed.pk != agreement.pk:
+                continue
             desired.add(booking.pk)
             continue
         if not agreement_covers_booking(agreement, booking):
