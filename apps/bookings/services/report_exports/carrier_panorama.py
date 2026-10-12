@@ -12,12 +12,15 @@ from openpyxl import Workbook
 
 from apps.bookings.services.report_exports.common import (
     booking_pax,
-    call_date_in_season,
     normalize_pax_basis,
-    normalize_season,
     pax_basis_note,
     scheduled_bookings_qs,
-    years_in_range,
+)
+from apps.bookings.services.report_exports.season_periods import (
+    SEASON_AXIS_SEASONS,
+    matrix_periods_for_range,
+    normalize_panorama_season,
+    period_for_call_date,
 )
 from apps.bookings.services.report_exports.filenames import report_download_filename
 from apps.bookings.services.report_exports.xlsx_style import (
@@ -59,36 +62,63 @@ def _excel_sheet_title(label: str) -> str:
     return (cleaned.strip() or "Hoja")[:31]
 
 
+def _merge_ids(
+    single: int | None,
+    many: list[int] | None,
+) -> list[int]:
+    out: list[int] = []
+    for raw in list(many or []):
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0 and value not in out:
+            out.append(value)
+    if single:
+        try:
+            value = int(single)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0 and value not in out:
+            out.append(value)
+    return out
+
+
 def _subject_name(
     *,
-    shipping_line_id: int | None,
-    shipping_line_group_id: int | None,
+    shipping_line_ids: list[int],
+    shipping_line_group_ids: list[int],
 ) -> str:
-    if shipping_line_id:
-        line = (
-            ShippingLine.objects.filter(pk=shipping_line_id)
+    if shipping_line_ids:
+        lines = list(
+            ShippingLine.objects.filter(pk__in=shipping_line_ids)
             .only("id", "name", "code")
-            .first()
+            .order_by("name")
         )
-        if line:
-            return (line.name or line.code or "Naviera").strip()
-    if shipping_line_group_id:
-        group = (
-            ShippingLineGroup.objects.filter(pk=shipping_line_group_id)
+        names = [
+            (line.name or line.code or f"#{line.pk}").strip() for line in lines
+        ]
+        if names:
+            return ", ".join(names)
+    if shipping_line_group_ids:
+        groups = list(
+            ShippingLineGroup.objects.filter(pk__in=shipping_line_group_ids)
             .only("id", "name")
-            .first()
+            .order_by("name")
         )
-        if group:
-            return (group.name or "Grupo").strip()
+        names = [(group.name or f"#{group.pk}").strip() for group in groups]
+        if names:
+            return ", ".join(names)
     return "navieras"
 
 
-def _year_span_label(years: list[int]) -> str:
-    if not years:
+def _period_span_label(periods: list) -> str:
+    if not periods:
         return ""
-    if years[0] == years[-1]:
-        return str(years[0])
-    return f"{years[0]}–{years[-1]}"
+    labels = [p.label for p in periods]
+    if len(labels) == 1:
+        return labels[0]
+    return f"{labels[0]}–{labels[-1]}"
 
 
 def _share_pct(part: int, total: int) -> float:
@@ -102,7 +132,9 @@ def build_carrier_panorama(
     date_from: date,
     date_to: date,
     shipping_line_id: int | None = None,
+    shipping_line_ids: list[int] | None = None,
     shipping_line_group_id: int | None = None,
+    shipping_line_group_ids: list[int] | None = None,
     without_lta: bool = False,
     pax_basis: str = "planned",
     season: str = "natural",
@@ -111,11 +143,18 @@ def build_carrier_panorama(
     request=None,
 ) -> dict[str, Any]:
     basis = normalize_pax_basis(pax_basis)
-    season_kind = normalize_season(season)
-    years = years_in_range(date_from, date_to)
+    season_kind = normalize_panorama_season(season)
+    periods = matrix_periods_for_range(date_from, date_to, season_kind)
+    period_keys = [p.key for p in periods]
+    years = sorted({p.year for p in periods})
+    line_ids = _merge_ids(shipping_line_id, shipping_line_ids)
+    group_ids = _merge_ids(shipping_line_group_id, shipping_line_group_ids)
+    # Lines win over groups (same rule as list / solicitudes).
+    effective_group_ids = [] if line_ids else group_ids
+    has_selection = bool(line_ids or effective_group_ids)
     subject = _subject_name(
-        shipping_line_id=shipping_line_id,
-        shipping_line_group_id=shipping_line_group_id,
+        shipping_line_ids=line_ids,
+        shipping_line_group_ids=effective_group_ids,
     )
 
     scoped: set[int] | None = (
@@ -132,44 +171,70 @@ def build_carrier_panorama(
         ports_qs = ports_qs.filter(id__in=scoped)
     ports = list(ports_qs.order_by("name"))
 
-    cells: dict[int, dict[int, dict[str, int]]] = defaultdict(
+    cells: dict[int, dict[str, dict[str, int]]] = defaultdict(
         lambda: defaultdict(lambda: {"calls": 0, "pax": 0})
     )
     qs = scheduled_bookings_qs(
         date_from=date_from,
         date_to=date_to,
-        shipping_line_id=shipping_line_id,
-        shipping_line_group_id=shipping_line_group_id,
+        shipping_line_ids=line_ids or None,
+        shipping_line_group_ids=effective_group_ids or None,
         allowed_ports=scoped,
         without_lta=without_lta,
     )
     for booking in qs.iterator(chunk_size=500):
-        if not call_date_in_season(booking.call_date, season_kind):
+        period = period_for_call_date(booking.call_date, periods)
+        if period is None:
             continue
-        year = booking.call_date.year
-        if year not in years:
-            continue
-        cell = cells[booking.port_id][year]
+        cell = cells[booking.port_id][period.key]
         cell["calls"] += 1
         cell["pax"] += booking_pax(booking, pax_basis=basis)
 
+    # Otros = market outside the selection (only when something is selected).
+    others_calls = 0
+    others_pax = 0
+    if has_selection:
+        all_qs = scheduled_bookings_qs(
+            date_from=date_from,
+            date_to=date_to,
+            allowed_ports=scoped,
+            without_lta=without_lta,
+        )
+        if line_ids:
+            all_qs = all_qs.exclude(shipping_line_id__in=line_ids)
+        else:
+            all_qs = all_qs.exclude(shipping_line__group_id__in=effective_group_ids)
+        for booking in all_qs.iterator(chunk_size=500):
+            if period_for_call_date(booking.call_date, periods) is None:
+                continue
+            others_calls += 1
+            others_pax += booking_pax(booking, pax_basis=basis)
+
     rows: list[dict[str, Any]] = []
-    totals_by_year = {year: {"calls": 0, "pax": 0} for year in years}
+    totals_by_period = {key: {"calls": 0, "pax": 0} for key in period_keys}
     grand_calls = 0
     grand_pax = 0
     ports_with_calls = 0
 
     for port in ports:
-        by_year: list[dict[str, int]] = []
+        by_period: list[dict[str, Any]] = []
         row_calls = 0
         row_pax = 0
-        for year in years:
-            cell = cells[port.id][year]
+        for period in periods:
+            cell = cells[port.id][period.key]
             calls = int(cell["calls"])
             pax = int(cell["pax"])
-            by_year.append({"year": year, "calls": calls, "pax": pax})
-            totals_by_year[year]["calls"] += calls
-            totals_by_year[year]["pax"] += pax
+            by_period.append(
+                {
+                    "period_key": period.key,
+                    "label": period.label,
+                    "year": period.year,
+                    "calls": calls,
+                    "pax": pax,
+                }
+            )
+            totals_by_period[period.key]["calls"] += calls
+            totals_by_period[period.key]["pax"] += pax
             row_calls += calls
             row_pax += pax
         if row_calls:
@@ -184,7 +249,18 @@ def build_carrier_panorama(
                 "logo": assets["url"],
                 "logo_name": assets["name"],
                 "logo_path": assets["path"],
-                "by_year": by_year,
+                "by_period": by_period,
+                # Alias for older clients that still read by_year.
+                "by_year": [
+                    {
+                        "year": cell["year"],
+                        "calls": cell["calls"],
+                        "pax": cell["pax"],
+                        "period_key": cell["period_key"],
+                        "label": cell["label"],
+                    }
+                    for cell in by_period
+                ],
                 "total_calls": row_calls,
                 "total_pax": row_pax,
             }
@@ -207,13 +283,14 @@ def build_carrier_panorama(
         )
     port_share.sort(key=lambda item: item["pax"] or item["calls"], reverse=True)
 
-    year_label = _year_span_label(years)
+    span_label = _period_span_label(periods)
     season_label = {
+        SEASON_AXIS_SEASONS: "Temporadas",
         "summer": "Summer",
         "winter": "Winter",
         "natural": "Año natural",
     }.get(season_kind, "Año natural")
-    subtitle_bits = [year_label] if year_label else []
+    subtitle_bits = [span_label] if span_label else []
     if season_kind != "natural":
         subtitle_bits.append(season_label)
     subtitle_bits.append(
@@ -224,7 +301,9 @@ def build_carrier_panorama(
     subtitle = " · ".join(bit for bit in subtitle_bits if bit)
 
     note = pax_basis_note(basis)
-    if season_kind == "summer":
+    if season_kind == SEASON_AXIS_SEASONS:
+        note = f"{note} Columnas por temporada (Summer may–oct, Winter nov–abr)."
+    elif season_kind == "summer":
         note = f"{note} Temporada Summer (may–oct)."
     elif season_kind == "winter":
         note = f"{note} Temporada Winter (nov–abr)."
@@ -232,14 +311,29 @@ def build_carrier_panorama(
         note = f"{note} Excluye LTA."
 
     matrix_title = (
-        f"Arribos y pasajeros totales programados por puerto ({year_label})"
-        if year_label
+        f"Arribos y pasajeros totales programados por puerto ({span_label})"
+        if span_label
         else "Arribos y pasajeros totales programados por puerto"
     )
 
+    title_subject = subject
+    if has_selection and (others_calls > 0 or others_pax > 0):
+        title_subject = f"{subject} y Otros"
+
+    totals_by_period_list = [
+        {
+            "period_key": period.key,
+            "label": period.label,
+            "year": period.year,
+            "calls": totals_by_period[period.key]["calls"],
+            "pax": totals_by_period[period.key]["pax"],
+        }
+        for period in periods
+    ]
+
     return {
         "kind": "carrier_panorama",
-        "title": f"Panorama de {subject} en puertos ITM",
+        "title": f"Panorama de {title_subject} en puertos ITM",
         "matrix_title": matrix_title,
         "subtitle": subtitle,
         "subject_name": subject,
@@ -248,6 +342,7 @@ def build_carrier_panorama(
         "without_lta": without_lta,
         "pax_basis": basis,
         "season": season_kind,
+        "periods": [p.as_dict() for p in periods],
         "years": years,
         "kpis": {
             "total_calls": grand_calls,
@@ -255,16 +350,25 @@ def build_carrier_panorama(
             "ports_with_calls": ports_with_calls,
             "ports_total": len(ports),
         },
+        # Null when no selection — Otros only applies with an explicit filter.
+        "others": (
+            {"total_calls": others_calls, "total_pax": others_pax}
+            if has_selection
+            else None
+        ),
         "port_share": port_share,
         "rows": rows,
         "totals": {
+            "by_period": totals_by_period_list,
             "by_year": [
                 {
-                    "year": year,
-                    "calls": totals_by_year[year]["calls"],
-                    "pax": totals_by_year[year]["pax"],
+                    "year": cell["year"],
+                    "calls": cell["calls"],
+                    "pax": cell["pax"],
+                    "period_key": cell["period_key"],
+                    "label": cell["label"],
                 }
-                for year in years
+                for cell in totals_by_period_list
             ],
             "total_calls": grand_calls,
             "total_pax": grand_pax,
@@ -284,26 +388,38 @@ def _csv_bytes(rows: list[list[Any]]) -> bytes:
     return ("\ufeff" + buf.getvalue()).encode("utf-8")
 
 
-def _matrix_headers(years: list[int]) -> list[str]:
+def _period_labels(payload: dict[str, Any]) -> list[str]:
+    periods = payload.get("periods") or []
+    labels = [str(p.get("label") or "") for p in periods if p.get("label")]
+    if labels:
+        return labels
+    # Fallback for older payloads that only had calendar years.
+    return [str(y) for y in (payload.get("years") or [])]
+
+
+def _matrix_headers(labels: list[str]) -> list[str]:
     headers = ["Puerto"]
-    for year in years:
-        headers.extend([f"{year} arribos", f"{year} PAX"])
+    for label in labels:
+        headers.extend([f"{label} arribos", f"{label} PAX"])
     headers.extend(["Total arribos", "Total PAX"])
     return headers
 
 
-def _matrix_values(item: dict[str, Any], years: list[int]) -> list[Any]:
-    by_year = {cell["year"]: cell for cell in item.get("by_year") or []}
+def _matrix_values(item: dict[str, Any], labels: list[str]) -> list[Any]:
+    by_label = {
+        str(cell.get("label") or cell.get("year") or ""): cell
+        for cell in (item.get("by_period") or item.get("by_year") or [])
+    }
     values: list[Any] = []
-    for year in years:
-        cell = by_year.get(year) or {}
+    for label in labels:
+        cell = by_label.get(label) or {}
         values.extend([cell.get("calls") or 0, cell.get("pax") or 0])
     values.extend([item.get("total_calls") or 0, item.get("total_pax") or 0])
     return values
 
 
 def build_carrier_panorama_csv(payload: dict[str, Any]) -> bytes:
-    years = list(payload.get("years") or [])
+    labels = _period_labels(payload)
     kpis = payload.get("kpis") or {}
     rows: list[list[Any]] = [
         [payload.get("title") or "Panorama Navieras"],
@@ -337,11 +453,11 @@ def build_carrier_panorama_csv(payload: dict[str, Any]) -> bytes:
     rows.append(
         [payload.get("matrix_title") or "Arribos y pasajeros totales programados por puerto"]
     )
-    rows.append(_matrix_headers(years))
+    rows.append(_matrix_headers(labels))
     for item in payload.get("rows") or []:
-        rows.append([item.get("port_name"), *_matrix_values(item, years)])
+        rows.append([item.get("port_name"), *_matrix_values(item, labels)])
     totals = payload.get("totals") or {}
-    rows.append(["TOTAL", *_matrix_values(totals, years)])
+    rows.append(["TOTAL", *_matrix_values(totals, labels)])
     return _csv_bytes(rows)
 
 
@@ -380,9 +496,9 @@ def _write_numeric_rows(
 
 
 def build_carrier_panorama_xlsx(payload: dict[str, Any]) -> bytes:
-    years = list(payload.get("years") or [])
+    labels = _period_labels(payload)
     kpis = payload.get("kpis") or {}
-    matrix_headers = _matrix_headers(years)
+    matrix_headers = _matrix_headers(labels)
     col_span = max(len(matrix_headers), 4)
 
     wb = Workbook()
@@ -454,11 +570,11 @@ def build_carrier_panorama_xlsx(payload: dict[str, Any]) -> bytes:
     row += 1
     body_start = row
     body_rows = [
-        [item.get("port_name"), *_matrix_values(item, years)]
+        [item.get("port_name"), *_matrix_values(item, labels)]
         for item in payload.get("rows") or []
     ]
     totals = payload.get("totals") or {}
-    body_rows.append(["TOTAL", *_matrix_values(totals, years)])
+    body_rows.append(["TOTAL", *_matrix_values(totals, labels)])
     row = _write_numeric_rows(
         ws, row, body_rows, col_count=len(matrix_headers), emphasize_last=True
     )

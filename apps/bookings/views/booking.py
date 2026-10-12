@@ -1612,10 +1612,12 @@ class BookingViewSet(
             request.query_params.get("shipping_lines")
             or request.query_params.get("shipping_line")
         )
-        shipping_line_group_id = self._optional_int_param("shipping_line_group")
-        if isinstance(shipping_line_group_id, Response):
-            return shipping_line_group_id
-        if not shipping_line_ids and not shipping_line_group_id:
+        shipping_line_group_ids = parse_id_list(
+            request.query_params.get("shipping_line_group")
+            or request.query_params.get("shipping_line_groups")
+            or request.query_params.get("groups")
+        )
+        if not shipping_line_ids and not shipping_line_group_ids:
             return Response(
                 {
                     "detail": (
@@ -1632,7 +1634,7 @@ class BookingViewSet(
                 years=years,
                 tag_ids=tag_ids,
                 shipping_line_ids=shipping_line_ids or None,
-                shipping_line_group_id=shipping_line_group_id,
+                shipping_line_group_ids=shipping_line_group_ids or None,
                 without_lta=self._report_without_lta(request),
                 pax_basis=self._report_pax_basis(request),
                 allowed_ports=user_port_ids(request.user),
@@ -1665,28 +1667,35 @@ class BookingViewSet(
         date_to, err = self._parse_iso_date_param("date_to")
         if err:
             return err
-        shipping_line_id = self._optional_int_param("shipping_line")
-        if isinstance(shipping_line_id, Response):
-            return shipping_line_id
-        shipping_line_group_id = self._optional_int_param("shipping_line_group")
-        if isinstance(shipping_line_group_id, Response):
-            return shipping_line_group_id
+        shipping_line_ids = parse_id_list(
+            request.query_params.get("shipping_lines")
+            or request.query_params.get("shipping_line")
+        )
+        shipping_line_group_ids = parse_id_list(
+            request.query_params.get("shipping_line_group")
+            or request.query_params.get("shipping_line_groups")
+            or request.query_params.get("groups")
+        )
         port_ids = self._optional_int_list_param("ports")
         if isinstance(port_ids, Response):
             return port_ids
         for port_id in port_ids:
             self._ensure_port_access(port_id)
-        from apps.bookings.services.report_exports.common import normalize_season
+        from apps.bookings.services.report_exports.season_periods import (
+            normalize_panorama_season,
+        )
 
         return Response(
             build_carrier_panorama(
                 date_from=date_from,
                 date_to=date_to,
-                shipping_line_id=shipping_line_id,
-                shipping_line_group_id=shipping_line_group_id,
+                shipping_line_ids=shipping_line_ids or None,
+                shipping_line_group_ids=shipping_line_group_ids or None,
                 without_lta=self._report_without_lta(request),
                 pax_basis=self._report_pax_basis(request),
-                season=normalize_season(request.query_params.get("season")),
+                season=normalize_panorama_season(
+                    request.query_params.get("season")
+                ),
                 port_ids=port_ids or None,
                 allowed_ports=user_port_ids(request.user),
                 request=request,
@@ -1960,12 +1969,12 @@ class BookingViewSet(
                     request.query_params.get("shipping_lines")
                     or request.query_params.get("shipping_line")
                 )
-                shipping_line_group_id = self._optional_int_param(
-                    "shipping_line_group"
+                shipping_line_group_ids = parse_id_list(
+                    request.query_params.get("shipping_line_group")
+                    or request.query_params.get("shipping_line_groups")
+                    or request.query_params.get("groups")
                 )
-                if isinstance(shipping_line_group_id, Response):
-                    return shipping_line_group_id
-                if not shipping_line_ids and not shipping_line_group_id:
+                if not shipping_line_ids and not shipping_line_group_ids:
                     return Response(
                         {
                             "detail": (
@@ -1982,7 +1991,7 @@ class BookingViewSet(
                     years=years,
                     tag_ids=tag_ids,
                     shipping_line_ids=shipping_line_ids or None,
-                    shipping_line_group_id=shipping_line_group_id,
+                    shipping_line_group_ids=shipping_line_group_ids or None,
                     without_lta=without_lta,
                     pax_basis=pax_basis,
                     allowed_ports=allowed_ports,
@@ -2001,22 +2010,20 @@ class BookingViewSet(
             elif report_type == "carrier_panorama":
                 for scoped_port_id in port_ids:
                     self._ensure_port_access(scoped_port_id)
-                from apps.bookings.services.report_exports.common import (
-                    normalize_season,
+                from apps.bookings.services.report_exports.season_periods import (
+                    normalize_panorama_season,
                 )
-
-                # Same single-id contract as report_carrier_panorama.
-                panorama_line_id = line_ids[0] if line_ids else None
-                panorama_group_id = group_ids[0] if group_ids else None
 
                 payload = build_carrier_panorama(
                     date_from=date_from,
                     date_to=date_to,
-                    shipping_line_id=panorama_line_id,
-                    shipping_line_group_id=panorama_group_id,
+                    shipping_line_ids=line_ids or None,
+                    shipping_line_group_ids=group_ids or None,
                     without_lta=without_lta,
                     pax_basis=pax_basis,
-                    season=normalize_season(request.query_params.get("season")),
+                    season=normalize_panorama_season(
+                        request.query_params.get("season")
+                    ),
                     port_ids=port_ids or None,
                     allowed_ports=allowed_ports,
                     request=request,

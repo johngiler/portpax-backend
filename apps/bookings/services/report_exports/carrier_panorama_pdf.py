@@ -326,8 +326,16 @@ def _port_label_cell(row: dict[str, Any], style: ParagraphStyle) -> Any:
     return cell
 
 
+def _matrix_period_labels(payload: dict[str, Any]) -> list[str]:
+    periods = payload.get("periods") or []
+    labels = [str(p.get("label") or "") for p in periods if p.get("label")]
+    if labels:
+        return labels
+    return [str(y) for y in (payload.get("years") or [])]
+
+
 def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
-    years = list(payload.get("years") or [])
+    labels = _matrix_period_labels(payload)
     _, _, _, body = _styles()
     port_style = ParagraphStyle(
         "PanoramaPortName",
@@ -373,8 +381,8 @@ def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
 
     header_top: list[Any] = [Paragraph("Puerto", year_style)]
     header_sub: list[Any] = [""]
-    for year in years:
-        header_top.extend([Paragraph(str(year), year_style), ""])
+    for label in labels:
+        header_top.extend([Paragraph(str(label), year_style), ""])
         header_sub.extend(
             [Paragraph("Arribos", sub_style), Paragraph("PAX", sub_style)]
         )
@@ -385,10 +393,13 @@ def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
 
     data: list[list[Any]] = [header_top, header_sub]
     for row in payload.get("rows") or []:
-        by_year = {cell["year"]: cell for cell in row.get("by_year") or []}
+        by_label = {
+            str(cell.get("label") or cell.get("year") or ""): cell
+            for cell in (row.get("by_period") or row.get("by_year") or [])
+        }
         values: list[Any] = [_port_label_cell(row, port_style)]
-        for year in years:
-            cell = by_year.get(year) or {}
+        for label in labels:
+            cell = by_label.get(label) or {}
             values.extend(
                 [
                     Paragraph(_fmt_int(cell.get("calls")), num_style),
@@ -404,10 +415,13 @@ def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
         data.append(values)
 
     totals = payload.get("totals") or {}
-    total_by_year = {cell["year"]: cell for cell in totals.get("by_year") or []}
+    total_by_label = {
+        str(cell.get("label") or cell.get("year") or ""): cell
+        for cell in (totals.get("by_period") or totals.get("by_year") or [])
+    }
     total_row: list[Any] = [Paragraph("Total", port_style)]
-    for year in years:
-        cell = total_by_year.get(year) or {}
+    for label in labels:
+        cell = total_by_label.get(label) or {}
         total_row.extend(
             [
                 Paragraph(_fmt_int(cell.get("calls")), num_bold),
@@ -422,7 +436,7 @@ def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
     )
     data.append(total_row)
 
-    ncols = 1 + len(years) * 2 + 2
+    ncols = 1 + len(labels) * 2 + 2
     first = min(max(usable * 0.18, 3.1 * cm), 4.2 * cm)
     rest = (usable - first) / max(ncols - 1, 1)
     widths = [first] + [rest] * (ncols - 1)
@@ -449,7 +463,7 @@ def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
         ("BACKGROUND", (0, 2), (0, -2), SKY),
     ]
     year_col = 1
-    for _ in years:
+    for _ in labels:
         cmds.append(("SPAN", (year_col, 0), (year_col + 1, 0)))
         year_col += 2
     cmds.append(("SPAN", (year_col, 0), (year_col + 1, 0)))
