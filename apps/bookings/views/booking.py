@@ -2005,11 +2005,15 @@ class BookingViewSet(
                     normalize_season,
                 )
 
+                # Same single-id contract as report_carrier_panorama.
+                panorama_line_id = line_ids[0] if line_ids else None
+                panorama_group_id = group_ids[0] if group_ids else None
+
                 payload = build_carrier_panorama(
                     date_from=date_from,
                     date_to=date_to,
-                    shipping_line_id=line_id,
-                    shipping_line_group_id=group_id,
+                    shipping_line_id=panorama_line_id,
+                    shipping_line_group_id=panorama_group_id,
                     without_lta=without_lta,
                     pax_basis=pax_basis,
                     season=normalize_season(request.query_params.get("season")),
