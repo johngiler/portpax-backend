@@ -315,6 +315,8 @@ def build_port_trends(
     port_id: int,
     without_lta: bool = False,
     pax_basis: str = PAX_BASIS_PLANNED,
+    shipping_line_ids: list[int] | None = None,
+    shipping_line_group_ids: list[int] | None = None,
     allowed_ports: set[int] | None = None,
     request=None,
     page: int | None = None,
@@ -325,6 +327,8 @@ def build_port_trends(
         date_from=date_from,
         date_to=date_to,
         port_id=port_id,
+        shipping_line_ids=shipping_line_ids,
+        shipping_line_group_ids=shipping_line_group_ids,
         allowed_ports=allowed_ports,
         without_lta=without_lta,
     )

@@ -1615,6 +1615,15 @@ class BookingViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
         self._ensure_port_access(port_id)
+        shipping_line_ids = parse_id_list(
+            request.query_params.get("shipping_lines")
+            or request.query_params.get("shipping_line")
+        )
+        shipping_line_group_ids = parse_id_list(
+            request.query_params.get("shipping_line_group")
+            or request.query_params.get("shipping_line_groups")
+            or request.query_params.get("groups")
+        )
         page, page_size = self._report_pagination_params(request)
         return Response(
             build_port_trends(
@@ -1623,6 +1632,8 @@ class BookingViewSet(
                 port_id=port_id,
                 without_lta=self._report_without_lta(request),
                 pax_basis=self._report_pax_basis(request),
+                shipping_line_ids=shipping_line_ids or None,
+                shipping_line_group_ids=shipping_line_group_ids or None,
                 allowed_ports=user_port_ids(request.user),
                 request=request,
                 page=page,
@@ -1980,12 +1991,23 @@ class BookingViewSet(
                         {"detail": "port es obligatorio."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+                shipping_line_ids = parse_id_list(
+                    request.query_params.get("shipping_lines")
+                    or request.query_params.get("shipping_line")
+                )
+                shipping_line_group_ids = parse_id_list(
+                    request.query_params.get("shipping_line_group")
+                    or request.query_params.get("shipping_line_groups")
+                    or request.query_params.get("groups")
+                )
                 common = dict(
                     date_from=date_from,
                     date_to=date_to,
                     port_id=port_id,
                     without_lta=without_lta,
                     pax_basis=pax_basis,
+                    shipping_line_ids=shipping_line_ids or None,
+                    shipping_line_group_ids=shipping_line_group_ids or None,
                     allowed_ports=allowed_ports,
                 )
                 if fmt == "csv":
