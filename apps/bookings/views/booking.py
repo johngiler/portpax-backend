@@ -910,15 +910,56 @@ class BookingViewSet(
         """Match pasted or Excel recap rows to existing bookings. Does not write."""
         upload = request.FILES.get("file")
         paste_text = ""
+        data = request.data if isinstance(request.data, dict) else {}
         if not upload:
-            if isinstance(request.data, dict):
-                paste_text = request.data.get("text") or request.data.get("tsv") or ""
-            paste_text = str(paste_text).strip()
+            paste_text = str(data.get("text") or data.get("tsv") or "").strip()
         if not upload and not paste_text:
             return Response(
                 {"detail": "Adjunta un Excel (.xlsx) o pega el recap."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        def _scope_value(key: str) -> str:
+            raw = data.get(key)
+            if raw is None or raw == "":
+                raw = request.query_params.get(key)
+            return str(raw or "").strip()
+
+        shipping_line_ids = parse_id_list(
+            _scope_value("shipping_line") or _scope_value("shipping_lines")
+        )
+        shipping_line_group_ids = parse_id_list(
+            _scope_value("shipping_line_group")
+            or _scope_value("shipping_line_groups")
+        )
+        from datetime import date as date_cls
+
+        date_from = None
+        date_to = None
+        raw_from = _scope_value("date_from")
+        raw_to = _scope_value("date_to")
+        if raw_from:
+            try:
+                date_from = date_cls.fromisoformat(raw_from)
+            except ValueError:
+                return Response(
+                    {"detail": "date_from debe ser ISO (YYYY-MM-DD)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if raw_to:
+            try:
+                date_to = date_cls.fromisoformat(raw_to)
+            except ValueError:
+                return Response(
+                    {"detail": "date_to debe ser ISO (YYYY-MM-DD)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if date_from and date_to and date_from > date_to:
+            return Response(
+                {"detail": "date_from no puede ser posterior a date_to."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             if upload:
                 name = (upload.name or "").lower()
@@ -933,6 +974,10 @@ class BookingViewSet(
             payload = match_recap_rows(
                 rows,
                 allowed_ports=user_port_ids(request.user),
+                shipping_line_ids=shipping_line_ids or None,
+                shipping_line_group_ids=shipping_line_group_ids or None,
+                date_from=date_from,
+                date_to=date_to,
             )
         except ItmParseError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)

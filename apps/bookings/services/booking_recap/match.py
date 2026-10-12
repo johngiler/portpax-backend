@@ -125,13 +125,38 @@ def _candidate_key(booking: Booking, row: dict[str, Any]) -> tuple[int, int, int
     return (day_delta, time_miss, booking.id)
 
 
+def _normalize_id_list(raw: list[int] | None) -> list[int]:
+    out: list[int] = []
+    for value in list(raw or []):
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            continue
+        if n > 0 and n not in out:
+            out.append(n)
+    return out
+
+
 def match_recap_rows(
     rows: list[dict[str, Any]],
     *,
     allowed_ports: set[int] | list[int] | None = None,
+    shipping_line_ids: list[int] | None = None,
+    shipping_line_group_ids: list[int] | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> dict[str, Any]:
-    """Pair each recap row with at most one booking. Date may be ±1 day."""
+    """
+    Pair each recap row with at most one booking. Date may be ±1 day.
+
+    Includes cancelled bookings (no status filter). Optional delimiters
+    (group / lines / date range) narrow the candidate search.
+    """
     allowed = set(allowed_ports) if allowed_ports is not None else None
+    line_ids = _normalize_id_list(shipping_line_ids)
+    group_ids = _normalize_id_list(shipping_line_group_ids)
+    # Lines win over groups (same rule as list filters).
+    effective_group_ids = [] if line_ids else group_ids
     prepared: list[dict[str, Any]] = []
     unmatched: list[dict[str, Any]] = []
 
@@ -154,6 +179,28 @@ def match_recap_rows(
         if not isinstance(call_date, date):
             unmatched.append({**base, "reason": "Fecha de escala no válida."})
             continue
+        if date_from and call_date < date_from:
+            unmatched.append(
+                {
+                    **base,
+                    "reason": (
+                        f"Fecha fuera del rango del recap "
+                        f"(desde {_date_label(date_from)})."
+                    ),
+                }
+            )
+            continue
+        if date_to and call_date > date_to:
+            unmatched.append(
+                {
+                    **base,
+                    "reason": (
+                        f"Fecha fuera del rango del recap "
+                        f"(hasta {_date_label(date_to)})."
+                    ),
+                }
+            )
+            continue
         port = resolve_port(port_raw)
         line = resolve_shipping_line(line_raw) if line_raw else None
         if line_raw and line is None:
@@ -161,6 +208,32 @@ def match_recap_rows(
                 {**base, "reason": f"Naviera no encontrada: «{line_raw}»."}
             )
             continue
+        if line is not None:
+            if line_ids and line.id not in line_ids:
+                unmatched.append(
+                    {
+                        **base,
+                        "reason": (
+                            f"Naviera «{line.name}» fuera de los delimitantes "
+                            f"del recap."
+                        ),
+                    }
+                )
+                continue
+            if (
+                effective_group_ids
+                and getattr(line, "group_id", None) not in effective_group_ids
+            ):
+                unmatched.append(
+                    {
+                        **base,
+                        "reason": (
+                            f"Naviera «{line.name}» fuera del grupo delimitado "
+                            f"del recap."
+                        ),
+                    }
+                )
+                continue
         vessel = (
             resolve_vessel(
                 ship,
@@ -188,17 +261,52 @@ def match_recap_rows(
             else:
                 unmatched.append({**base, "reason": f"Barco no encontrado: «{ship}»."})
             continue
+        vessel_line_id = getattr(vessel, "shipping_line_id", None)
+        if line_ids and vessel_line_id and vessel_line_id not in line_ids:
+            unmatched.append(
+                {
+                    **base,
+                    "reason": (
+                        f"Barco «{vessel.name}» fuera de las navieras "
+                        f"delimitadas del recap."
+                    ),
+                }
+            )
+            continue
         window_start = call_date - _DATE_WINDOW
         window_end = call_date + _DATE_WINDOW
-        candidates = list(
-            Booking.objects.filter(
-                vessel_id=vessel.id,
-                port_id=port.id,
-                call_date__gte=window_start,
-                call_date__lte=window_end,
+        if date_from:
+            window_start = max(window_start, date_from)
+        if date_to:
+            window_end = min(window_end, date_to)
+        if window_start > window_end:
+            unmatched.append(
+                {
+                    **base,
+                    "reason": (
+                        f"Sin reserva de {vessel.name} en {_port_label(port)} "
+                        f"dentro del rango del recap."
+                    ),
+                }
             )
-            .select_related("vessel", "port")
-            .order_by("call_date", "id")
+            continue
+        # No status filter — cancelled bookings must match (ops recap decisions).
+        candidates_qs = Booking.objects.filter(
+            vessel_id=vessel.id,
+            port_id=port.id,
+            call_date__gte=window_start,
+            call_date__lte=window_end,
+        )
+        if line_ids:
+            candidates_qs = candidates_qs.filter(shipping_line_id__in=line_ids)
+        elif effective_group_ids:
+            candidates_qs = candidates_qs.filter(
+                shipping_line__group_id__in=effective_group_ids
+            )
+        candidates = list(
+            candidates_qs.select_related("vessel", "port", "shipping_line").order_by(
+                "call_date", "id"
+            )
         )
         if not candidates:
             unmatched.append(
