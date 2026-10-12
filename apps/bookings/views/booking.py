@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 from apps.accounts.permissions import DenyViewerWrites, user_can_access_port, user_port_ids
 from apps.bookings.models import Booking, BookingImportBatch, BookingRunBatch, BookingStatus
+from apps.bookings.utils.size_category_query import parse_size_category_params
 from apps.bookings.utils.status_query import (
     apply_booking_status_filters,
     apply_cancellation_reason_filter,
@@ -194,18 +195,23 @@ class BookingViewSet(
         position_id = self.request.query_params.get("position")
         if position_id:
             qs = qs.filter(position_id=position_id)
-        shipping_line_id = self.request.query_params.get("shipping_line")
-        if shipping_line_id:
-            qs = qs.filter(shipping_line_id=shipping_line_id)
+        shipping_line_ids = parse_id_list(
+            self.request.query_params.get("shipping_line")
+        )
+        if shipping_line_ids:
+            qs = qs.filter(shipping_line_id__in=shipping_line_ids)
         else:
-            shipping_line_group_id = self.request.query_params.get(
-                "shipping_line_group"
+            shipping_line_group_ids = parse_id_list(
+                self.request.query_params.get("shipping_line_group")
             )
-            if shipping_line_group_id:
-                qs = qs.filter(shipping_line__group_id=shipping_line_group_id)
+            if shipping_line_group_ids:
+                qs = qs.filter(shipping_line__group_id__in=shipping_line_group_ids)
         vessel_id = self.request.query_params.get("vessel")
         if vessel_id:
             qs = qs.filter(vessel_id=vessel_id)
+        size_categories = parse_size_category_params(self.request.query_params)
+        if size_categories:
+            qs = qs.filter(vessel__size_category__in=size_categories)
         tag_ids = parse_id_list(self.request.query_params.get("tags"))
         if tag_ids:
             qs = qs.filter(tag_id__in=tag_ids)
@@ -1181,6 +1187,8 @@ class BookingViewSet(
                 shipping_line_id=optional_int("shipping_line"),
                 shipping_line_group_id=optional_int("shipping_line_group"),
                 allowed_ports=user_port_ids(request.user),
+                without_lta=self._report_without_lta(request),
+                pax_basis=self._report_pax_basis(request),
                 today=timezone.localdate(),
                 request=request,
             )
@@ -1266,9 +1274,19 @@ class BookingViewSet(
             "position__sort_order",
             "vessel__name",
         )
-        shipping_line_id = request.query_params.get("shipping_line")
-        if shipping_line_id:
-            qs = qs.filter(shipping_line_id=shipping_line_id)
+        shipping_line_ids = parse_id_list(
+            request.query_params.get("shipping_line")
+        )
+        if shipping_line_ids:
+            qs = qs.filter(shipping_line_id__in=shipping_line_ids)
+        else:
+            shipping_line_group_ids = parse_id_list(
+                request.query_params.get("shipping_line_group")
+            )
+            if shipping_line_group_ids:
+                qs = qs.filter(
+                    shipping_line__group_id__in=shipping_line_group_ids
+                )
         status_values = parse_status_query_params(request.query_params)
         qs = apply_booking_status_filters(qs, status_values)
         qs = apply_cancellation_reason_filter(
@@ -1352,12 +1370,8 @@ class BookingViewSet(
                 {"detail": "port es obligatorio para Availability Chart."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        line_id = self._optional_int_param("shipping_line")
-        if isinstance(line_id, Response):
-            return line_id
-        group_id = self._optional_int_param("shipping_line_group")
-        if isinstance(group_id, Response):
-            return group_id
+        line_ids = parse_id_list(request.query_params.get("shipping_line"))
+        group_ids = parse_id_list(request.query_params.get("shipping_line_group"))
         vessel_id = self._optional_int_param("vessel")
         if isinstance(vessel_id, Response):
             return vessel_id
@@ -1425,8 +1439,8 @@ class BookingViewSet(
             or first_arrival_filter is not None
             or cancellation_reason_filter is not None
             or occupied_only
-            or line_id is not None
-            or group_id is not None
+            or bool(line_ids)
+            or bool(group_ids)
             or vessel_id is not None
             or position_id is not None
             or bool(tag_ids)
@@ -1438,8 +1452,8 @@ class BookingViewSet(
                 date_from=date_from,
                 date_to=date_to,
                 allowed_ports=user_port_ids(request.user),
-                shipping_line_id=line_id,
-                shipping_line_group_id=group_id,
+                shipping_line_ids=line_ids or None,
+                shipping_line_group_ids=group_ids or None,
                 vessel_id=vessel_id,
                 position_id=position_id,
                 tag_ids=tag_ids or None,
@@ -1662,6 +1676,8 @@ class BookingViewSet(
             return port_ids
         for port_id in port_ids:
             self._ensure_port_access(port_id)
+        from apps.bookings.services.report_exports.common import normalize_season
+
         return Response(
             build_carrier_panorama(
                 date_from=date_from,
@@ -1670,6 +1686,7 @@ class BookingViewSet(
                 shipping_line_group_id=shipping_line_group_id,
                 without_lta=self._report_without_lta(request),
                 pax_basis=self._report_pax_basis(request),
+                season=normalize_season(request.query_params.get("season")),
                 port_ids=port_ids or None,
                 allowed_ports=user_port_ids(request.user),
                 request=request,
@@ -1824,12 +1841,8 @@ class BookingViewSet(
         port_ids = self._optional_int_list_param("ports")
         if isinstance(port_ids, Response):
             return port_ids
-        line_id = self._optional_int_param("shipping_line")
-        if isinstance(line_id, Response):
-            return line_id
-        group_id = self._optional_int_param("shipping_line_group")
-        if isinstance(group_id, Response):
-            return group_id
+        line_ids = parse_id_list(request.query_params.get("shipping_line"))
+        group_ids = parse_id_list(request.query_params.get("shipping_line_group"))
         vessel_id = self._optional_int_param("vessel")
         if isinstance(vessel_id, Response):
             return vessel_id
@@ -1854,8 +1867,8 @@ class BookingViewSet(
                     date_from=date_from,
                     date_to=date_to,
                     allowed_ports=allowed_ports,
-                    shipping_line_id=line_id,
-                    shipping_line_group_id=group_id,
+                    shipping_line_ids=line_ids or None,
+                    shipping_line_group_ids=group_ids or None,
                     vessel_id=vessel_id,
                     position_id=position_id,
                     statuses=status_values,
@@ -1988,6 +2001,10 @@ class BookingViewSet(
             elif report_type == "carrier_panorama":
                 for scoped_port_id in port_ids:
                     self._ensure_port_access(scoped_port_id)
+                from apps.bookings.services.report_exports.common import (
+                    normalize_season,
+                )
+
                 payload = build_carrier_panorama(
                     date_from=date_from,
                     date_to=date_to,
@@ -1995,6 +2012,7 @@ class BookingViewSet(
                     shipping_line_group_id=group_id,
                     without_lta=without_lta,
                     pax_basis=pax_basis,
+                    season=normalize_season(request.query_params.get("season")),
                     port_ids=port_ids or None,
                     allowed_ports=allowed_ports,
                     request=request,

@@ -12,7 +12,9 @@ from openpyxl import Workbook
 
 from apps.bookings.services.report_exports.common import (
     booking_pax,
+    call_date_in_season,
     normalize_pax_basis,
+    normalize_season,
     pax_basis_note,
     scheduled_bookings_qs,
     years_in_range,
@@ -103,11 +105,13 @@ def build_carrier_panorama(
     shipping_line_group_id: int | None = None,
     without_lta: bool = False,
     pax_basis: str = "planned",
+    season: str = "natural",
     port_ids: set[int] | list[int] | None = None,
     allowed_ports: set[int] | list[int] | None = None,
     request=None,
 ) -> dict[str, Any]:
     basis = normalize_pax_basis(pax_basis)
+    season_kind = normalize_season(season)
     years = years_in_range(date_from, date_to)
     subject = _subject_name(
         shipping_line_id=shipping_line_id,
@@ -140,6 +144,8 @@ def build_carrier_panorama(
         without_lta=without_lta,
     )
     for booking in qs.iterator(chunk_size=500):
+        if not call_date_in_season(booking.call_date, season_kind):
+            continue
         year = booking.call_date.year
         if year not in years:
             continue
@@ -202,7 +208,14 @@ def build_carrier_panorama(
     port_share.sort(key=lambda item: item["pax"] or item["calls"], reverse=True)
 
     year_label = _year_span_label(years)
+    season_label = {
+        "summer": "Summer",
+        "winter": "Winter",
+        "natural": "Año natural",
+    }.get(season_kind, "Año natural")
     subtitle_bits = [year_label] if year_label else []
+    if season_kind != "natural":
+        subtitle_bits.append(season_label)
     subtitle_bits.append(
         "Cap. máx." if basis != "planned" else "Planificado"
     )
@@ -211,6 +224,10 @@ def build_carrier_panorama(
     subtitle = " · ".join(bit for bit in subtitle_bits if bit)
 
     note = pax_basis_note(basis)
+    if season_kind == "summer":
+        note = f"{note} Temporada Summer (may–oct)."
+    elif season_kind == "winter":
+        note = f"{note} Temporada Winter (nov–abr)."
     if without_lta:
         note = f"{note} Excluye LTA."
 
@@ -230,6 +247,7 @@ def build_carrier_panorama(
         "date_to": date_to.isoformat(),
         "without_lta": without_lta,
         "pax_basis": basis,
+        "season": season_kind,
         "years": years,
         "kpis": {
             "total_calls": grand_calls,

@@ -13,6 +13,9 @@ OCCUPATION_CONFLICT_STATUSES = ("nr", "h", "co", "cl", "lta", "ltd", "r")
 # Ghost LTA slots (and NR/LTD) do not count — ops request (Fernanda).
 ITINERARY_PEER_STATUSES = ("h", "co", "cl")
 
+# Vessel.size_category catalog values used by bookings list filter.
+VESSEL_SIZE_CATEGORIES = ("Pequeño", "Mediano", "Grande", "MegaBarco")
+
 # LTA horizon / covered-window without agreement: soft-fail when creating Hold.
 LTA_SOFT_FAIL_CODES = frozenset(
     {"lta_beyond_horizon", "lta_horizon_denied", "lta_policy_denied"}

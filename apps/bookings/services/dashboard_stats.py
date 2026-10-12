@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from django.db.models import Count, QuerySet, Sum
+from django.db.models import Count, F, IntegerField, QuerySet, Sum
+from django.db.models.functions import Coalesce
 
 from apps.bookings.models import Booking, BookingStatus, CancellationReason
 from apps.bookings.services.dashboard_occupancy import (
@@ -15,6 +16,10 @@ from apps.bookings.services.dashboard_occupancy import (
 from apps.bookings.services.dashboard_series import (
     build_by_port_month,
     build_occupancy_trends,
+)
+from apps.bookings.services.report_exports.common import (
+    PAX_BASIS_CAPACITY,
+    normalize_pax_basis,
 )
 from apps.bookings.services.validation.conflict_type_filters import (
     CONFLICT_TYPE_CODES,
@@ -67,6 +72,7 @@ def _apply_scope(
     shipping_line_id: int | None,
     shipping_line_group_id: int | None,
     allowed_ports: list[int] | None,
+    without_lta: bool = False,
 ) -> QuerySet:
     if allowed_ports is not None:
         qs = qs.filter(port_id__in=allowed_ports)
@@ -76,7 +82,22 @@ def _apply_scope(
         qs = qs.filter(shipping_line_id=shipping_line_id)
     elif shipping_line_group_id:
         qs = qs.filter(shipping_line__group_id=shipping_line_group_id)
+    if without_lta:
+        # Ghost LTA slots only; CL (confirmed) stays in the totals.
+        qs = qs.exclude(status=BookingStatus.LTA)
     return qs
+
+
+def _projected_pax_expr(pax_basis: str):
+    """Projected PAX for dashboard aggregates (not manifested actual)."""
+    if normalize_pax_basis(pax_basis) == PAX_BASIS_CAPACITY:
+        return Coalesce(F("vessel__pax_capacity"), 0, output_field=IntegerField())
+    return Coalesce(F("planned_pax"), 0, output_field=IntegerField())
+
+
+def _sum_projected_pax(qs: QuerySet, pax_basis: str) -> int:
+    total = qs.aggregate(total=Sum(_projected_pax_expr(pax_basis)))["total"]
+    return int(total or 0)
 
 
 def _port_display(row: dict) -> str:
@@ -119,16 +140,20 @@ def _peak_pax_by_port(
     active_qs: QuerySet,
     *,
     today: date,
+    pax_basis: str = "planned",
 ) -> list[dict]:
     """
     Per port: day with the most passengers inside the already-scoped queryset.
 
-    Past call_date → prefer sum(actual_pax); if none manifested, fall back to planned.
-    Today / future → sum(planned_pax).
+    Past call_date → prefer sum(actual_pax); if none manifested, fall back to
+    projected PAX (planned or vessel capacity per pax_basis).
+    Today / future → sum(projected PAX).
     """
-    from django.db.models import Count, Sum
-    from django.db.models.functions import Coalesce
-
+    projected_label = (
+        "cap. máx."
+        if normalize_pax_basis(pax_basis) == PAX_BASIS_CAPACITY
+        else "planificado"
+    )
     day_rows = (
         active_qs.values(
             "port_id",
@@ -139,7 +164,7 @@ def _peak_pax_by_port(
         )
         .annotate(
             calls=Count("id"),
-            planned=Coalesce(Sum("planned_pax"), 0),
+            planned=Coalesce(Sum(_projected_pax_expr(pax_basis)), 0),
             actual=Coalesce(Sum("actual_pax"), 0),
         )
         .order_by("port_id", "call_date")
@@ -156,10 +181,10 @@ def _peak_pax_by_port(
                 base = "real"
             else:
                 passengers = planned
-                base = "planificado"
+                base = projected_label
         else:
             passengers = planned
-            base = "planificado"
+            base = projected_label
 
         if passengers <= 0:
             continue
@@ -230,6 +255,8 @@ def build_dashboard_stats(
     shipping_line_id: int | None = None,
     shipping_line_group_id: int | None = None,
     allowed_ports: list[int] | None = None,
+    without_lta: bool = False,
+    pax_basis: str = "planned",
     today: date | None = None,
     request=None,
 ) -> dict:
@@ -237,13 +264,16 @@ def build_dashboard_stats(
         date_from, date_to = date_to, date_from
 
     today = today or date.today()
+    basis = normalize_pax_basis(pax_basis)
     scoped_ports = [int(p) for p in (port_ids or []) if p]
     scope_kwargs = {
         "port_ids": scoped_ports or None,
         "shipping_line_id": shipping_line_id,
         "shipping_line_group_id": shipping_line_group_id,
         "allowed_ports": allowed_ports,
+        "without_lta": without_lta,
     }
+    projected_pax = _projected_pax_expr(basis)
 
     qs = _apply_scope(
         Booking.objects.filter(call_date__gte=date_from, call_date__lte=date_to),
@@ -265,12 +295,8 @@ def build_dashboard_stats(
     total = nr + hold + confirmed + confirmed_lta + lta + ltd + real + cancelled
 
     active_qs = qs.exclude(status=BookingStatus.C)
-    pax_agg = active_qs.aggregate(
-        planned=Sum("planned_pax"),
-        actual=Sum("actual_pax"),
-    )
-    planned_pax = pax_agg["planned"] or 0
-    actual_pax = pax_agg["actual"] or 0
+    planned_pax = _sum_projected_pax(active_qs, basis)
+    actual_pax = active_qs.aggregate(actual=Sum("actual_pax"))["actual"] or 0
 
     positions_qs = atomic_pier_positions_qs(
         port_ids=scoped_ports or None,
@@ -299,7 +325,7 @@ def build_dashboard_stats(
         )
         .annotate(
             bookings=Count("id"),
-            planned_pax=Sum("planned_pax"),
+            planned_pax=Sum(projected_pax),
         )
         .order_by("-planned_pax", "-bookings")[:12]
     )
@@ -340,7 +366,7 @@ def build_dashboard_stats(
         )
         .annotate(
             bookings=Count("id"),
-            planned_pax=Sum("planned_pax"),
+            planned_pax=Sum(projected_pax),
         )
         .order_by("-planned_pax", "-bookings")[:8]
     )
@@ -366,7 +392,7 @@ def build_dashboard_stats(
         cancel_base.values("cancellation_reason")
         .annotate(
             c=Count("id"),
-            planned_pax=Sum("planned_pax"),
+            planned_pax=Sum(projected_pax),
         )
         .order_by("-c")
     )
@@ -571,7 +597,7 @@ def build_dashboard_stats(
 
     # --- Peak passengers day per port within dashboard date range ---
     peak_pax_by_port = _attach_port_logos(
-        _peak_pax_by_port(active_qs, today=today),
+        _peak_pax_by_port(active_qs, today=today, pax_basis=basis),
         request=request,
     )
 
@@ -584,7 +610,7 @@ def build_dashboard_stats(
     )
     prior_active = prior_qs.exclude(status=BookingStatus.C)
     prior_calls = prior_active.count()
-    prior_pax = prior_active.aggregate(planned=Sum("planned_pax"))["planned"] or 0
+    prior_pax = _sum_projected_pax(prior_active, basis)
     current_calls = active_qs.count()
 
     prior_occupancy_rows = iter_occupancy_booking_rows(
@@ -631,7 +657,7 @@ def build_dashboard_stats(
         scoped_ports=scoped_ports or None,
         allowed_ports=allowed_ports,
     )
-    by_port_month = build_by_port_month(active_qs)
+    by_port_month = build_by_port_month(active_qs, pax_basis=basis)
 
     years = sorted({date_from.year, date_to.year})
 
@@ -641,6 +667,8 @@ def build_dashboard_stats(
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "day_count": day_count,
+        "without_lta": without_lta,
+        "pax_basis": basis,
         "kpis": {
             "occupancy_pct": occupancy_pct,
             "capacity_slot_days": capacity_slot_days,

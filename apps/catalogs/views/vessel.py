@@ -78,11 +78,30 @@ class VesselViewSet(viewsets.ModelViewSet):
         )
         instance.delete()
 
+    @staticmethod
+    def _parse_id_list(raw: str | None) -> list[int]:
+        if not raw:
+            return []
+        out: list[int] = []
+        for part in str(raw).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                value = int(part)
+            except (TypeError, ValueError):
+                continue
+            if value > 0 and value not in out:
+                out.append(value)
+        return out
+
     def get_queryset(self):
         qs = super().get_queryset()
-        shipping_line_id = self.request.query_params.get("shipping_line")
-        if shipping_line_id:
-            qs = qs.filter(shipping_line_id=shipping_line_id)
+        shipping_line_ids = self._parse_id_list(
+            self.request.query_params.get("shipping_line")
+        )
+        if shipping_line_ids:
+            qs = qs.filter(shipping_line_id__in=shipping_line_ids)
         group_id = (
             self.request.query_params.get("shipping_line_group")
             or self.request.query_params.get("group")

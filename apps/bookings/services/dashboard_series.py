@@ -5,7 +5,7 @@ from __future__ import annotations
 from calendar import monthrange
 from datetime import date, timedelta
 
-from django.db.models import Count, QuerySet, Sum
+from django.db.models import Count, F, IntegerField, QuerySet, Sum
 from django.db.models.functions import Coalesce
 
 from apps.bookings.services.dashboard_occupancy import (
@@ -54,11 +54,26 @@ def _iter_season_slices(date_from: date, date_to: date):
         cursor = slice_to + timedelta(days=1)
 
 
-def build_by_port_month(active_qs: QuerySet, *, limit_ports: int = 8) -> dict:
+def build_by_port_month(
+    active_qs: QuerySet,
+    *,
+    limit_ports: int = 8,
+    pax_basis: str = "planned",
+) -> dict:
     """
-    Calls + planned passengers per port × calendar month (1–12) in scoped qs.
-    Top ports by total calls.
+    Calls + projected passengers per port × calendar month (1–12) in scoped qs.
+    Top ports by total calls. pax_basis: planned | capacity.
     """
+    from apps.bookings.services.report_exports.common import (
+        PAX_BASIS_CAPACITY,
+        normalize_pax_basis,
+    )
+
+    projected = (
+        Coalesce(F("vessel__pax_capacity"), 0, output_field=IntegerField())
+        if normalize_pax_basis(pax_basis) == PAX_BASIS_CAPACITY
+        else Coalesce(F("planned_pax"), 0, output_field=IntegerField())
+    )
     rows = (
         active_qs.values(
             "port_id",
@@ -69,7 +84,7 @@ def build_by_port_month(active_qs: QuerySet, *, limit_ports: int = 8) -> dict:
         )
         .annotate(
             calls=Count("id"),
-            passengers=Coalesce(Sum("planned_pax"), 0),
+            passengers=Coalesce(Sum(projected), 0),
         )
         .order_by("port_id", "call_date__month")
     )

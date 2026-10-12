@@ -331,10 +331,7 @@ def build_port_trends(
     line_data, line_meta = _aggregate_trends_by_line(qs, pax_basis=pax_basis)
     years = years_in_range(date_from, date_to)
 
-    line_ids = sorted(
-        line_data.keys(),
-        key=lambda lid: (line_meta.get(lid, {}).get("name") or "").lower(),
-    )
+    line_ids = list(line_data.keys())
     line_logos = _line_logo_map(line_ids, request)
 
     groups_map: dict[int, dict[str, Any]] = {}
@@ -359,16 +356,25 @@ def build_port_trends(
         groups_map[group_id]["lines"].append(line_row)
 
     groups: list[dict[str, Any]] = []
-    for group_id in sorted(
-        groups_map.keys(),
-        key=lambda gid: (groups_map[gid]["name"] or "").lower(),
-    ):
-        group = groups_map[group_id]
+    for group_id, group in groups_map.items():
+        # Highest passenger volume first (ties: name).
+        group["lines"].sort(
+            key=lambda row: (
+                -int(row.get("total_pax") or 0),
+                (row.get("name") or "").lower(),
+            )
+        )
         group_metrics = _trend_metrics_for_years(
             _sum_year_cells(group["lines"], years),
             years,
         )
         groups.append({**group, **group_metrics})
+    groups.sort(
+        key=lambda row: (
+            -int(row.get("total_pax") or 0),
+            (row.get("name") or "").lower(),
+        )
+    )
 
     totals = _trend_metrics_for_years(_sum_year_cells(groups, years), years)
 
@@ -407,6 +413,8 @@ def _year_rows_metric(
     agg: dict[int, dict[int, dict[str, int]]],
     years: list[int],
     metric: str,
+    *,
+    include_column_totals: bool = True,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     month_totals = [0] * 12
@@ -421,14 +429,15 @@ def _year_rows_metric(
             year_total += value
         rows.append({"year": year, "months": months, "total": year_total})
         grand += year_total
-    rows.append(
-        {
-            "year": "total",
-            "months": month_totals,
-            "total": grand,
-            "is_total": True,
-        }
-    )
+    if include_column_totals:
+        rows.append(
+            {
+                "year": "total",
+                "months": month_totals,
+                "total": grand,
+                "is_total": True,
+            }
+        )
     return rows
 
 
@@ -454,6 +463,7 @@ def _matrix_section(
     years: list[int],
     *,
     is_total: bool = False,
+    include_column_totals: bool = True,
     logo: str | None = None,
     logo_kind: str | None = None,
     logo_name: str | None = None,
@@ -461,8 +471,12 @@ def _matrix_section(
 ) -> dict[str, Any]:
     section: dict[str, Any] = {
         "label": label,
-        "calls": _year_rows_metric(agg, years, "calls"),
-        "pax": _year_rows_metric(agg, years, "pax"),
+        "calls": _year_rows_metric(
+            agg, years, "calls", include_column_totals=include_column_totals
+        ),
+        "pax": _year_rows_metric(
+            agg, years, "pax", include_column_totals=include_column_totals
+        ),
         "is_total": is_total,
     }
     if logo_kind:
@@ -498,8 +512,15 @@ def build_ports_totals_matrix(
 
     sections: list[dict[str, Any]] = []
     combined = _combined_line_month_agg(port_data, years)
+    # No vertical TOTAL row (month column sums across years) — keep year TOTAL only.
     sections.append(
-        _matrix_section("Total Puertos", combined, years, is_total=True),
+        _matrix_section(
+            "Total Puertos",
+            combined,
+            years,
+            is_total=True,
+            include_column_totals=False,
+        ),
     )
 
     port_ids = sorted(
@@ -515,6 +536,7 @@ def build_ports_totals_matrix(
                 name or code,
                 port_data[port_id],
                 years,
+                include_column_totals=False,
                 logo=assets.get("url"),
                 logo_name=assets.get("name"),
                 logo_path=assets.get("path"),

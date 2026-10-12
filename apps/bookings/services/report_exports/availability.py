@@ -130,12 +130,16 @@ def _availability_export_bookings(
     date_to: date,
     allowed_ports: set[int] | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_ids: list[int] | None = None,
     shipping_line_group_id: int | None = None,
+    shipping_line_group_ids: list[int] | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
     statuses: list[str] | None = None,
 ):
+    from apps.bookings.services.report_exports.common import _merge_id_filters
+
     if allowed_ports is not None and port_id not in allowed_ports:
         raise ValueError("Puerto no permitido.")
 
@@ -144,13 +148,16 @@ def _availability_export_bookings(
     if status and status not in status_filters:
         status_filters.append(status)
 
+    line_ids = _merge_id_filters(shipping_line_id, shipping_line_ids) or None
+    group_ids = _merge_id_filters(shipping_line_group_id, shipping_line_group_ids) or None
+
     qs = scheduled_bookings_qs(
         date_from=date_from,
         date_to=date_to,
         port_id=port_id,
         allowed_ports=allowed_ports,
-        shipping_line_id=shipping_line_id,
-        shipping_line_group_id=shipping_line_group_id,
+        shipping_line_ids=line_ids,
+        shipping_line_group_ids=group_ids,
         vessel_id=vessel_id,
         position_id=position_id,
         status=None,
@@ -168,10 +175,10 @@ def _availability_export_bookings(
             base = base.filter(port_id__in=allowed_ports)
         if vessel_id:
             base = base.filter(vessel_id=vessel_id)
-        elif shipping_line_id:
-            base = base.filter(shipping_line_id=shipping_line_id)
-        elif shipping_line_group_id:
-            base = base.filter(shipping_line__group_id=shipping_line_group_id)
+        elif line_ids:
+            base = base.filter(shipping_line_id__in=line_ids)
+        elif group_ids:
+            base = base.filter(shipping_line__group_id__in=group_ids)
         if position_id:
             base = base.filter(position_id=position_id)
         qs = apply_booking_status_filters(base, status_filters)
@@ -189,7 +196,9 @@ def _availability_export_rows(
     date_to: date,
     allowed_ports: set[int] | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_ids: list[int] | None = None,
     shipping_line_group_id: int | None = None,
+    shipping_line_group_ids: list[int] | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
@@ -201,7 +210,9 @@ def _availability_export_rows(
         date_to=date_to,
         allowed_ports=allowed_ports,
         shipping_line_id=shipping_line_id,
+        shipping_line_ids=shipping_line_ids,
         shipping_line_group_id=shipping_line_group_id,
+        shipping_line_group_ids=shipping_line_group_ids,
         vessel_id=vessel_id,
         position_id=position_id,
         status=status,
@@ -238,8 +249,8 @@ def _conflict_filter_active(
 
 def _soft_focus_active(
     *,
-    shipping_line_id: int | None,
-    shipping_line_group_id: int | None,
+    shipping_line_ids: list[int] | None,
+    shipping_line_group_ids: list[int] | None,
     vessel_id: int | None,
     position_id: int | None,
     tag_ids: list[int] | None,
@@ -251,8 +262,8 @@ def _soft_focus_active(
     cancellation_reason: str | None = None,
 ) -> bool:
     return bool(
-        shipping_line_id
-        or shipping_line_group_id
+        shipping_line_ids
+        or shipping_line_group_ids
         or vessel_id
         or position_id
         or tag_ids
@@ -292,8 +303,8 @@ def _focus_match_queryset(
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None,
-    shipping_line_id: int | None,
-    shipping_line_group_id: int | None,
+    shipping_line_ids: list[int] | None,
+    shipping_line_group_ids: list[int] | None,
     vessel_id: int | None,
     position_id: int | None,
     tag_ids: list[int] | None,
@@ -326,11 +337,11 @@ def _focus_match_queryset(
         )
     if vessel_id:
         qs = qs.filter(vessel_id=vessel_id)
-    elif shipping_line_id:
+    elif shipping_line_ids:
         # Vessel focus supersedes line (same as FE soft-focus match).
-        qs = qs.filter(shipping_line_id=shipping_line_id)
-    elif shipping_line_group_id:
-        qs = qs.filter(shipping_line__group_id=shipping_line_group_id)
+        qs = qs.filter(shipping_line_id__in=shipping_line_ids)
+    elif shipping_line_group_ids:
+        qs = qs.filter(shipping_line__group_id__in=shipping_line_group_ids)
     if position_id:
         qs = qs.filter(position_id=position_id)
     if tag_ids:
@@ -351,8 +362,8 @@ def _soft_focus_matching_days(
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None,
-    shipping_line_id: int | None,
-    shipping_line_group_id: int | None,
+    shipping_line_ids: list[int] | None,
+    shipping_line_group_ids: list[int] | None,
     vessel_id: int | None,
     position_id: int | None,
     tag_ids: list[int] | None,
@@ -368,8 +379,8 @@ def _soft_focus_matching_days(
         date_from=date_from,
         date_to=date_to,
         allowed_ports=allowed_ports,
-        shipping_line_id=shipping_line_id,
-        shipping_line_group_id=shipping_line_group_id,
+        shipping_line_ids=shipping_line_ids,
+        shipping_line_group_ids=shipping_line_group_ids,
         vessel_id=vessel_id,
         position_id=position_id,
         tag_ids=tag_ids,
@@ -633,7 +644,9 @@ def build_availability_data(
     date_to: date,
     allowed_ports: set[int] | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_ids: list[int] | None = None,
     shipping_line_group_id: int | None = None,
+    shipping_line_group_ids: list[int] | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
     tag_ids: list[int] | None = None,
@@ -656,6 +669,8 @@ def build_availability_data(
     matching days in the DB, page those days, then load *all* calls on the page
     days so neighbors stay visible. Opacity is a FE concern.
     """
+    from apps.bookings.services.report_exports.common import _merge_id_filters
+
     if allowed_ports is not None and port_id not in allowed_ports:
         raise ValueError("Puerto no permitido.")
     if ships_per_day is not None and (
@@ -676,9 +691,13 @@ def build_availability_data(
     if status and status not in status_filters:
         status_filters.append(status)
     focus_tag_ids = list(tag_ids) if tag_ids else None
+    focus_line_ids = _merge_id_filters(shipping_line_id, shipping_line_ids) or None
+    focus_group_ids = (
+        _merge_id_filters(shipping_line_group_id, shipping_line_group_ids) or None
+    )
     soft_focus = _soft_focus_active(
-        shipping_line_id=shipping_line_id,
-        shipping_line_group_id=shipping_line_group_id,
+        shipping_line_ids=focus_line_ids,
+        shipping_line_group_ids=focus_group_ids,
         vessel_id=vessel_id,
         position_id=position_id,
         tag_ids=focus_tag_ids,
@@ -710,8 +729,8 @@ def build_availability_data(
                 date_from=date_from,
                 date_to=date_to,
                 allowed_ports=allowed_ports,
-                shipping_line_id=shipping_line_id,
-                shipping_line_group_id=shipping_line_group_id,
+                shipping_line_ids=focus_line_ids,
+                shipping_line_group_ids=focus_group_ids,
                 vessel_id=vessel_id,
                 position_id=position_id,
                 tag_ids=focus_tag_ids,
@@ -824,7 +843,9 @@ def build_availability_chart_xlsx(
     date_to: date,
     allowed_ports: set[int] | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_ids: list[int] | None = None,
     shipping_line_group_id: int | None = None,
+    shipping_line_group_ids: list[int] | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
@@ -836,7 +857,9 @@ def build_availability_chart_xlsx(
         date_to=date_to,
         allowed_ports=allowed_ports,
         shipping_line_id=shipping_line_id,
+        shipping_line_ids=shipping_line_ids,
         shipping_line_group_id=shipping_line_group_id,
+        shipping_line_group_ids=shipping_line_group_ids,
         vessel_id=vessel_id,
         position_id=position_id,
         status=status,
@@ -868,7 +891,9 @@ def build_availability_chart_csv(
     date_to: date,
     allowed_ports: set[int] | None = None,
     shipping_line_id: int | None = None,
+    shipping_line_ids: list[int] | None = None,
     shipping_line_group_id: int | None = None,
+    shipping_line_group_ids: list[int] | None = None,
     vessel_id: int | None = None,
     position_id: int | None = None,
     status: str | None = None,
@@ -880,7 +905,9 @@ def build_availability_chart_csv(
         date_to=date_to,
         allowed_ports=allowed_ports,
         shipping_line_id=shipping_line_id,
+        shipping_line_ids=shipping_line_ids,
         shipping_line_group_id=shipping_line_group_id,
+        shipping_line_group_ids=shipping_line_group_ids,
         vessel_id=vessel_id,
         position_id=position_id,
         status=status,
