@@ -6,6 +6,9 @@ from datetime import date, time, timedelta
 from typing import Any
 
 from apps.bookings.models import Booking
+from apps.bookings.services.booking_recap.portpax_only import (
+    find_portpax_only_bookings,
+)
 from apps.bookings.services.import_mass.resolve import (
     resolve_port,
     resolve_shipping_line,
@@ -159,6 +162,9 @@ def match_recap_rows(
     effective_group_ids = [] if line_ids else group_ids
     prepared: list[dict[str, Any]] = []
     unmatched: list[dict[str, Any]] = []
+    # Ports / lines seen in the paste — bias for PortPax-only elasticity.
+    recap_port_ids: set[int] = set()
+    recap_line_ids: set[int] = set()
 
     for row in rows:
         ship = (row.get("ship") or "").strip()
@@ -176,6 +182,13 @@ def match_recap_rows(
             "eta": _hhmm(row.get("eta")) if isinstance(row.get("eta"), time) else None,
             "etd": _hhmm(row.get("etd")) if isinstance(row.get("etd"), time) else None,
         }
+        # Collect paste bias even if the row later fails date / identity checks.
+        port = resolve_port(port_raw)
+        if port is not None:
+            recap_port_ids.add(port.id)
+        line = resolve_shipping_line(line_raw) if line_raw else None
+        if line is not None:
+            recap_line_ids.add(line.id)
         if not isinstance(call_date, date):
             unmatched.append({**base, "reason": "Fecha de escala no válida."})
             continue
@@ -201,8 +214,6 @@ def match_recap_rows(
                 }
             )
             continue
-        port = resolve_port(port_raw)
-        line = resolve_shipping_line(line_raw) if line_raw else None
         if line_raw and line is None:
             unmatched.append(
                 {**base, "reason": f"Naviera no encontrada: «{line_raw}»."}
@@ -262,6 +273,8 @@ def match_recap_rows(
                 unmatched.append({**base, "reason": f"Barco no encontrado: «{ship}»."})
             continue
         vessel_line_id = getattr(vessel, "shipping_line_id", None)
+        if vessel_line_id:
+            recap_line_ids.add(int(vessel_line_id))
         if line_ids and vessel_line_id and vessel_line_id not in line_ids:
             unmatched.append(
                 {
@@ -375,9 +388,21 @@ def match_recap_rows(
         )
 
     unmatched.sort(key=lambda item: item.get("row_number") or 0)
+    portpax_only = find_portpax_only_bookings(
+        date_from=date_from,
+        date_to=date_to,
+        recap_port_ids=recap_port_ids,
+        recap_line_ids=recap_line_ids,
+        matched_ids=used,
+        shipping_line_ids=line_ids,
+        shipping_line_group_ids=effective_group_ids,
+        allowed_ports=allowed,
+    )
     return {
         "imported_count": len(rows),
         "matched_count": len(matches),
         "matches": matches,
         "unmatched": unmatched,
+        "portpax_only_count": len(portpax_only),
+        "portpax_only": portpax_only,
     }
