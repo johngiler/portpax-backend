@@ -30,9 +30,10 @@ def _matrix_section_rows(
     title: str,
     sections: list[dict[str, Any]],
     metric_key: str,
+    row_label_header: str = "AÑO",
 ) -> list[list[Any]]:
     out: list[list[Any]] = [[title], []]
-    header = ["AÑO", *MONTH_LABELS, "TOTAL"]
+    header = [row_label_header, *MONTH_LABELS, "TOTAL"]
     for section in sections:
         out.append([section.get("label") or ""])
         out.append(header)
@@ -43,7 +44,8 @@ def _matrix_section_rows(
                 else str(data_row.get("year") or "")
             )
             out.append(
-                [label, *(data_row.get("months") or []), data_row.get("total") or 0]
+                [label, *(data_row.get("months") or []),
+                 data_row.get("total") or 0]
             )
         out.append([])
     return out
@@ -51,12 +53,14 @@ def _matrix_section_rows(
 
 def build_ports_totals_matrix_csv(**kwargs) -> bytes:
     report = build_ports_totals_matrix(**kwargs)
+    row_header = str(report.get("row_label_header") or "Año").upper()
     rows: list[list[Any]] = []
     rows.extend(
         _matrix_section_rows(
             title="CALL SUMMARY ITM PORTS",
             sections=report["sections"],
             metric_key="calls",
+            row_label_header=row_header,
         )
     )
     rows.extend(
@@ -64,6 +68,7 @@ def build_ports_totals_matrix_csv(**kwargs) -> bytes:
             title="PASSENGER SUMMARY ITM PORTS",
             sections=report["sections"],
             metric_key="pax",
+            row_label_header=row_header,
         )
     )
     return _csv_bytes(rows)
@@ -72,12 +77,14 @@ def build_ports_totals_matrix_csv(**kwargs) -> bytes:
 def build_port_carrier_matrix_csv(**kwargs) -> bytes:
     report = build_port_carrier_matrix(**kwargs)
     port_name = report["port"]["name"]
+    row_header = str(report.get("row_label_header") or "Año").upper()
     rows: list[list[Any]] = []
     rows.extend(
         _matrix_section_rows(
             title=f"CALL SUMMARY {port_name.upper()}",
             sections=report["sections"],
             metric_key="calls",
+            row_label_header=row_header,
         )
     )
     rows.extend(
@@ -85,6 +92,7 @@ def build_port_carrier_matrix_csv(**kwargs) -> bytes:
             title=f"PASSENGER SUMMARY {port_name.upper()}",
             sections=report["sections"],
             metric_key="pax",
+            row_label_header=row_header,
         )
     )
     return _csv_bytes(rows)
@@ -107,7 +115,8 @@ def build_port_trends_csv(**kwargs) -> bytes:
         values: list[Any] = [label]
         for cell in item.get("by_year") or []:
             values.extend([cell.get("ships") or "", cell.get("pax") or ""])
-        values.extend([item.get("total_ships") or "", item.get("total_pax") or ""])
+        values.extend([item.get("total_ships") or "",
+                      item.get("total_pax") or ""])
         rows.append(values)
 
     for group in report.get("groups") or []:
@@ -139,7 +148,8 @@ def build_port_trends_csv(**kwargs) -> bytes:
 
 
 def build_booking_movements_csv(*, year: int, allowed_ports=None) -> bytes:
-    payload = build_booking_movements_report(year=year, allowed_ports=allowed_ports)
+    payload = build_booking_movements_report(
+        year=year, allowed_ports=allowed_ports)
     rows: list[list[Any]] = [
         [payload.get("title") or "Movimientos de bookings"],
         [f"Año {year}"],
@@ -218,7 +228,8 @@ def build_solicitudes_port_csv(payload: dict[str, Any]) -> bytes:
         rows.append([])
 
     carrier_rows = list(
-        payload.get("carrier_by_year") or payload.get("nuevas_solicitadas") or []
+        payload.get("carrier_by_year") or payload.get(
+            "nuevas_solicitadas") or []
     )
     if carrier_rows:
         rows.append(["Año", "PAX naviera/grupo"])

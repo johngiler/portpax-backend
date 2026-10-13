@@ -127,7 +127,8 @@ def _stretch_col_widths(
 ) -> list[float]:
     """Force tables to usable page width (avoids narrow content-sized PDFs)."""
     usable_w = (
-        usable if usable is not None else _page_usable_width(landscape_mode=landscape_mode)
+        usable if usable is not None else _page_usable_width(
+            landscape_mode=landscape_mode)
     )
     if ncols <= 1:
         return [usable_w]
@@ -195,7 +196,8 @@ def _week_badge_flowable(week: int | str | None) -> Table:
     """Peach Sem. card — same language as HTML WeeklyReportSection actions."""
     _, subtitle_s, _, _ = _styles()
     badge = Table(
-        [[Paragraph(f"<b>Sem.</b><br/>{week if week is not None else ''}", subtitle_s)]],
+        [[Paragraph(
+            f"<b>Sem.</b><br/>{week if week is not None else ''}", subtitle_s)]],
         colWidths=[2.4 * cm],
     )
     badge.setStyle(
@@ -445,7 +447,8 @@ def _matrix_pdf(
         logo = _logo_flowable(section)
         if logo:
             logo_w = 1.15 * cm
-            header = Table([[logo, labels]], colWidths=[logo_w, inner - logo_w])
+            header = Table([[logo, labels]], colWidths=[
+                           logo_w, inner - logo_w])
         else:
             header = Table([[labels]], colWidths=[inner])
         header.setStyle(
@@ -463,7 +466,8 @@ def _matrix_pdf(
         return header
 
     def _metric_banner(label: str) -> Table:
-        banner = Table([[Paragraph(str(label), metric_style)]], colWidths=[inner])
+        banner = Table([[Paragraph(str(label), metric_style)]],
+                       colWidths=[inner])
         banner.setStyle(
             TableStyle(
                 [
@@ -477,16 +481,20 @@ def _matrix_pdf(
         )
         return banner
 
+    row_header = str(report.get("row_label_header") or "Año").upper()
+
     def _metric_table(section: dict[str, Any], metric_key: str) -> Table:
-        data = [["AÑO", *MONTH_LABELS, "TOTAL"]]
+        data = [[row_header, *MONTH_LABELS, "TOTAL"]]
         for data_row in section.get(metric_key) or []:
             label = (
                 "TOTAL"
                 if data_row.get("year") == "total"
                 else str(data_row.get("year") or "")
             )
-            months = [_fmt_matrix_num(value) for value in (data_row.get("months") or [])]
-            data.append([label, *months, _fmt_matrix_num(data_row.get("total") or 0)])
+            months = [_fmt_matrix_num(value)
+                      for value in (data_row.get("months") or [])]
+            data.append(
+                [label, *months, _fmt_matrix_num(data_row.get("total") or 0)])
         return _data_table(
             data,
             emphasize_last=True,
@@ -535,7 +543,8 @@ def _matrix_pdf(
         return card
 
     for section in report.get("sections") or []:
-        story.append(KeepTogether([_port_block(section), Spacer(1, 0.38 * cm)]))
+        story.append(KeepTogether(
+            [_port_block(section), Spacer(1, 0.38 * cm)]))
     return _build_doc(story)
 
 
@@ -593,7 +602,8 @@ def build_port_trends_pdf(**kwargs) -> bytes:
         values: list[Any] = [label]
         for cell in item.get("by_year") or []:
             values.extend([cell.get("ships") or "", cell.get("pax") or ""])
-        values.extend([item.get("total_ships") or "", item.get("total_pax") or ""])
+        values.extend([item.get("total_ships") or "",
+                      item.get("total_pax") or ""])
         data.append(values)
         if bold:
             emphasize.add(len(data) - 1)
@@ -642,9 +652,11 @@ def build_port_trends_pdf(**kwargs) -> bytes:
                 except ValueError:
                     continue
                 if num > 0:
-                    cmds.append(("TEXTCOLOR", (c_idx, r_idx), (c_idx, r_idx), GROWTH_POS))
+                    cmds.append(("TEXTCOLOR", (c_idx, r_idx),
+                                (c_idx, r_idx), GROWTH_POS))
                 elif num < 0:
-                    cmds.append(("TEXTCOLOR", (c_idx, r_idx), (c_idx, r_idx), GROWTH_NEG))
+                    cmds.append(("TEXTCOLOR", (c_idx, r_idx),
+                                (c_idx, r_idx), GROWTH_NEG))
     if cmds:
         gtable.setStyle(TableStyle(cmds))
     story.append(gtable)
@@ -652,7 +664,8 @@ def build_port_trends_pdf(**kwargs) -> bytes:
 
 
 def build_booking_movements_pdf(*, year: int, allowed_ports=None) -> bytes:
-    payload = build_booking_movements_report(year=year, allowed_ports=allowed_ports)
+    payload = build_booking_movements_report(
+        year=year, allowed_ports=allowed_ports)
     note = str(payload.get("note") or "").strip()
     subtitle = f"Año {year}" + (f" · {note}" if note else "")
     story = _banner_flowables(
@@ -854,5 +867,3 @@ def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
     table.setStyle(TableStyle(cmds))
     story.append(table)
     return _build_doc(story, landscape_mode=False)
-
-

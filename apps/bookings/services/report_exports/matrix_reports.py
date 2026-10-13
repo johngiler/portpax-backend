@@ -10,12 +10,20 @@ from typing import Any
 
 from openpyxl import Workbook
 
+from django.db.models import Q
+
 from apps.bookings.services.report_exports.common import (
+    SEASON_NATURAL,
     booking_pax,
     pax_basis_note,
     scheduled_bookings_qs,
     years_in_range,
     PAX_BASIS_PLANNED,
+)
+from apps.bookings.services.report_exports.season_periods import (
+    matrix_periods_for_range,
+    normalize_panorama_season,
+    period_for_call_date,
 )
 from apps.bookings.services.report_exports.xlsx_style import (
     ALIGN_LEFT,
@@ -78,7 +86,8 @@ def _paginate_items(
             "has_more": False,
         }
     safe_page = max(1, page or 1)
-    safe_size = max(1, min(page_size or default_page_size, MAX_REPORT_PAGE_SIZE))
+    safe_size = max(
+        1, min(page_size or default_page_size, MAX_REPORT_PAGE_SIZE))
     start = (safe_page - 1) * safe_size
     end = start + safe_size
     return items[start:end], {
@@ -191,7 +200,8 @@ def _aggregate_by_port(
     pax_basis: str = PAX_BASIS_PLANNED,
 ) -> tuple[dict[int, dict[int, dict[int, dict[str, int]]]], dict[int, tuple[str, str]]]:
     """port_id -> year -> month -> {calls, pax}."""
-    data: dict[int, dict[int, dict[int, dict[str, int]]]] = defaultdict(_empty_year_months)
+    data: dict[int, dict[int, dict[int, dict[str, int]]]
+               ] = defaultdict(_empty_year_months)
     meta: dict[int, tuple[str, str]] = {}
     for booking in qs.iterator(chunk_size=500):
         meta[booking.port_id] = (
@@ -210,7 +220,8 @@ def _aggregate_by_line(
     pax_basis: str = PAX_BASIS_PLANNED,
 ) -> tuple[dict[int, dict[int, dict[int, dict[str, int]]]], dict[int, tuple[str, str]]]:
     """shipping_line_id -> year -> month -> {calls, pax}."""
-    data: dict[int, dict[int, dict[int, dict[str, int]]]] = defaultdict(_empty_year_months)
+    data: dict[int, dict[int, dict[int, dict[str, int]]]
+               ] = defaultdict(_empty_year_months)
     meta: dict[int, tuple[str, str]] = {}
     for booking in qs.iterator(chunk_size=500):
         meta[booking.shipping_line_id] = (
@@ -414,24 +425,25 @@ def build_port_trends(
 
 
 def _year_rows_metric(
-    agg: dict[int, dict[int, dict[str, int]]],
-    years: list[int],
+    agg: dict[Any, dict[int, dict[str, int]]],
+    row_axis: list[tuple[Any, Any]],
     metric: str,
     *,
     include_column_totals: bool = True,
 ) -> list[dict[str, Any]]:
+    """Build matrix rows. row_axis = [(agg_key, display_label), ...]."""
     rows: list[dict[str, Any]] = []
     month_totals = [0] * 12
     grand = 0
-    for year in years:
+    for key, label in row_axis:
         months = []
         year_total = 0
         for month in range(1, 13):
-            value = agg.get(year, {}).get(month, {}).get(metric, 0)
+            value = agg.get(key, {}).get(month, {}).get(metric, 0)
             months.append(value)
             month_totals[month - 1] += value
             year_total += value
-        rows.append({"year": year, "months": months, "total": year_total})
+        rows.append({"year": label, "months": months, "total": year_total})
         grand += year_total
     if include_column_totals:
         rows.append(
@@ -445,26 +457,97 @@ def _year_rows_metric(
     return rows
 
 
+def _natural_row_axis(years: list[int]) -> list[tuple[Any, Any]]:
+    return [(year, year) for year in years]
+
+
+def _season_row_axis(periods) -> list[tuple[Any, Any]]:
+    return [(period.key, period.label) for period in periods]
+
+
+def _period_span_label(periods) -> str:
+    if not periods:
+        return ""
+    labels = [p.label for p in periods]
+    if len(labels) == 1:
+        return labels[0]
+    return f"{labels[0]}–{labels[-1]}"
+
+
+def _empty_keyed_months() -> dict[Any, dict[int, dict[str, int]]]:
+    return defaultdict(lambda: defaultdict(lambda: {"calls": 0, "pax": 0}))
+
+
+def _aggregate_by_port_periods(
+    qs,
+    periods,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
+) -> tuple[dict[int, dict[Any, dict[int, dict[str, int]]]], dict[int, tuple[str, str]]]:
+    """port_id -> period_key -> month -> {calls, pax}."""
+    data: dict[int, dict[Any, dict[int, dict[str, int]]]] = defaultdict(
+        _empty_keyed_months
+    )
+    meta: dict[int, tuple[str, str]] = {}
+    for booking in qs.iterator(chunk_size=500):
+        period = period_for_call_date(booking.call_date, periods)
+        if period is None:
+            continue
+        meta[booking.port_id] = (
+            booking.port.code,
+            _port_friendly_name(booking.port),
+        )
+        cell = data[booking.port_id][period.key][booking.call_date.month]
+        cell["calls"] += 1
+        cell["pax"] += booking_pax(booking, pax_basis=pax_basis)
+    return data, meta
+
+
+def _aggregate_by_line_periods(
+    qs,
+    periods,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
+) -> tuple[dict[int, dict[Any, dict[int, dict[str, int]]]], dict[int, tuple[str, str]]]:
+    """shipping_line_id -> period_key -> month -> {calls, pax}."""
+    data: dict[int, dict[Any, dict[int, dict[str, int]]]] = defaultdict(
+        _empty_keyed_months
+    )
+    meta: dict[int, tuple[str, str]] = {}
+    for booking in qs.iterator(chunk_size=500):
+        period = period_for_call_date(booking.call_date, periods)
+        if period is None:
+            continue
+        meta[booking.shipping_line_id] = (
+            booking.shipping_line.code,
+            (booking.shipping_line.name or booking.shipping_line.code or "").strip(),
+        )
+        cell = data[booking.shipping_line_id][period.key][booking.call_date.month]
+        cell["calls"] += 1
+        cell["pax"] += booking_pax(booking, pax_basis=pax_basis)
+    return data, meta
+
+
 def _combined_line_month_agg(
-    line_data: dict[int, dict[int, dict[int, dict[str, int]]]],
-    years: list[int],
-) -> dict[int, dict[int, dict[str, int]]]:
-    combined: dict[int, dict[int, dict[str, int]]] = defaultdict(
+    line_data: dict[int, dict[Any, dict[int, dict[str, int]]]],
+    keys: list[Any],
+) -> dict[Any, dict[int, dict[str, int]]]:
+    combined: dict[Any, dict[int, dict[str, int]]] = defaultdict(
         lambda: defaultdict(lambda: {"calls": 0, "pax": 0})
     )
     for line_agg in line_data.values():
-        for year in years:
+        for key in keys:
             for month in range(1, 13):
-                cell = line_agg.get(year, {}).get(month, {"calls": 0, "pax": 0})
-                combined[year][month]["calls"] += cell["calls"]
-                combined[year][month]["pax"] += cell["pax"]
+                cell = line_agg.get(key, {}).get(month, {"calls": 0, "pax": 0})
+                combined[key][month]["calls"] += cell["calls"]
+                combined[key][month]["pax"] += cell["pax"]
     return combined
 
 
 def _matrix_section(
     label: str,
-    agg: dict[int, dict[int, dict[str, int]]],
-    years: list[int],
+    agg: dict[Any, dict[int, dict[str, int]]],
+    row_axis: list[tuple[Any, Any]],
     *,
     is_total: bool = False,
     include_column_totals: bool = True,
@@ -476,10 +559,10 @@ def _matrix_section(
     section: dict[str, Any] = {
         "label": label,
         "calls": _year_rows_metric(
-            agg, years, "calls", include_column_totals=include_column_totals
+            agg, row_axis, "calls", include_column_totals=include_column_totals
         ),
         "pax": _year_rows_metric(
-            agg, years, "pax", include_column_totals=include_column_totals
+            agg, row_axis, "pax", include_column_totals=include_column_totals
         ),
         "is_total": is_total,
     }
@@ -494,6 +577,72 @@ def _matrix_section(
     return section
 
 
+def _scope_allowed_ports(
+    allowed_ports: set[int] | None,
+    port_ids: set[int] | list[int] | None,
+) -> set[int] | None:
+    """Intersect user-allowed ports with optional multi-port filter."""
+    wanted = {int(pid) for pid in (port_ids or []) if pid}
+    if not wanted:
+        return allowed_ports
+    if allowed_ports is not None:
+        return allowed_ports & wanted
+    return wanted
+
+
+def _filter_qs_by_season(qs, *, date_from: date, date_to: date, season: str):
+    """Keep bookings whose call_date falls in the season axis periods."""
+    axis = normalize_panorama_season(season)
+    if axis == SEASON_NATURAL:
+        return qs
+    periods = matrix_periods_for_range(date_from, date_to, axis)
+    if not periods:
+        return qs.none()
+    date_q = Q()
+    for period in periods:
+        date_q |= Q(call_date__gte=period.start, call_date__lte=period.end)
+    return qs.filter(date_q)
+
+
+def _port_agg_total_pax(
+    port_agg: dict[int, dict[int, dict[str, int]]],
+) -> int:
+    total = 0
+    for year_map in port_agg.values():
+        for cell in year_map.values():
+            total += int(cell.get("pax", 0) or 0)
+    return total
+
+
+def _line_agg_total_pax(
+    line_agg: dict[int, dict[int, dict[str, int]]],
+) -> int:
+    total = 0
+    for month_map in line_agg.values():
+        for cell in month_map.values():
+            total += int(cell.get("pax", 0) or 0)
+    return total
+
+
+def _resolve_selected_line_ids(
+    *,
+    shipping_line_ids: list[int] | None,
+    shipping_line_group_ids: list[int] | None,
+) -> set[int]:
+    """Lines win over groups (same rule as Panorama / list filters)."""
+    line_ids = {int(lid) for lid in (shipping_line_ids or []) if lid}
+    if line_ids:
+        return line_ids
+    group_ids = {int(gid) for gid in (shipping_line_group_ids or []) if gid}
+    if not group_ids:
+        return set()
+    return set(
+        ShippingLine.objects.filter(group_id__in=group_ids).values_list(
+            "id", flat=True
+        )
+    )
+
+
 def build_ports_totals_matrix(
     *,
     date_from: date,
@@ -501,45 +650,73 @@ def build_ports_totals_matrix(
     without_lta: bool = False,
     pax_basis: str = PAX_BASIS_PLANNED,
     allowed_ports: set[int] | None = None,
+    port_ids: set[int] | list[int] | None = None,
+    season: str = SEASON_NATURAL,
     request=None,
     page: int | None = None,
     page_size: int | None = None,
 ) -> dict[str, Any]:
+    season_kind = normalize_panorama_season(season)
+    scoped_ports = _scope_allowed_ports(allowed_ports, port_ids)
     qs = scheduled_bookings_qs(
         date_from=date_from,
         date_to=date_to,
-        allowed_ports=allowed_ports,
+        allowed_ports=scoped_ports,
         without_lta=without_lta,
     )
-    port_data, port_meta = _aggregate_by_port(qs, pax_basis=pax_basis)
     years = years_in_range(date_from, date_to)
+    use_seasons = season_kind != SEASON_NATURAL
+    periods = (
+        matrix_periods_for_range(date_from, date_to, season_kind)
+        if use_seasons
+        else []
+    )
+    if use_seasons:
+        qs = _filter_qs_by_season(
+            qs, date_from=date_from, date_to=date_to, season=season_kind
+        )
+        port_data, port_meta = _aggregate_by_port_periods(
+            qs, periods, pax_basis=pax_basis
+        )
+        row_axis = _season_row_axis(periods)
+        axis_keys = [key for key, _ in row_axis]
+        row_label_header = "Temporada"
+    else:
+        port_data, port_meta = _aggregate_by_port(qs, pax_basis=pax_basis)
+        row_axis = _natural_row_axis(years)
+        axis_keys = years
+        row_label_header = "Año"
 
     sections: list[dict[str, Any]] = []
-    combined = _combined_line_month_agg(port_data, years)
+    combined = _combined_line_month_agg(port_data, axis_keys)
     # No vertical TOTAL row (month column sums across years) — keep year TOTAL only.
     sections.append(
         _matrix_section(
             "Total Puertos",
             combined,
-            years,
+            row_axis,
             is_total=True,
             include_column_totals=False,
         ),
     )
 
-    port_ids = sorted(
+    # After grand total: ports by passenger volume (desc), name as tie-breaker.
+    sorted_port_ids = sorted(
         port_data.keys(),
-        key=lambda pid: (port_meta.get(pid, ("", ""))[1] or "").lower(),
+        key=lambda pid: (
+            -_port_agg_total_pax(port_data[pid]),
+            (port_meta.get(pid, ("", ""))[1] or "").lower(),
+        ),
     )
-    port_logos = _port_logo_assets(port_ids, request)
-    for port_id in port_ids:
+    port_logos = _port_logo_assets(sorted_port_ids, request)
+    for port_id in sorted_port_ids:
         code, name = port_meta.get(port_id, ("", f"Puerto {port_id}"))
         assets = port_logos.get(port_id) or {}
         sections.append(
             _matrix_section(
                 name or code,
                 port_data[port_id],
-                years,
+                row_axis,
                 include_column_totals=False,
                 logo=assets.get("url"),
                 logo_name=assets.get("name"),
@@ -555,6 +732,11 @@ def build_ports_totals_matrix(
         default_page_size=DEFAULT_MATRIX_SECTION_PAGE_SIZE,
     )
 
+    note = pax_basis_note(pax_basis)
+    span = _period_span_label(periods) if use_seasons else ""
+    if use_seasons and span:
+        note = f"{note} Filas: {span}."
+
     return {
         "kind": "ports_totals",
         "title": "Bookings totals de puertos",
@@ -562,10 +744,13 @@ def build_ports_totals_matrix(
         "date_to": date_to.isoformat(),
         "without_lta": without_lta,
         "pax_basis": pax_basis,
+        "season": season_kind,
         "month_labels": list(MONTH_LABELS),
         "years": years,
+        "periods": [p.as_dict() for p in periods] if use_seasons else [],
+        "row_label_header": row_label_header,
         "sections": page_sections,
-        "note": pax_basis_note(pax_basis),
+        "note": note,
         **pagination,
     }
 
@@ -578,10 +763,20 @@ def build_port_carrier_matrix(
     without_lta: bool = False,
     pax_basis: str = PAX_BASIS_PLANNED,
     allowed_ports: set[int] | None = None,
+    shipping_line_ids: list[int] | None = None,
+    shipping_line_group_ids: list[int] | None = None,
+    season: str = SEASON_NATURAL,
     request=None,
     page: int | None = None,
     page_size: int | None = None,
 ) -> dict[str, Any]:
+    """
+    CALL/PAX matrices per shipping line at one port.
+
+    Columns stay months. Rows are calendar years (natural) or Summer/Winter
+    season titles (Temporadas) — same dual-matrix layout either way.
+    """
+    season_kind = normalize_panorama_season(season)
     port = Port.objects.get(pk=port_id)
     qs = scheduled_bookings_qs(
         date_from=date_from,
@@ -590,11 +785,37 @@ def build_port_carrier_matrix(
         allowed_ports=allowed_ports,
         without_lta=without_lta,
     )
-    line_data, line_meta = _aggregate_by_line(qs, pax_basis=pax_basis)
     years = years_in_range(date_from, date_to)
+    use_seasons = season_kind != SEASON_NATURAL
+    periods = (
+        matrix_periods_for_range(date_from, date_to, season_kind)
+        if use_seasons
+        else []
+    )
+    if use_seasons:
+        qs = _filter_qs_by_season(
+            qs, date_from=date_from, date_to=date_to, season=season_kind
+        )
+        line_data, line_meta = _aggregate_by_line_periods(
+            qs, periods, pax_basis=pax_basis
+        )
+        row_axis = _season_row_axis(periods)
+        axis_keys = [key for key, _ in row_axis]
+        row_label_header = "Temporada"
+    else:
+        line_data, line_meta = _aggregate_by_line(qs, pax_basis=pax_basis)
+        row_axis = _natural_row_axis(years)
+        axis_keys = years
+        row_label_header = "Año"
+
+    selected_ids = _resolve_selected_line_ids(
+        shipping_line_ids=shipping_line_ids,
+        shipping_line_group_ids=shipping_line_group_ids,
+    )
+    has_selection = bool(selected_ids)
 
     sections: list[dict[str, Any]] = []
-    combined = _combined_line_month_agg(line_data, years) if line_data else {}
+    combined = _combined_line_month_agg(line_data, axis_keys) if line_data else {}
     if not combined:
         combined = defaultdict(lambda: defaultdict(lambda: {"calls": 0, "pax": 0}))
     port_assets = _logo_assets(port.logo, request)
@@ -603,7 +824,7 @@ def build_port_carrier_matrix(
         _matrix_section(
             f"Total {port_label}",
             combined,
-            years,
+            row_axis,
             is_total=True,
             logo=port_assets["url"],
             logo_name=port_assets["name"],
@@ -612,22 +833,45 @@ def build_port_carrier_matrix(
         )
     )
 
-    line_ids = sorted(
-        line_data.keys(),
-        key=lambda lid: (line_meta.get(lid, ("", ""))[1] or "").lower(),
+    if has_selection:
+        focus_ids = [lid for lid in line_data if lid in selected_ids]
+        others_ids = [lid for lid in line_data if lid not in selected_ids]
+    else:
+        focus_ids = list(line_data.keys())
+        others_ids = []
+
+    # Focus lines by passenger volume (desc), name as tie-breaker.
+    focus_ids = sorted(
+        focus_ids,
+        key=lambda lid: (
+            -_line_agg_total_pax(line_data[lid]),
+            (line_meta.get(lid, ("", ""))[1] or "").lower(),
+        ),
     )
-    line_logos = _line_logo_assets(line_ids, request)
-    for line_id in line_ids:
+    line_logos = _line_logo_assets(focus_ids, request)
+    for line_id in focus_ids:
         code, name = line_meta.get(line_id, ("", f"Línea {line_id}"))
         assets = line_logos.get(line_id) or {}
         sections.append(
             _matrix_section(
                 name or code,
                 line_data[line_id],
-                years,
+                row_axis,
                 logo=assets.get("url"),
                 logo_name=assets.get("name"),
                 logo_path=assets.get("path"),
+                logo_kind="shipping_line",
+            )
+        )
+
+    if has_selection and others_ids:
+        others_data = {lid: line_data[lid] for lid in others_ids}
+        others_combined = _combined_line_month_agg(others_data, axis_keys)
+        sections.append(
+            _matrix_section(
+                "Otros",
+                others_combined,
+                row_axis,
                 logo_kind="shipping_line",
             )
         )
@@ -638,6 +882,11 @@ def build_port_carrier_matrix(
         page_size=page_size,
         default_page_size=DEFAULT_MATRIX_SECTION_PAGE_SIZE,
     )
+
+    note = pax_basis_note(pax_basis)
+    span = _period_span_label(periods) if use_seasons else ""
+    if use_seasons and span:
+        note = f"{note} Filas: {span}."
 
     return {
         "kind": "port_carrier",
@@ -652,10 +901,13 @@ def build_port_carrier_matrix(
         "date_to": date_to.isoformat(),
         "without_lta": without_lta,
         "pax_basis": pax_basis,
+        "season": season_kind,
         "month_labels": list(MONTH_LABELS),
         "years": years,
+        "periods": [p.as_dict() for p in periods] if use_seasons else [],
+        "row_label_header": row_label_header,
         "sections": page_sections,
-        "note": pax_basis_note(pax_basis),
+        "note": note,
         **pagination,
     }
 
@@ -695,12 +947,14 @@ def _write_matrix_block(
     for section in sections:
         write_section_banner(ws, row, section["label"], col_span)
         row += 1
-        write_matrix_header(ws, row, row_label=row_label_header, month_labels=MONTH_LABELS)
+        write_matrix_header(
+            ws, row, row_label=row_label_header, month_labels=MONTH_LABELS)
         block_start = row
         row += 1
         rows = section[metric_key]
         for idx, data_row in enumerate(rows):
-            label = str(data_row["year"]) if data_row["year"] != "total" else "TOTAL"
+            label = str(data_row["year"]
+                        ) if data_row["year"] != "total" else "TOTAL"
             write_matrix_row(
                 ws,
                 row,
@@ -730,13 +984,15 @@ def _write_dual_matrix_sheet(
     calls_title: str,
     pax_title: str,
 ) -> None:
-    ws = wb.active if wb.sheetnames == ["Sheet"] else wb.create_sheet(sheet_title)
+    ws = wb.active if wb.sheetnames == [
+        "Sheet"] else wb.create_sheet(sheet_title)
     ws.title = sheet_title[:31]
     if wb.sheetnames[0] == "Sheet" and ws.title != "Sheet":
         wb.remove(wb["Sheet"])
 
     prepare_report_sheet(ws)
     subtitle = _matrix_subtitle(report)
+    row_header = str(report.get("row_label_header") or "Año").upper()
     end_calls = _write_matrix_block(
         ws,
         1,
@@ -744,7 +1000,7 @@ def _write_dual_matrix_sheet(
         subtitle=subtitle or None,
         sections=report["sections"],
         metric_key="calls",
-        row_label_header="AÑO",
+        row_label_header=row_header,
     )
     _write_matrix_block(
         ws,
@@ -753,7 +1009,7 @@ def _write_dual_matrix_sheet(
         subtitle=subtitle or None,
         sections=report["sections"],
         metric_key="pax",
-        row_label_header="AÑO",
+        row_label_header=row_header,
     )
     autosize_columns(ws)
 
@@ -832,7 +1088,8 @@ def build_port_trends_xlsx(**kwargs) -> bytes:
         values.extend([item["total_ships"] or "", item["total_pax"] or ""])
         emphasize = is_group or is_total
         for col, value in enumerate(values, start=1):
-            cell = ws.cell(row=row, column=col, value=value if value != 0 else "")
+            cell = ws.cell(row=row, column=col,
+                           value=value if value != 0 else "")
             if emphasize:
                 font = FONT_TOTAL
                 fill = FILL_TOTAL
@@ -848,7 +1105,8 @@ def build_port_trends_xlsx(**kwargs) -> bytes:
                 fill=fill,
                 alignment=ALIGN_LEFT if col == 1 else ALIGN_RIGHT,
                 border=BORDER_ALL,
-                number_format="#,##0" if isinstance(value, int) and col > 1 else None,
+                number_format="#,##0" if isinstance(
+                    value, int) and col > 1 else None,
             )
         row += 1
 
@@ -976,4 +1234,3 @@ def port_trends_filename(
     from apps.bookings.services.report_exports.filenames import report_download_filename
 
     return report_download_filename("port_trends", ext)
-

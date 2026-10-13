@@ -1579,6 +1579,15 @@ class BookingViewSet(
         date_to, err = self._parse_iso_date_param("date_to")
         if err:
             return err
+        port_ids = self._optional_int_list_param("ports")
+        if isinstance(port_ids, Response):
+            return port_ids
+        for port_id in port_ids:
+            self._ensure_port_access(port_id)
+        from apps.bookings.services.report_exports.season_periods import (
+            normalize_panorama_season,
+        )
+
         page, page_size = self._report_pagination_params(request)
         return Response(
             build_ports_totals_matrix(
@@ -1587,6 +1596,10 @@ class BookingViewSet(
                 without_lta=self._report_without_lta(request),
                 pax_basis=self._report_pax_basis(request),
                 allowed_ports=user_port_ids(request.user),
+                port_ids=port_ids or None,
+                season=normalize_panorama_season(
+                    request.query_params.get("season")
+                ),
                 request=request,
                 page=page,
                 page_size=page_size,
@@ -1610,6 +1623,19 @@ class BookingViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
         self._ensure_port_access(port_id)
+        shipping_line_ids = parse_id_list(
+            request.query_params.get("shipping_lines")
+            or request.query_params.get("shipping_line")
+        )
+        shipping_line_group_ids = parse_id_list(
+            request.query_params.get("shipping_line_group")
+            or request.query_params.get("shipping_line_groups")
+            or request.query_params.get("groups")
+        )
+        from apps.bookings.services.report_exports.season_periods import (
+            normalize_panorama_season,
+        )
+
         page, page_size = self._report_pagination_params(request)
         return Response(
             build_port_carrier_matrix(
@@ -1619,6 +1645,11 @@ class BookingViewSet(
                 without_lta=self._report_without_lta(request),
                 pax_basis=self._report_pax_basis(request),
                 allowed_ports=user_port_ids(request.user),
+                shipping_line_ids=shipping_line_ids or None,
+                shipping_line_group_ids=shipping_line_group_ids or None,
+                season=normalize_panorama_season(
+                    request.query_params.get("season")
+                ),
                 request=request,
                 page=page,
                 page_size=page_size,
@@ -1974,12 +2005,22 @@ class BookingViewSet(
                 port = Port.objects.get(pk=port_id)
                 filename = availability_filename(port.code, date_from, date_to, fmt)
             elif report_type == "ports_totals_matrix":
+                from apps.bookings.services.report_exports.season_periods import (
+                    normalize_panorama_season,
+                )
+
+                for pid in port_ids:
+                    self._ensure_port_access(pid)
                 common = dict(
                     date_from=date_from,
                     date_to=date_to,
                     without_lta=without_lta,
                     pax_basis=pax_basis,
                     allowed_ports=allowed_ports,
+                    port_ids=port_ids or None,
+                    season=normalize_panorama_season(
+                        request.query_params.get("season")
+                    ),
                 )
                 if fmt == "csv":
                     content = build_ports_totals_matrix_csv(**common)
@@ -1994,6 +2035,19 @@ class BookingViewSet(
                         {"detail": "port es obligatorio."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+                from apps.bookings.services.report_exports.season_periods import (
+                    normalize_panorama_season,
+                )
+
+                shipping_line_ids = parse_id_list(
+                    request.query_params.get("shipping_lines")
+                    or request.query_params.get("shipping_line")
+                )
+                shipping_line_group_ids = parse_id_list(
+                    request.query_params.get("shipping_line_group")
+                    or request.query_params.get("shipping_line_groups")
+                    or request.query_params.get("groups")
+                )
                 common = dict(
                     date_from=date_from,
                     date_to=date_to,
@@ -2001,6 +2055,11 @@ class BookingViewSet(
                     without_lta=without_lta,
                     pax_basis=pax_basis,
                     allowed_ports=allowed_ports,
+                    shipping_line_ids=shipping_line_ids or None,
+                    shipping_line_group_ids=shipping_line_group_ids or None,
+                    season=normalize_panorama_season(
+                        request.query_params.get("season")
+                    ),
                 )
                 if fmt == "csv":
                     content = build_port_carrier_matrix_csv(**common)

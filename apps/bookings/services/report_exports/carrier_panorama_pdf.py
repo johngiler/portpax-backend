@@ -569,7 +569,8 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
     _, ports_accent, ports_tint = KPI_CARDS[2]
     _, share_accent, share_tint = KPI_CARDS[3]
 
-    story = _banner_flowables(title, subtitle, 4, landscape_mode=landscape_mode)
+    story = _banner_flowables(
+        title, subtitle, 4, landscape_mode=landscape_mode)
     story.append(Spacer(1, 0.22 * cm))
     kpi_row = Table(
         [
