@@ -19,6 +19,7 @@ HEADERS = [
     "Puerto",
     "Naviera",
     "Barco",
+    "Cap. máx.",
     "Posición",
     "Fecha de escala",
     "ETA",
@@ -73,16 +74,22 @@ def _cell_value(value) -> str | int:
     return value
 
 
+def _format_call_date(value: date) -> str:
+    return value.strftime("%d/%m/%Y")
+
+
 def booking_export_row(booking: Booking, today: date | None = None) -> list:
     today = today or timezone.localdate()
+    vessel = booking.vessel
     return [
         booking.booking_code,
         _status_label(booking, today),
         booking.port.name,
         booking.shipping_line.name,
-        booking.vessel.name,
+        vessel.name if vessel is not None else "",
+        _cell_value(vessel.pax_capacity if vessel is not None else None),
         booking.position.code if booking.position_id else "",
-        booking.call_date.isoformat(),
+        _format_call_date(booking.call_date),
         _format_time(booking.eta),
         _format_time(booking.etd),
         _format_time(booking.eta_real),

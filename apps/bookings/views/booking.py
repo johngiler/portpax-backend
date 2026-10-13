@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from django.db.models import IntegerField, Sum
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -288,6 +292,29 @@ class BookingViewSet(
         if self.action == "list":
             return BookingListSerializer
         return BookingSerializer
+
+    def list(self, request, *args, **kwargs):
+        """List page + filter-scoped totals (count via pagination, planned PAX sum)."""
+        queryset = self.filter_queryset(self.get_queryset())
+        total_planned_pax = queryset.aggregate(
+            total=Coalesce(Sum("planned_pax"), 0, output_field=IntegerField())
+        )["total"]
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            response.data["total_planned_pax"] = int(total_planned_pax or 0)
+            return response
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(
+            {
+                "count": len(serializer.data),
+                "next": None,
+                "previous": None,
+                "results": serializer.data,
+                "total_planned_pax": int(total_planned_pax or 0),
+            }
+        )
 
     def partial_update(self, request, *args, **kwargs):
         booking = self.get_object()
