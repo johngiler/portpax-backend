@@ -127,6 +127,18 @@ def _share_pct(part: int, total: int) -> float:
     return round((part / total) * 1000) / 10
 
 
+def _growth_pct(current: int, previous: int) -> float | None:
+    if previous <= 0:
+        return None if current <= 0 else 100.0
+    return round(((current - previous) / previous) * 100)
+
+
+def _avg_pax_per_call(calls: int, pax: int) -> float:
+    if calls <= 0:
+        return 0.0
+    return round(pax / calls, 1)
+
+
 def build_carrier_panorama(
     *,
     date_from: date,
@@ -151,7 +163,6 @@ def build_carrier_panorama(
     group_ids = _merge_ids(shipping_line_group_id, shipping_line_group_ids)
     # Lines win over groups (same rule as list / solicitudes).
     effective_group_ids = [] if line_ids else group_ids
-    has_selection = bool(line_ids or effective_group_ids)
     subject = _subject_name(
         shipping_line_ids=line_ids,
         shipping_line_group_ids=effective_group_ids,
@@ -171,6 +182,11 @@ def build_carrier_panorama(
         ports_qs = ports_qs.filter(id__in=scoped)
     ports = list(ports_qs.order_by("name"))
 
+    calendar_years = list(range(date_from.year, date_to.year + 1))
+    year_agg: dict[int, dict[str, int]] = {
+        year: {"calls": 0, "pax": 0} for year in calendar_years
+    }
+
     cells: dict[int, dict[str, dict[str, int]]] = defaultdict(
         lambda: defaultdict(lambda: {"calls": 0, "pax": 0})
     )
@@ -186,29 +202,14 @@ def build_carrier_panorama(
         period = period_for_call_date(booking.call_date, periods)
         if period is None:
             continue
+        pax = booking_pax(booking, pax_basis=basis)
         cell = cells[booking.port_id][period.key]
         cell["calls"] += 1
-        cell["pax"] += booking_pax(booking, pax_basis=basis)
-
-    # Otros = market outside the selection (only when something is selected).
-    others_calls = 0
-    others_pax = 0
-    if has_selection:
-        all_qs = scheduled_bookings_qs(
-            date_from=date_from,
-            date_to=date_to,
-            allowed_ports=scoped,
-            without_lta=without_lta,
-        )
-        if line_ids:
-            all_qs = all_qs.exclude(shipping_line_id__in=line_ids)
-        else:
-            all_qs = all_qs.exclude(shipping_line__group_id__in=effective_group_ids)
-        for booking in all_qs.iterator(chunk_size=500):
-            if period_for_call_date(booking.call_date, periods) is None:
-                continue
-            others_calls += 1
-            others_pax += booking_pax(booking, pax_basis=basis)
+        cell["pax"] += pax
+        year_cell = year_agg.get(booking.call_date.year)
+        if year_cell is not None:
+            year_cell["calls"] += 1
+            year_cell["pax"] += pax
 
     rows: list[dict[str, Any]] = []
     totals_by_period = {key: {"calls": 0, "pax": 0} for key in period_keys}
@@ -316,9 +317,26 @@ def build_carrier_panorama(
         else "Arribos y pasajeros totales programados por puerto"
     )
 
-    title_subject = subject
-    if has_selection and (others_calls > 0 or others_pax > 0):
-        title_subject = f"{subject} y Otros"
+    by_year_kpis: list[dict[str, Any]] = []
+    if len(calendar_years) > 1:
+        for idx, year in enumerate(calendar_years):
+            calls = int(year_agg[year]["calls"])
+            pax = int(year_agg[year]["pax"])
+            prev = year_agg[calendar_years[idx - 1]] if idx > 0 else None
+            by_year_kpis.append(
+                {
+                    "year": year,
+                    "calls": calls,
+                    "pax": pax,
+                    "avg_pax_per_call": _avg_pax_per_call(calls, pax),
+                    "calls_yoy_pct": (
+                        _growth_pct(calls, int(prev["calls"])) if prev else None
+                    ),
+                    "pax_yoy_pct": (
+                        _growth_pct(pax, int(prev["pax"])) if prev else None
+                    ),
+                }
+            )
 
     totals_by_period_list = [
         {
@@ -333,7 +351,7 @@ def build_carrier_panorama(
 
     return {
         "kind": "carrier_panorama",
-        "title": f"Panorama de {title_subject} en puertos ITM",
+        "title": f"Panorama de {subject} en puertos ITM",
         "matrix_title": matrix_title,
         "subtitle": subtitle,
         "subject_name": subject,
@@ -349,13 +367,9 @@ def build_carrier_panorama(
             "total_pax": grand_pax,
             "ports_with_calls": ports_with_calls,
             "ports_total": len(ports),
+            "avg_pax_per_call": _avg_pax_per_call(grand_calls, grand_pax),
+            "by_year": by_year_kpis,
         },
-        # Null when no selection — Otros only applies with an explicit filter.
-        "others": (
-            {"total_calls": others_calls, "total_pax": others_pax}
-            if has_selection
-            else None
-        ),
         "port_share": port_share,
         "rows": rows,
         "totals": {
@@ -437,6 +451,20 @@ def build_carrier_panorama_csv(payload: dict[str, Any]) -> bytes:
             f"{kpis.get('ports_with_calls') or 0} de {kpis.get('ports_total') or 0}",
         ]
     )
+    rows.append(["Promedio PAX/arribo", kpis.get("avg_pax_per_call") or 0])
+    for year_kpi in kpis.get("by_year") or []:
+        year = year_kpi.get("year")
+        rows.append([f"Arribos {year}", year_kpi.get("calls") or 0])
+        rows.append([f"PAX {year}", year_kpi.get("pax") or 0])
+        rows.append(
+            [f"Promedio PAX/arribo {year}", year_kpi.get("avg_pax_per_call") or 0]
+        )
+        calls_yoy = year_kpi.get("calls_yoy_pct")
+        pax_yoy = year_kpi.get("pax_yoy_pct")
+        if calls_yoy is not None:
+            rows.append([f"YoY arribos {year}", f"{calls_yoy}%"])
+        if pax_yoy is not None:
+            rows.append([f"YoY PAX {year}", f"{pax_yoy}%"])
     rows.append([])
     rows.append(["Participación por puerto"])
     rows.append(["Puerto", "Arribos", "PAX", "%"])
@@ -518,18 +546,33 @@ def build_carrier_panorama_xlsx(payload: dict[str, Any]) -> bytes:
     row += 1
     write_column_header_band(ws, row, ["Indicador", "Valor"])
     row += 1
+    kpi_rows: list[list[Any]] = [
+        ["Arribos totales", kpis.get("total_calls") or 0],
+        ["PAX totales", kpis.get("total_pax") or 0],
+        [
+            "Puertos con programación",
+            f"{kpis.get('ports_with_calls') or 0} de {kpis.get('ports_total') or 0}",
+        ],
+        ["Promedio PAX/arribo", kpis.get("avg_pax_per_call") or 0],
+    ]
+    for year_kpi in kpis.get("by_year") or []:
+        year = year_kpi.get("year")
+        kpi_rows.append([f"Arribos {year}", year_kpi.get("calls") or 0])
+        kpi_rows.append([f"PAX {year}", year_kpi.get("pax") or 0])
+        kpi_rows.append(
+            [f"Promedio PAX/arribo {year}", year_kpi.get("avg_pax_per_call") or 0]
+        )
+        calls_yoy = year_kpi.get("calls_yoy_pct")
+        pax_yoy = year_kpi.get("pax_yoy_pct")
+        if calls_yoy is not None:
+            kpi_rows.append([f"YoY arribos {year}", f"{calls_yoy}%"])
+        if pax_yoy is not None:
+            kpi_rows.append([f"YoY PAX {year}", f"{pax_yoy}%"])
     kpi_start = row
     row = _write_numeric_rows(
         ws,
         row,
-        [
-            ["Arribos totales", kpis.get("total_calls") or 0],
-            ["PAX totales", kpis.get("total_pax") or 0],
-            [
-                "Puertos con programación",
-                f"{kpis.get('ports_with_calls') or 0} de {kpis.get('ports_total') or 0}",
-            ],
-        ],
+        kpi_rows,
         col_count=2,
     )
     strip_block_outer_border(ws, min_row=kpi_start - 1, max_row=row - 1, min_col=1, max_col=2)

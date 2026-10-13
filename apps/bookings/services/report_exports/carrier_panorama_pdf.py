@@ -47,6 +47,7 @@ KPI_CARDS = (
     ("calls", "#3478B5", "#E8F2FA"),
     ("pax", "#0D9488", "#E6F6F4"),
     ("ports", "#7C3AED", "#F3EAFD"),
+    ("avg", "#64748B", "#EEF2F6"),
     ("share", "#CA8A04", "#FBF3DE"),
 )
 
@@ -553,24 +554,49 @@ def _matrix_card(payload: dict[str, Any], usable: float) -> Table:
     return card
 
 
+def _fmt_avg(value: Any) -> str:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return "0"
+    if number == int(number):
+        return f"{int(number):,}"
+    return f"{number:,.1f}"
+
+
+def _fmt_yoy(value: Any) -> str:
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if number == 0:
+        return "0%"
+    sign = "+" if number > 0 else ""
+    return f"{sign}{number:g}%"
+
+
 def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
     kpis = payload.get("kpis") or {}
     share = list(payload.get("port_share") or [])
+    by_year = list(kpis.get("by_year") or [])
     title = str(payload.get("title") or "Panorama Navieras")
     subtitle = str(payload.get("subtitle") or "").strip() or None
     landscape_mode = True
 
     usable = _page_usable_width(landscape_mode=landscape_mode)
-    gap = 0.16 * cm
-    card_w = (usable - 3 * gap) / 4
+    gap = 0.14 * cm
+    card_w = (usable - 4 * gap) / 5
     hint = subtitle or ""
     _, calls_accent, calls_tint = KPI_CARDS[0]
     _, pax_accent, pax_tint = KPI_CARDS[1]
     _, ports_accent, ports_tint = KPI_CARDS[2]
-    _, share_accent, share_tint = KPI_CARDS[3]
+    _, avg_accent, avg_tint = KPI_CARDS[3]
+    _, share_accent, share_tint = KPI_CARDS[4]
 
     story = _banner_flowables(
-        title, subtitle, 4, landscape_mode=landscape_mode)
+        title, subtitle, 5, landscape_mode=landscape_mode)
     story.append(Spacer(1, 0.22 * cm))
     kpi_row = Table(
         [
@@ -602,6 +628,15 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
                     tint=ports_tint,
                 ),
                 "",
+                _plain_kpi_card(
+                    "Promedio PAX/arribo",
+                    _fmt_avg(kpis.get("avg_pax_per_call")),
+                    hint,
+                    width=card_w,
+                    accent=avg_accent,
+                    tint=avg_tint,
+                ),
+                "",
                 _share_kpi_card(
                     share,
                     hint,
@@ -611,7 +646,7 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
                 ),
             ]
         ],
-        colWidths=[card_w, gap, card_w, gap, card_w, gap, card_w],
+        colWidths=[card_w, gap, card_w, gap, card_w, gap, card_w, gap, card_w],
     )
     kpi_row.setStyle(
         TableStyle(
@@ -625,6 +660,48 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
         )
     )
     story.append(kpi_row)
+
+    if by_year:
+        story.append(Spacer(1, 0.18 * cm))
+        year_gap = 0.12 * cm
+        year_w = (usable - max(0, len(by_year) - 1) * year_gap) / max(
+            len(by_year), 1
+        )
+        year_cells: list[Any] = []
+        year_widths: list[float] = []
+        for idx, year_kpi in enumerate(by_year):
+            if idx:
+                year_cells.append("")
+                year_widths.append(year_gap)
+            year_hint = (
+                f"Arribos YoY {_fmt_yoy(year_kpi.get('calls_yoy_pct'))}"
+                f" · PAX YoY {_fmt_yoy(year_kpi.get('pax_yoy_pct'))}"
+            )
+            year_cells.append(
+                _plain_kpi_card(
+                    str(year_kpi.get("year") or ""),
+                    f"{_fmt_int(year_kpi.get('calls'))} · {_fmt_compact_pax(year_kpi.get('pax'))}",
+                    year_hint,
+                    width=year_w,
+                    accent=calls_accent if idx % 2 == 0 else pax_accent,
+                    tint=calls_tint if idx % 2 == 0 else pax_tint,
+                )
+            )
+            year_widths.append(year_w)
+        year_row = Table([year_cells], colWidths=year_widths)
+        year_row.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ]
+            )
+        )
+        story.append(year_row)
+
     story.append(Spacer(1, 0.28 * cm))
     story.append(_matrix_card(payload, usable))
     return _build_doc(story, landscape_mode=landscape_mode)
