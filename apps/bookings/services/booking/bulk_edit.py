@@ -197,16 +197,21 @@ def _resolve_edit_vessel_id(
     return vessel_id or booking.vessel_id
 
 
-def revalidate_bulk_edit_row(payload: dict) -> dict:
+def revalidate_bulk_edit_row(
+    payload: dict,
+    *,
+    booking: Booking | None = None,
+) -> dict:
     """Validate one edited booking row; return structured issues (non-blocking ops)."""
     booking_id = int(payload["booking_id"])
-    booking = Booking.objects.select_related(
-        "port",
-        "shipping_line",
-        "shipping_line__group",
-        "vessel",
-        "position",
-    ).get(pk=booking_id)
+    if booking is None or booking.pk != booking_id:
+        booking = Booking.objects.select_related(
+            "port",
+            "shipping_line",
+            "shipping_line__group",
+            "vessel",
+            "position",
+        ).get(pk=booking_id)
 
     port_id = int(payload.get("port_id") or booking.port_id)
     shipping_line_id = int(payload.get("shipping_line_id") or booking.shipping_line_id)
@@ -299,12 +304,28 @@ def revalidate_bulk_edit_row(payload: dict) -> dict:
                 "level": "error",
             }
         )
-    port = Port.objects.filter(pk=port_id).first()
-    shipping_line = ShippingLine.objects.filter(pk=shipping_line_id).first()
-    vessel = Vessel.objects.filter(pk=vessel_id).first()
-    position = (
-        Position.objects.filter(pk=position_id).first() if position_id else None
+    # Reuse select_related when draft FKs match the loaded booking (preview path).
+    port = (
+        booking.port
+        if booking.port_id == port_id
+        else Port.objects.filter(pk=port_id).first()
     )
+    shipping_line = (
+        booking.shipping_line
+        if booking.shipping_line_id == shipping_line_id
+        else ShippingLine.objects.filter(pk=shipping_line_id).first()
+    )
+    vessel = (
+        booking.vessel
+        if booking.vessel_id == vessel_id
+        else Vessel.objects.filter(pk=vessel_id).first()
+    )
+    if position_id and booking.position_id == position_id:
+        position = booking.position
+    elif position_id:
+        position = Position.objects.filter(pk=position_id).first()
+    else:
+        position = None
     position_code = lta_pos.get("position_code")
     if not position_code and position is not None:
         from apps.catalogs.utils.position_code import position_short_code
@@ -620,7 +641,8 @@ def bookings_to_edit_rows(bookings: list[Booking]) -> list[dict]:
                 "position_id": booking.position_id,
                 "status": draft_status,
                 "notes": booking.notes or "",
-            }
+            },
+            booking=booking,
         )
         if booking.status == BookingStatus.C:
             warnings = list(revalidated.get("warnings") or [])
