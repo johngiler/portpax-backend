@@ -99,8 +99,14 @@ def build_port_carrier_matrix_csv(**kwargs) -> bytes:
 
 
 def build_port_trends_csv(**kwargs) -> bytes:
+    from apps.bookings.services.report_exports.matrix_reports import (
+        _trends_export_columns,
+        _trends_export_groups,
+    )
+
     report = build_port_trends(**kwargs)
-    years = report["years"]
+    years = _trends_export_columns(report)
+    export_groups = _trends_export_groups(report)
     rows: list[list[Any]] = [
         [f"TRENDS — {report['port']['name'].upper()}"],
         [],
@@ -119,7 +125,7 @@ def build_port_trends_csv(**kwargs) -> bytes:
                       item.get("total_pax") or ""])
         rows.append(values)
 
-    for group in report.get("groups") or []:
+    for group in export_groups:
         append_metric(group["name"], group)
         for line in group.get("lines") or []:
             append_metric(f"  {line['name']}", line)
@@ -127,7 +133,12 @@ def build_port_trends_csv(**kwargs) -> bytes:
     if totals:
         append_metric("TOTAL", totals)
 
-    rows.extend([[], ["GROWTH PERCENTAGE (PAX YoY)"], []])
+    growth_title = (
+        "GROWTH PERCENTAGE (PAX vs período anterior)"
+        if report.get("season") and report.get("season") != "natural"
+        else "GROWTH PERCENTAGE (PAX YoY)"
+    )
+    rows.extend([[], [growth_title], []])
     rows.append(["Grupo / Naviera", *[str(y) for y in years]])
 
     def append_growth(label: str, item: dict[str, Any]) -> None:
@@ -137,7 +148,7 @@ def build_port_trends_csv(**kwargs) -> bytes:
             pcts.append("" if pct is None else f"{pct}%")
         rows.append([label, *pcts])
 
-    for group in report.get("groups") or []:
+    for group in export_groups:
         append_growth(group["name"], group)
         for line in group.get("lines") or []:
             append_growth(f"  {line['name']}", line)

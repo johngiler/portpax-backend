@@ -568,8 +568,14 @@ def build_port_carrier_matrix_pdf(**kwargs) -> bytes:
 
 
 def build_port_trends_pdf(**kwargs) -> bytes:
+    from apps.bookings.services.report_exports.matrix_reports import (
+        _trends_export_columns,
+        _trends_export_groups,
+    )
+
     report = build_port_trends(**kwargs)
-    years = report["years"]
+    years = _trends_export_columns(report)
+    export_groups = _trends_export_groups(report)
     subtitle_parts = []
     if report.get("date_from") and report.get("date_to"):
         subtitle_parts.append(f"{report['date_from']} → {report['date_to']}")
@@ -608,7 +614,7 @@ def build_port_trends_pdf(**kwargs) -> bytes:
         if bold:
             emphasize.add(len(data) - 1)
 
-    for group in report.get("groups") or []:
+    for group in export_groups:
         append_metric(group["name"], group, bold=True)
         for line in group.get("lines") or []:
             append_metric(f"  {line['name']}", line)
@@ -620,8 +626,13 @@ def build_port_trends_pdf(**kwargs) -> bytes:
     story.append(Spacer(1, 0.35 * cm))
 
     growth_cols = 1 + len(years)
+    growth_title = (
+        "GROWTH PERCENTAGE (PAX vs período anterior)"
+        if report.get("season") and report.get("season") != "natural"
+        else "GROWTH PERCENTAGE (PAX YoY)"
+    )
     story.extend(
-        _banner_flowables("GROWTH PERCENTAGE (PAX YoY)", subtitle, growth_cols)
+        _banner_flowables(growth_title, subtitle, growth_cols)
     )
     growth: list[list[Any]] = [["Grupo / Naviera", *[str(y) for y in years]]]
     growth_emphasize: set[int] = set()
@@ -635,7 +646,7 @@ def build_port_trends_pdf(**kwargs) -> bytes:
         if bold:
             growth_emphasize.add(len(growth) - 1)
 
-    for group in report.get("groups") or []:
+    for group in export_groups:
         append_growth(group["name"], group, bold=True)
         for line in group.get("lines") or []:
             append_growth(f"  {line['name']}", line)

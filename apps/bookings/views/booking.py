@@ -1682,6 +1682,10 @@ class BookingViewSet(
             or request.query_params.get("shipping_line_groups")
             or request.query_params.get("groups")
         )
+        from apps.bookings.services.report_exports.season_periods import (
+            normalize_panorama_season,
+        )
+
         page, page_size = self._report_pagination_params(request)
         return Response(
             build_port_trends(
@@ -1692,6 +1696,9 @@ class BookingViewSet(
                 pax_basis=self._report_pax_basis(request),
                 shipping_line_ids=shipping_line_ids or None,
                 shipping_line_group_ids=shipping_line_group_ids or None,
+                season=normalize_panorama_season(
+                    request.query_params.get("season")
+                ),
                 allowed_ports=user_port_ids(request.user),
                 request=request,
                 page=page,
@@ -2077,6 +2084,10 @@ class BookingViewSet(
                         {"detail": "port es obligatorio."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+                from apps.bookings.services.report_exports.season_periods import (
+                    normalize_panorama_season,
+                )
+
                 shipping_line_ids = parse_id_list(
                     request.query_params.get("shipping_lines")
                     or request.query_params.get("shipping_line")
@@ -2094,6 +2105,9 @@ class BookingViewSet(
                     pax_basis=pax_basis,
                     shipping_line_ids=shipping_line_ids or None,
                     shipping_line_group_ids=shipping_line_group_ids or None,
+                    season=normalize_panorama_season(
+                        request.query_params.get("season")
+                    ),
                     allowed_ports=allowed_ports,
                 )
                 if fmt == "csv":
