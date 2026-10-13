@@ -168,9 +168,21 @@ def resolve_position_and_lta(
     )
     locking = bool(claim_lta_space and claimable_position_id)
 
-    suggestions = suggest_positions(port_id, vessel_id, call_date)
     position_id: int | None = None
     position_code: str | None = None
+    suggestions: list[dict[str, Any]] | None = None
+
+    def ensure_suggestions() -> list[dict[str, Any]]:
+        """Lazy: skip suggest_positions when preferred/LTA lock already resolves."""
+        nonlocal suggestions
+        if suggestions is None:
+            suggestions = suggest_positions(
+                port_id,
+                vessel_id,
+                call_date,
+                exclude_booking_id=exclude_booking_id,
+            )
+        return suggestions
 
     if locking and candidate is not None and candidate.position_id:
         position_id = candidate.position_id
@@ -192,7 +204,7 @@ def resolve_position_and_lta(
             position_code = position_short_code(preferred.port.code, preferred.code)
         else:
             picked = pick_suggested_position(
-                suggestions,
+                ensure_suggestions(),
                 preferred_id=None,
                 claimable_position_id=claimable_position_id,
                 lock_claimable=False,
@@ -201,7 +213,7 @@ def resolve_position_and_lta(
             position_code = str(picked["code"]) if picked else None
     else:
         picked = pick_suggested_position(
-            suggestions,
+            ensure_suggestions(),
             preferred_id=None,
             claimable_position_id=claimable_position_id,
             lock_claimable=False,
