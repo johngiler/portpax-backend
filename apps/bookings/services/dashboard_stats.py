@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, timedelta
 
 from django.db.models import Count, F, IntegerField, QuerySet, Sum
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, ExtractYear
 
 from apps.bookings.models import Booking, BookingStatus, CancellationReason
 from apps.bookings.services.dashboard_occupancy import (
@@ -65,12 +66,48 @@ def _delta_pct(current: float | int, prior: float | int) -> float | None:
     return round(((current - prior) / prior) * 100, 1)
 
 
+def _merge_ids(
+    single: int | None,
+    many: list[int] | None,
+) -> list[int]:
+    ids: list[int] = []
+    if many:
+        ids.extend(int(value) for value in many if value)
+    if single:
+        ids.append(int(single))
+    # Preserve order, drop duplicates.
+    seen: set[int] = set()
+    out: list[int] = []
+    for value in ids:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _avg_pax_per_call(calls: int, pax: int) -> float:
+    if calls <= 0:
+        return 0.0
+    return round(pax / calls, 1)
+
+
+def _days_in_year_window(year: int, date_from: date, date_to: date) -> int:
+    start = max(date_from, date(year, 1, 1))
+    end = min(date_to, date(year, 12, 31))
+    if end < start:
+        return 0
+    return (end - start).days + 1
+
+
 def _apply_scope(
     qs: QuerySet,
     *,
     port_ids: list[int] | None,
-    shipping_line_id: int | None,
-    shipping_line_group_id: int | None,
+    shipping_line_id: int | None = None,
+    shipping_line_group_id: int | None = None,
+    shipping_line_ids: list[int] | None = None,
+    shipping_line_group_ids: list[int] | None = None,
     allowed_ports: list[int] | None,
     without_lta: bool = False,
 ) -> QuerySet:
@@ -78,10 +115,13 @@ def _apply_scope(
         qs = qs.filter(port_id__in=allowed_ports)
     if port_ids:
         qs = qs.filter(port_id__in=port_ids)
-    if shipping_line_id:
-        qs = qs.filter(shipping_line_id=shipping_line_id)
-    elif shipping_line_group_id:
-        qs = qs.filter(shipping_line__group_id=shipping_line_group_id)
+    line_ids = _merge_ids(shipping_line_id, shipping_line_ids)
+    group_ids = _merge_ids(shipping_line_group_id, shipping_line_group_ids)
+    # Lines win over groups (same rule as list / reports).
+    if line_ids:
+        qs = qs.filter(shipping_line_id__in=line_ids)
+    elif group_ids:
+        qs = qs.filter(shipping_line__group_id__in=group_ids)
     if without_lta:
         # Ghost LTA slots only; CL (confirmed) stays in the totals.
         qs = qs.exclude(status=BookingStatus.LTA)
@@ -254,6 +294,8 @@ def build_dashboard_stats(
     port_ids: list[int] | None = None,
     shipping_line_id: int | None = None,
     shipping_line_group_id: int | None = None,
+    shipping_line_ids: list[int] | None = None,
+    shipping_line_group_ids: list[int] | None = None,
     allowed_ports: list[int] | None = None,
     without_lta: bool = False,
     pax_basis: str = "planned",
@@ -266,10 +308,12 @@ def build_dashboard_stats(
     today = today or date.today()
     basis = normalize_pax_basis(pax_basis)
     scoped_ports = [int(p) for p in (port_ids or []) if p]
+    line_ids = _merge_ids(shipping_line_id, shipping_line_ids)
+    group_ids = _merge_ids(shipping_line_group_id, shipping_line_group_ids)
     scope_kwargs = {
         "port_ids": scoped_ports or None,
-        "shipping_line_id": shipping_line_id,
-        "shipping_line_group_id": shipping_line_group_id,
+        "shipping_line_ids": line_ids or None,
+        "shipping_line_group_ids": group_ids or None,
         "allowed_ports": allowed_ports,
         "without_lta": without_lta,
     }
@@ -612,6 +656,126 @@ def build_dashboard_stats(
     prior_calls = prior_active.count()
     prior_pax = _sum_projected_pax(prior_active, basis)
     current_calls = active_qs.count()
+    avg_pax_per_call = _avg_pax_per_call(current_calls, planned_pax)
+    prior_avg_pax_per_call = _avg_pax_per_call(prior_calls, prior_pax)
+
+    calendar_years = list(range(date_from.year, date_to.year + 1))
+    by_year_kpis: list[dict] = []
+    if len(calendar_years) > 1:
+        bookings_by_year = {
+            int(row["y"]): int(row["c"] or 0)
+            for row in qs.annotate(y=ExtractYear("call_date"))
+            .values("y")
+            .annotate(c=Count("id"))
+        }
+        active_by_year = {
+            int(row["y"]): {
+                "calls": int(row["calls"] or 0),
+                "pax": int(row["pax"] or 0),
+            }
+            for row in active_qs.annotate(y=ExtractYear("call_date"))
+            .values("y")
+            .annotate(
+                calls=Count("id"),
+                pax=Sum(projected_pax),
+            )
+        }
+        occupancy_rows_by_year: dict[int, list] = defaultdict(list)
+        for row in occupancy_rows:
+            occupancy_rows_by_year[row[1].year].append(row)
+        occupancy_by_year: dict[int, dict[str, float | int]] = {}
+        for year in calendar_years:
+            year_days = _days_in_year_window(year, date_from, date_to)
+            year_capacity = position_count * year_days
+            year_occupied, _ = occupied_physical_slot_days(
+                occupancy_rows_by_year.get(year, [])
+            )
+            occupancy_by_year[year] = {
+                "occupied_slot_days": year_occupied,
+                "capacity_slot_days": year_capacity,
+                "occupancy_pct": (
+                    round((year_occupied / year_capacity) * 100, 1)
+                    if year_capacity > 0
+                    else 0.0
+                ),
+            }
+        first_arrivals_by_year = {
+            int(row["y"]): int(row["c"] or 0)
+            for row in qs.filter(first_arrival=True)
+            .annotate(y=ExtractYear("call_date"))
+            .values("y")
+            .annotate(c=Count("id"))
+        }
+        conflicts_by_year = {
+            int(row["y"]): int(row["c"] or 0)
+            for row in qs.filter(has_conflict=True)
+            .exclude(status=BookingStatus.C)
+            .annotate(y=ExtractYear("call_date"))
+            .values("y")
+            .annotate(c=Count("id"))
+        }
+        for idx, year in enumerate(calendar_years):
+            bookings = bookings_by_year.get(year, 0)
+            active = active_by_year.get(year) or {"calls": 0, "pax": 0}
+            calls = int(active["calls"])
+            pax = int(active["pax"])
+            occ = occupancy_by_year[year]
+            first_arrivals = first_arrivals_by_year.get(year, 0)
+            conflicts = conflicts_by_year.get(year, 0)
+            prev_year = calendar_years[idx - 1] if idx > 0 else None
+            prev_bookings = bookings_by_year.get(prev_year, 0) if prev_year else None
+            prev_active = (
+                active_by_year.get(prev_year) if prev_year is not None else None
+            )
+            prev_occ = occupancy_by_year.get(prev_year) if prev_year else None
+            prev_first = (
+                first_arrivals_by_year.get(prev_year, 0) if prev_year else None
+            )
+            prev_conflicts = (
+                conflicts_by_year.get(prev_year, 0) if prev_year else None
+            )
+            by_year_kpis.append(
+                {
+                    "year": year,
+                    "bookings": bookings,
+                    "calls": calls,
+                    "planned_pax": pax,
+                    "avg_pax_per_call": _avg_pax_per_call(calls, pax),
+                    "occupancy_pct": occ["occupancy_pct"],
+                    "occupied_slot_days": occ["occupied_slot_days"],
+                    "capacity_slot_days": occ["capacity_slot_days"],
+                    "first_arrivals": first_arrivals,
+                    "conflicts": conflicts,
+                    "bookings_yoy_pct": (
+                        _delta_pct(bookings, prev_bookings)
+                        if prev_bookings is not None
+                        else None
+                    ),
+                    "pax_yoy_pct": (
+                        _delta_pct(pax, int(prev_active["pax"]))
+                        if prev_active is not None
+                        else None
+                    ),
+                    "occupancy_yoy_pct": (
+                        _delta_pct(
+                            float(occ["occupancy_pct"]),
+                            float(prev_occ["occupancy_pct"]),
+                        )
+                        if prev_occ is not None
+                        else None
+                    ),
+                    "first_arrivals_yoy_pct": (
+                        _delta_pct(first_arrivals, prev_first)
+                        if prev_first is not None
+                        else None
+                    ),
+                    "conflicts_yoy_pct": (
+                        _delta_pct(conflicts, prev_conflicts)
+                        if prev_conflicts is not None
+                        else None
+                    ),
+                }
+            )
 
     prior_occupancy_rows = iter_occupancy_booking_rows(
         prior_qs.filter(status__in=OCCUPANCY_STATUSES)
@@ -682,8 +846,10 @@ def build_dashboard_stats(
             "c": cancelled,
             "planned_pax": planned_pax,
             "actual_pax": actual_pax,
+            "avg_pax_per_call": avg_pax_per_call,
             "ports_count": ports_in_scope.count(),
             "first_arrivals": first_arrivals_count,
+            "by_year": by_year_kpis,
         },
         "conflicts": _conflict_summary(qs),
         "pending_confirm": {
@@ -721,6 +887,11 @@ def build_dashboard_stats(
                 "current": planned_pax,
                 "prior": prior_pax,
                 "delta_pct": _delta_pct(planned_pax, prior_pax),
+            },
+            "avg_pax_per_call": {
+                "current": avg_pax_per_call,
+                "prior": prior_avg_pax_per_call,
+                "delta_pct": _delta_pct(avg_pax_per_call, prior_avg_pax_per_call),
             },
             "occupancy": {
                 "current": occupancy_pct,

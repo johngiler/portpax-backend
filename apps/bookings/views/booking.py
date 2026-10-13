@@ -1225,29 +1225,15 @@ class BookingViewSet(
         if isinstance(date_to, Response):
             return date_to
 
-        def optional_int(key: str) -> int | None:
-            raw = request.query_params.get(key)
-            if not raw:
-                return None
-            try:
-                return int(raw)
-            except (TypeError, ValueError):
-                return None
-
-        port_ids: list[int] = []
-        port_raw = request.query_params.get("port")
-        if port_raw:
-            for part in str(port_raw).split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                try:
-                    port_ids.append(int(part))
-                except (TypeError, ValueError):
-                    return Response(
-                        {"detail": "port debe ser id(s) enteros separados por coma."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+        port_ids = parse_id_list(request.query_params.get("port"))
+        shipping_line_ids = parse_id_list(
+            request.query_params.get("shipping_line")
+            or request.query_params.get("shipping_lines")
+        )
+        shipping_line_group_ids = parse_id_list(
+            request.query_params.get("shipping_line_group")
+            or request.query_params.get("shipping_line_groups")
+        )
         for port_id in port_ids:
             self._ensure_port_access(port_id)
 
@@ -1256,8 +1242,8 @@ class BookingViewSet(
                 date_from=date_from,
                 date_to=date_to,
                 port_ids=port_ids or None,
-                shipping_line_id=optional_int("shipping_line"),
-                shipping_line_group_id=optional_int("shipping_line_group"),
+                shipping_line_ids=shipping_line_ids or None,
+                shipping_line_group_ids=shipping_line_group_ids or None,
                 allowed_ports=user_port_ids(request.user),
                 without_lta=self._report_without_lta(request),
                 pax_basis=self._report_pax_basis(request),
