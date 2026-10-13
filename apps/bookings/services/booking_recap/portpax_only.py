@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from apps.bookings.constants import ACTIVE_BOOKING_STATUSES
 from apps.bookings.models import Booking
 from apps.bookings.services.booking_export import STATUS_LABELS_ES
 from apps.bookings.services.validation.legend_labels import port_legend_label
@@ -34,6 +35,9 @@ def find_portpax_only_bookings(
     Always biased to ports seen in the paste. Carrier scope:
     explicit line/group delimiters, else lines resolved from the recap rows.
     Without a usable carrier scope, returns [] (port-only would flood).
+
+    Excludes Cancelada and Real — only active/planned statuses (ops still
+    expect them on a commercial recap).
     """
     if not date_from or not date_to or date_from > date_to:
         return []
@@ -54,6 +58,7 @@ def find_portpax_only_bookings(
         port_id__in=port_ids,
         call_date__gte=date_from,
         call_date__lte=date_to,
+        status__in=ACTIVE_BOOKING_STATUSES,
     ).select_related("vessel", "port", "shipping_line")
     if matched_ids:
         qs = qs.exclude(id__in=matched_ids)
