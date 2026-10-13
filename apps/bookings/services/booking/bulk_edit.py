@@ -74,16 +74,7 @@ def _identity_blocking_issues(
     call_date: date,
 ) -> list[dict]:
     issues: list[dict] = []
-    if booking.status == BookingStatus.C:
-        issues.append(
-            {
-                "code": "booking_cancelled",
-                "message": "No se puede editar una reserva cancelada.",
-                "severity": "red",
-                "level": "error",
-            }
-        )
-        return issues
+    # Cancelled bookings may enter mass-edit (e.g. recap match → reactivate to Hold).
 
     try:
         new_line = ShippingLine.objects.get(pk=shipping_line_id)
@@ -296,7 +287,18 @@ def revalidate_bulk_edit_row(payload: dict) -> dict:
             )
         ]
 
-    selectable = len(blocking) == 0 and booking.status != BookingStatus.C
+    selectable = len(blocking) == 0
+    if booking.status == BookingStatus.C and status_value == BookingStatus.C:
+        # Still cancelled with no draft status change — not actionable.
+        selectable = False
+        blocking.append(
+            {
+                "code": "booking_cancelled",
+                "message": "Reserva cancelada: elige Hold u otro estado para reactivarla.",
+                "severity": "red",
+                "level": "error",
+            }
+        )
     port = Port.objects.filter(pk=port_id).first()
     shipping_line = ShippingLine.objects.filter(pk=shipping_line_id).first()
     vessel = Vessel.objects.filter(pk=vessel_id).first()
@@ -461,6 +463,23 @@ def apply_bulk_edit_rows(
                         audit_extra=audit_extra,
                     )
                     changed_fields.add("claimed_lta_space")
+                # Cancelled → must reactivate (C→H) before identity/ops edits.
+                reactivating = (
+                    booking.status == BookingStatus.C
+                    and new_status in EDITABLE_STATUSES
+                    and new_status != BookingStatus.C
+                )
+                if reactivating:
+                    booking = update_booking_status(
+                        booking,
+                        BookingStatus.H,
+                        user=user,
+                        request=request,
+                        require_lta_agreement=False,
+                        audit_source="bulk_edit",
+                        audit_extra=audit_extra,
+                    )
+                    changed_fields.add("status")
                 booking = update_booking_identity(
                     booking,
                     user=user,
@@ -583,8 +602,12 @@ def bookings_to_edit_rows(bookings: list[Booking]) -> list[dict]:
     """Initial payload for the mass-edit modal grid."""
     rows = []
     for booking in bookings:
-        if booking.status == BookingStatus.C:
-            continue
+        # Cancelled matched rows (recap): propose Hold so ops can reactivate.
+        draft_status = (
+            BookingStatus.H
+            if booking.status == BookingStatus.C
+            else booking.status
+        )
         revalidated = revalidate_bulk_edit_row(
             {
                 "booking_id": booking.id,
@@ -595,9 +618,24 @@ def bookings_to_edit_rows(bookings: list[Booking]) -> list[dict]:
                 "eta": booking.eta.strftime("%H:%M") if booking.eta else None,
                 "etd": booking.etd.strftime("%H:%M") if booking.etd else None,
                 "position_id": booking.position_id,
-                "status": booking.status,
+                "status": draft_status,
                 "notes": booking.notes or "",
             }
         )
+        if booking.status == BookingStatus.C:
+            warnings = list(revalidated.get("warnings") or [])
+            warnings.insert(
+                0,
+                {
+                    "code": "reactivate_cancelled",
+                    "message": (
+                        "Estaba cancelada; se propone Hold para reactivarla "
+                        "(luego puedes confirmar)."
+                    ),
+                    "severity": "yellow",
+                    "level": "warning",
+                },
+            )
+            revalidated = {**revalidated, "warnings": warnings}
         rows.append(revalidated)
     return rows
