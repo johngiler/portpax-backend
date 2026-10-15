@@ -7,6 +7,7 @@ from typing import Any
 
 from apps.bookings.models import Booking
 from apps.bookings.services.booking_recap.portpax_only import (
+    DEFAULT_PORTPAX_ONLY_PAGE_SIZE,
     find_portpax_only_bookings,
 )
 from apps.bookings.services.import_mass.resolve import (
@@ -388,7 +389,7 @@ def match_recap_rows(
         )
 
     unmatched.sort(key=lambda item: item.get("row_number") or 0)
-    portpax_only = find_portpax_only_bookings(
+    portpax_only, portpax_only_count = find_portpax_only_bookings(
         date_from=date_from,
         date_to=date_to,
         recap_port_ids=recap_port_ids,
@@ -397,12 +398,18 @@ def match_recap_rows(
         shipping_line_ids=line_ids,
         shipping_line_group_ids=effective_group_ids,
         allowed_ports=allowed,
+        page=1,
+        page_size=DEFAULT_PORTPAX_ONLY_PAGE_SIZE,
     )
     return {
         "imported_count": len(rows),
         "matched_count": len(matches),
         "matches": matches,
         "unmatched": unmatched,
-        "portpax_only_count": len(portpax_only),
+        "portpax_only_count": portpax_only_count,
         "portpax_only": portpax_only,
+        "portpax_only_page": 1,
+        "portpax_only_page_size": DEFAULT_PORTPAX_ONLY_PAGE_SIZE,
+        "portpax_only_has_more": portpax_only_count > len(portpax_only),
+        "portpax_only_ports": sorted(int(p) for p in recap_port_ids if p),
     }

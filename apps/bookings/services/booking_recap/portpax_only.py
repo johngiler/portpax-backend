@@ -10,11 +10,37 @@ from apps.bookings.models import Booking
 from apps.bookings.services.booking_export import STATUS_LABELS_ES
 from apps.bookings.services.validation.legend_labels import port_legend_label
 
+DEFAULT_PORTPAX_ONLY_PAGE_SIZE = 10
+
 
 def _hhmm(value) -> str | None:
     if value is None:
         return None
     return value.strftime("%H:%M")
+
+
+def _serialize_portpax_only_row(booking: Booking) -> dict[str, Any]:
+    port = booking.port
+    port_name = (port_legend_label(port) or "").strip() or (
+        getattr(port, "name", None) or "Puerto"
+    )
+    vessel = booking.vessel
+    line = booking.shipping_line
+    return {
+        "booking_id": booking.id,
+        "booking_code": booking.booking_code or "",
+        "vessel_name": getattr(vessel, "name", None) or "",
+        "port_id": port.id if port else None,
+        "port_name": port_name,
+        "shipping_line_name": getattr(line, "name", None) or "",
+        "call_date": booking.call_date.isoformat() if booking.call_date else None,
+        "eta": _hhmm(booking.eta),
+        "etd": _hhmm(booking.etd),
+        "status": booking.status,
+        "status_display": STATUS_LABELS_ES.get(
+            booking.status, booking.get_status_display()
+        ),
+    }
 
 
 def find_portpax_only_bookings(
@@ -27,7 +53,9 @@ def find_portpax_only_bookings(
     shipping_line_ids: list[int],
     shipping_line_group_ids: list[int],
     allowed_ports: set[int] | None,
-) -> list[dict[str, Any]]:
+    page: int = 1,
+    page_size: int = DEFAULT_PORTPAX_ONLY_PAGE_SIZE,
+) -> tuple[list[dict[str, Any]], int]:
     """
     Elasticity when both Desde and Hasta are set: list PortPax bookings in
     that range that the recap did not pair.
@@ -40,19 +68,21 @@ def find_portpax_only_bookings(
     ``recap_line_ids`` is kept for call-site compatibility; it no longer
     narrows the query when no explicit carrier filter is set.
 
+    Paginated (``page`` / ``page_size``). Returns ``(page_rows, total_count)``.
+
     Excludes Cancelada and Real — only active/planned statuses (ops still
     expect them on a commercial recap).
     """
     if not date_from or not date_to or date_from > date_to:
-        return []
+        return [], 0
     if not recap_port_ids:
-        return []
+        return [], 0
 
     port_ids = set(recap_port_ids)
     if allowed_ports is not None:
         port_ids &= set(allowed_ports)
     if not port_ids:
-        return []
+        return [], 0
 
     line_ids = [int(x) for x in shipping_line_ids if int(x) > 0]
     group_ids = [int(x) for x in shipping_line_group_ids if int(x) > 0]
@@ -71,30 +101,16 @@ def find_portpax_only_bookings(
     elif group_ids:
         qs = qs.filter(shipping_line__group_id__in=group_ids)
 
-    rows: list[dict[str, Any]] = []
-    for booking in qs.order_by("call_date", "id"):
-        port = booking.port
-        port_name = (port_legend_label(port) or "").strip() or (
-            getattr(port, "name", None) or "Puerto"
-        )
-        vessel = booking.vessel
-        line = booking.shipping_line
-        rows.append(
-            {
-                "booking_id": booking.id,
-                "booking_code": booking.booking_code or "",
-                "vessel_name": getattr(vessel, "name", None) or "",
-                "port_name": port_name,
-                "shipping_line_name": getattr(line, "name", None) or "",
-                "call_date": booking.call_date.isoformat()
-                if booking.call_date
-                else None,
-                "eta": _hhmm(booking.eta),
-                "etd": _hhmm(booking.etd),
-                "status": booking.status,
-                "status_display": STATUS_LABELS_ES.get(
-                    booking.status, booking.get_status_display()
-                ),
-            }
-        )
-    return rows
+    qs = qs.order_by("call_date", "id")
+    total = qs.count()
+    if total <= 0:
+        return [], 0
+
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or DEFAULT_PORTPAX_ONLY_PAGE_SIZE), 100))
+    offset = (page - 1) * page_size
+    page_rows = [
+        _serialize_portpax_only_row(booking)
+        for booking in qs[offset : offset + page_size]
+    ]
+    return page_rows, total

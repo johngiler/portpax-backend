@@ -125,6 +125,10 @@ from apps.bookings.services.booking_recap import (
     parse_recap_tsv,
     parse_recap_workbook,
 )
+from apps.bookings.services.booking_recap.portpax_only import (
+    DEFAULT_PORTPAX_ONLY_PAGE_SIZE,
+    find_portpax_only_bookings,
+)
 from apps.bookings.services.import_mass import (
     ItmParseError,
     create_from_resolved_rows,
@@ -1014,6 +1018,99 @@ class BookingViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(payload)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="bulk-import/booking-recap/portpax-only",
+    )
+    def booking_recap_portpax_only(self, request):
+        """Paginated PortPax-only rows for recap 「Cargar más」 (no re-paste)."""
+        from datetime import date as date_cls
+
+        def parse_date(key: str) -> date_cls | Response | None:
+            raw = request.query_params.get(key)
+            if not raw:
+                return None
+            try:
+                return date_cls.fromisoformat(str(raw))
+            except ValueError:
+                return Response(
+                    {"detail": f"{key} debe ser ISO (YYYY-MM-DD)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        date_from = parse_date("date_from")
+        if isinstance(date_from, Response):
+            return date_from
+        date_to = parse_date("date_to")
+        if isinstance(date_to, Response):
+            return date_to
+        if not date_from or not date_to:
+            return Response(
+                {"detail": "date_from y date_to son obligatorios."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if date_from > date_to:
+            return Response(
+                {"detail": "date_from no puede ser posterior a date_to."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        port_ids = parse_id_list(request.query_params.get("port"))
+        if not port_ids:
+            return Response(
+                {"detail": "port es obligatorio."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        for port_id in port_ids:
+            self._ensure_port_access(port_id)
+
+        try:
+            page = max(1, int(request.query_params.get("page") or 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(
+                request.query_params.get("page_size")
+                or DEFAULT_PORTPAX_ONLY_PAGE_SIZE
+            )
+        except (TypeError, ValueError):
+            page_size = DEFAULT_PORTPAX_ONLY_PAGE_SIZE
+
+        exclude_ids = set(parse_id_list(request.query_params.get("exclude")))
+        shipping_line_ids = parse_id_list(
+            request.query_params.get("shipping_line")
+            or request.query_params.get("shipping_lines")
+        )
+        shipping_line_group_ids = parse_id_list(
+            request.query_params.get("shipping_line_group")
+            or request.query_params.get("shipping_line_groups")
+        )
+        allowed = user_port_ids(request.user)
+        rows, total = find_portpax_only_bookings(
+            date_from=date_from,
+            date_to=date_to,
+            recap_port_ids=set(port_ids),
+            recap_line_ids=set(),
+            matched_ids=exclude_ids,
+            shipping_line_ids=shipping_line_ids,
+            shipping_line_group_ids=shipping_line_group_ids,
+            allowed_ports=allowed,
+            page=page,
+            page_size=page_size,
+        )
+        loaded_through = min(page * page_size, total)
+        return Response(
+            {
+                "portpax_only": rows,
+                "portpax_only_count": total,
+                "portpax_only_page": page,
+                "portpax_only_page_size": page_size,
+                "portpax_only_has_more": loaded_through < total,
+                "portpax_only_ports": sorted(port_ids),
+            }
+        )
 
     @action(detail=False, methods=["get"], url_path="vessel-proximity-matrix")
     def vessel_proximity_matrix(self, request):
