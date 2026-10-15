@@ -32,9 +32,13 @@ def find_portpax_only_bookings(
     Elasticity when both Desde and Hasta are set: list PortPax bookings in
     that range that the recap did not pair.
 
-    Always biased to ports seen in the paste. Carrier scope:
-    explicit line/group delimiters, else lines resolved from the recap rows.
-    Without a usable carrier scope, returns [] (port-only would flood).
+    Always biased to ports seen in the paste (port column). Carrier scope:
+    - explicit line/group delimiters in the modal → those only;
+    - otherwise → all lines at those ports in the date window (so a missing
+      carrier that never appeared in the paste, e.g. Costa, still surfaces).
+
+    ``recap_line_ids`` is kept for call-site compatibility; it no longer
+    narrows the query when no explicit carrier filter is set.
 
     Excludes Cancelada and Real — only active/planned statuses (ops still
     expect them on a commercial recap).
@@ -52,7 +56,7 @@ def find_portpax_only_bookings(
 
     line_ids = [int(x) for x in shipping_line_ids if int(x) > 0]
     group_ids = [int(x) for x in shipping_line_group_ids if int(x) > 0]
-    inferred_lines = sorted(int(x) for x in recap_line_ids if int(x) > 0)
+    # recap_line_ids: kept for call-site compat; not used when no explicit filter.
 
     qs = Booking.objects.filter(
         port_id__in=port_ids,
@@ -66,10 +70,6 @@ def find_portpax_only_bookings(
         qs = qs.filter(shipping_line_id__in=line_ids)
     elif group_ids:
         qs = qs.filter(shipping_line__group_id__in=group_ids)
-    elif inferred_lines:
-        qs = qs.filter(shipping_line_id__in=inferred_lines)
-    else:
-        return []
 
     rows: list[dict[str, Any]] = []
     for booking in qs.order_by("call_date", "id"):
