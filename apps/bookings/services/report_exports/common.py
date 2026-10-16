@@ -84,11 +84,14 @@ def scheduled_bookings_qs(
     allowed_ports: set[int] | None = None,
     status: str | None = None,
     without_lta: bool = False,
+    include_cancelled: bool = False,
 ):
     """Bookings for occupancy / availability reports.
 
     Default (no status): occupancy set (excludes cancelled).
     Optional status mirrors list filters: real codes, completed, action.
+    ``include_cancelled`` adds Cancelada to the default occupancy set
+    (e.g. tag-filtered movement summary of cancelled cohorts).
     """
     qs = Booking.objects.filter(
         call_date__gte=date_from,
@@ -112,7 +115,10 @@ def scheduled_bookings_qs(
     elif status:
         qs = qs.filter(status=status)
     else:
-        qs = qs.filter(status__in=OCCUPATION_CONFLICT_STATUSES)
+        statuses = list(OCCUPATION_CONFLICT_STATUSES)
+        if include_cancelled:
+            statuses.append(BookingStatus.C)
+        qs = qs.filter(status__in=statuses)
     if allowed_ports is not None:
         qs = qs.filter(port_id__in=allowed_ports)
     if port_id:

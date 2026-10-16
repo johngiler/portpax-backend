@@ -151,7 +151,8 @@ def build_solicitudes_port_report(
     Left: occupancy rows per selected calendar year (optional tag/line/group filters).
     Right: mismas filas filtradas + totales del puerto (sin naviera) + totales carrier.
     When a carrier selection exists, also returns others_by_year (port − selection).
-    Same status set as other matrix reports (excludes cancelled).
+    Default status set matches other matrix reports (excludes cancelled).
+    With tag filters, Cancelada is included so tagged cancellation cohorts appear.
     """
     from apps.catalogs.models import ShippingLineGroup
 
@@ -253,8 +254,12 @@ def build_solicitudes_port_report(
         carrier_by_year = [row for row in carrier_by_year if row.get("pax", 0) > 0]
 
     # Left detail + nuevas: optional tags + line(s) or group(s).
+    # Tags often mark cancelled cohorts — include Cancelada when filtering by tag.
     detail_qs = (
-        scheduled_bookings_qs(**base_kwargs)
+        scheduled_bookings_qs(
+            **base_kwargs,
+            include_cancelled=bool(tag_ids),
+        )
         .select_related("vessel", "port", "shipping_line", "tag")
         .order_by("call_date", "eta", "booking_code")
     )
