@@ -743,6 +743,7 @@ def build_solicitudes_port_pdf(payload: dict[str, Any]) -> bytes:
             ["Ship", "Port", "Arrival", "Hora llegada", "Hora salida", "Pax"]
         ]
         for item in block.get("rows") or []:
+            pax_raw = item.get("pax")
             data.append(
                 [
                     item.get("ship") or "",
@@ -750,10 +751,13 @@ def build_solicitudes_port_pdf(payload: dict[str, Any]) -> bytes:
                     item.get("arrival_label") or "",
                     item.get("eta") or "",
                     item.get("etd") or "",
-                    item.get("pax") or 0,
+                    0 if pax_raw is None else pax_raw,
                 ]
             )
-        data.append(["", "", "", "", "Total", block.get("pax_total") or 0])
+        total_raw = block.get("pax_total")
+        data.append(
+            ["", "", "", "", "Total", 0 if total_raw is None else total_raw]
+        )
         _, _, section_style, _ = _styles()
         sec = Table(
             [[Paragraph(str(block.get("title") or ""), section_style)]],

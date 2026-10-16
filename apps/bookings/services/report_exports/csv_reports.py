@@ -235,7 +235,10 @@ def build_solicitudes_port_csv(payload: dict[str, Any]) -> bytes:
                     item.get("pax"),
                 ]
             )
-        rows.append(["", "", "", "", "", block.get("pax_total") or 0])
+        total_raw = block.get("pax_total")
+        rows.append(
+            ["", "", "", "", "", 0 if total_raw is None else total_raw]
+        )
         rows.append([])
 
     carrier_rows = list(

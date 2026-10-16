@@ -10,7 +10,7 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
-from apps.bookings.models import BookingTag
+from apps.bookings.models import BookingStatus, BookingTag
 from apps.bookings.services.report_exports.common import (
     booking_pax,
     normalize_pax_basis,
@@ -152,7 +152,8 @@ def build_solicitudes_port_report(
     Right: mismas filas filtradas + totales del puerto (sin naviera) + totales carrier.
     When a carrier selection exists, also returns others_by_year (port − selection).
     Default status set matches other matrix reports (excludes cancelled).
-    With tag filters, Cancelada is included so tagged cancellation cohorts appear.
+    With tag filters, Cancelada is included so tagged cancellation cohorts appear;
+    cancelled rows contribute negative PAX (and year totals).
     """
     from apps.catalogs.models import ShippingLineGroup
 
@@ -281,6 +282,9 @@ def build_solicitudes_port_report(
         if year not in year_set:
             continue
         pax = booking_pax(booking, pax_basis=pax_basis)
+        # Cancelled = signed negative (ops: cohort of cancellations).
+        if booking.status == BookingStatus.C:
+            pax = -abs(pax)
         rows_by_year[year].append(
             {
                 "booking_id": booking.id,
@@ -313,7 +317,7 @@ def build_solicitudes_port_report(
     nuevas = [
         {"year": y, "pax": nuevas_totals.get(y, 0)}
         for y in years
-        if nuevas_totals.get(y, 0) > 0
+        if nuevas_totals.get(y, 0) != 0
     ]
     nuevas_total = sum(item["pax"] for item in nuevas)
 
@@ -421,7 +425,7 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
                     fill=FILL_ALT,
                     alignment=align,
                     border=BORDER_ALL,
-                    number_format="#,##0" if col == 6 else None,
+                    number_format="#,##0;-#,##0" if col == 6 else None,
                 )
             row += 1
 
@@ -430,14 +434,19 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
                 ws.cell(row=row, column=col, value=""),
                 border=BORDER_ALL,
             )
-        cell = ws.cell(row=row, column=6, value=int(block.get("pax_total") or 0))
+        total_raw = block.get("pax_total")
+        cell = ws.cell(
+            row=row,
+            column=6,
+            value=0 if total_raw is None else int(total_raw),
+        )
         style_cell(
             cell,
             font=FONT_TOTAL,
             fill=FILL_TOTAL,
             alignment=ALIGN_RIGHT,
             border=BORDER_ALL,
-            number_format="#,##0",
+            number_format="#,##0;-#,##0",
         )
         _ = block_start
         row += 2
