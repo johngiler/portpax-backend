@@ -222,12 +222,21 @@ def build_solicitudes_port_csv(payload: dict[str, Any]) -> bytes:
     for block in payload.get("year_blocks") or []:
         rows.append([block.get("title") or ""])
         rows.append(
-            ["Ship", "Port", "Arrival", "Hora llegada", "Hora salida", "Pax"]
+            [
+                "Ship",
+                "Tamaño",
+                "Port",
+                "Arrival",
+                "Hora llegada",
+                "Hora salida",
+                "Pax",
+            ]
         )
         for item in block.get("rows") or []:
             rows.append(
                 [
                     item.get("ship"),
+                    item.get("size"),
                     item.get("port"),
                     item.get("arrival_label"),
                     item.get("eta"),
@@ -237,7 +246,7 @@ def build_solicitudes_port_csv(payload: dict[str, Any]) -> bytes:
             )
         total_raw = block.get("pax_total")
         rows.append(
-            ["", "", "", "", "", 0 if total_raw is None else total_raw]
+            ["", "", "", "", "", "", 0 if total_raw is None else total_raw]
         )
         rows.append([])
 

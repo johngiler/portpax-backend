@@ -285,11 +285,15 @@ def build_solicitudes_port_report(
         # Cancelled = signed negative (ops: cohort of cancellations).
         if booking.status == BookingStatus.C:
             pax = -abs(pax)
+        vessel = booking.vessel if booking.vessel_id else None
         rows_by_year[year].append(
             {
                 "booking_id": booking.id,
                 "booking_code": booking.booking_code,
-                "ship": booking.vessel.name if booking.vessel_id else "—",
+                "ship": vessel.name if vessel is not None else "—",
+                "size": (
+                    (vessel.size_category or "").strip() if vessel is not None else ""
+                ),
                 "port": _port_label(booking.port) if booking.port_id else _port_label(port),
                 "arrival": booking.call_date.isoformat(),
                 "arrival_label": _format_arrival(booking.call_date),
@@ -392,7 +396,7 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
     left_start = row
 
     for block in payload.get("year_blocks") or []:
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         cell = ws.cell(row=row, column=1, value=block.get("title") or "")
         style_cell(cell, font=FONT_TOTAL, alignment=ALIGN_LEFT)
         row += 1
@@ -401,13 +405,22 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
         write_column_header_band(
             ws,
             row,
-            ["Ship", "Port", "Arrival", "Hora llegada", "Hora salida", "Pax"],
+            [
+                "Ship",
+                "Tamaño",
+                "Port",
+                "Arrival",
+                "Hora llegada",
+                "Hora salida",
+                "Pax",
+            ],
         )
         row += 1
 
         for item in block.get("rows") or []:
             values = [
                 item.get("ship"),
+                item.get("size"),
                 item.get("port"),
                 item.get("arrival_label"),
                 item.get("eta"),
@@ -416,8 +429,8 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
             ]
             for col, value in enumerate(values, start=1):
                 cell = ws.cell(row=row, column=col, value=value)
-                align = ALIGN_LEFT if col <= 2 else ALIGN_CENTER
-                if col == 6:
+                align = ALIGN_LEFT if col <= 3 else ALIGN_CENTER
+                if col == 7:
                     align = ALIGN_RIGHT
                 style_cell(
                     cell,
@@ -425,11 +438,11 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
                     fill=FILL_ALT,
                     alignment=align,
                     border=BORDER_ALL,
-                    number_format="#,##0;-#,##0" if col == 6 else None,
+                    number_format="#,##0;-#,##0" if col == 7 else None,
                 )
             row += 1
 
-        for col in range(1, 6):
+        for col in range(1, 7):
             style_cell(
                 ws.cell(row=row, column=col, value=""),
                 border=BORDER_ALL,
@@ -437,7 +450,7 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
         total_raw = block.get("pax_total")
         cell = ws.cell(
             row=row,
-            column=6,
+            column=7,
             value=0 if total_raw is None else int(total_raw),
         )
         style_cell(

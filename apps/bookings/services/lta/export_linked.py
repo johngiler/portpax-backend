@@ -11,7 +11,11 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from apps.bookings.models import Booking, BookingStatus, LongTermAgreement
-from apps.bookings.services.booking_export import STATUS_LABELS_ES, _format_time
+from apps.bookings.services.booking_export import (
+    STATUS_LABELS_ES,
+    _format_time,
+    vessel_size_label,
+)
 from apps.catalogs.utils.position_code import position_short_code
 
 HEADERS = [
@@ -20,6 +24,7 @@ HEADERS = [
     "Puerto",
     "Naviera",
     "Barco",
+    "Tamaño",
     "Posición",
     "Fecha de escala",
     "ETA",
@@ -71,6 +76,7 @@ def _row(booking: Booking, agreement: LongTermAgreement, extras: set[str]) -> li
         booking.port.name if booking.port_id else "",
         booking.shipping_line.name if booking.shipping_line_id else "",
         booking.vessel.name if booking.vessel_id else "",
+        vessel_size_label(booking),
         _position_label(booking),
         booking.call_date.isoformat() if booking.call_date else "",
         _format_time(booking.eta),

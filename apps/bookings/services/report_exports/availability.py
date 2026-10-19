@@ -95,6 +95,7 @@ def _paged_days_payload(
 
 EXPORT_HEADERS = [
     "Barco",
+    "Tamaño",
     "Naviera",
     "Puerto",
     "Fecha",
@@ -220,9 +221,11 @@ def _availability_export_rows(
     )
     rows: list[list[str]] = []
     for booking in qs.iterator(chunk_size=500):
+        vessel = booking.vessel if booking.vessel_id else None
         rows.append(
             [
-                booking.vessel.name if booking.vessel_id else "",
+                vessel.name if vessel is not None else "",
+                (vessel.size_category or "").strip() if vessel is not None else "",
                 booking.shipping_line.name if booking.shipping_line_id else "",
                 _port_display_name(booking.port),
                 booking.call_date.strftime("%d/%m/%Y"),

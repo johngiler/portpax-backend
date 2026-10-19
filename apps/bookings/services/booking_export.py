@@ -19,6 +19,7 @@ HEADERS = [
     "Puerto",
     "Naviera",
     "Barco",
+    "Tamaño",
     "Cap. máx.",
     "Posición",
     "Fecha de escala",
@@ -78,6 +79,14 @@ def _format_call_date(value: date) -> str:
     return value.strftime("%d/%m/%Y")
 
 
+def vessel_size_label(booking: Booking) -> str:
+    """Catalog ``Vessel.size_category`` for booking row exports."""
+    vessel = booking.vessel
+    if vessel is None:
+        return ""
+    return (vessel.size_category or "").strip()
+
+
 def booking_export_row(booking: Booking, today: date | None = None) -> list:
     today = today or timezone.localdate()
     vessel = booking.vessel
@@ -87,6 +96,7 @@ def booking_export_row(booking: Booking, today: date | None = None) -> list:
         booking.port.name,
         booking.shipping_line.name,
         vessel.name if vessel is not None else "",
+        vessel_size_label(booking),
         _cell_value(vessel.pax_capacity if vessel is not None else None),
         booking.position.code if booking.position_id else "",
         _format_call_date(booking.call_date),

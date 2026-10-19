@@ -10,7 +10,11 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from apps.bookings.models import Booking
-from apps.bookings.services.booking_export import STATUS_LABELS_ES, _format_time
+from apps.bookings.services.booking_export import (
+    STATUS_LABELS_ES,
+    _format_time,
+    vessel_size_label,
+)
 
 HEADERS = [
     "Fecha",
@@ -18,6 +22,7 @@ HEADERS = [
     "Muelle",
     "Naviera",
     "Barco",
+    "Tamaño",
     "Eslora (m)",
     "Estado",
     "ETA",
@@ -42,6 +47,7 @@ def _row(booking: Booking) -> list:
         booking.position.code if booking.position_id else "Sin asignar",
         booking.shipping_line.name,
         booking.vessel.name,
+        vessel_size_label(booking),
         _loa(booking),
         STATUS_LABELS_ES.get(booking.status, booking.get_status_display()),
         _format_time(booking.eta),
