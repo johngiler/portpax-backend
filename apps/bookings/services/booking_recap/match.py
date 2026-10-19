@@ -1,10 +1,11 @@
-"""Match recap rows to existing bookings (±1 day on the call date)."""
+"""Match recap rows to existing bookings (±N days on the call date)."""
 
 from __future__ import annotations
 
 from datetime import date, time, timedelta
 from typing import Any
 
+from apps.bookings.constants import VESSEL_ITINERARY_BUFFER_DAYS
 from apps.bookings.models import Booking
 from apps.bookings.services.booking_recap.portpax_only import (
     DEFAULT_PORTPAX_ONLY_PAGE_SIZE,
@@ -32,7 +33,9 @@ _MONTHS = (
     "nov",
     "dic",
 )
-_DATE_WINDOW = timedelta(days=1)
+# Same ±N window as vessel itinerary proximity (ops: Beto / Melilla recap).
+_DATE_WINDOW = timedelta(days=VESSEL_ITINERARY_BUFFER_DAYS)
+_DATE_WINDOW_LABEL = f"±{VESSEL_ITINERARY_BUFFER_DAYS} días"
 
 
 def _date_label(value: date) -> str:
@@ -69,7 +72,11 @@ def _match_summary(booking: Booking, row: dict[str, Any]) -> tuple[int, str]:
             clauses.append("la fecha coincide")
         else:
             points += 0.5
-            clauses.append("la fecha está a un día (cuenta la mitad)")
+            day_delta = abs((booking.call_date - imported_date).days)
+            day_word = "día" if day_delta == 1 else "días"
+            clauses.append(
+                f"la fecha está a {day_delta} {day_word} (cuenta la mitad)"
+            )
     hits: list[str] = []
     misses: list[str] = []
     for label, current, imported in (
@@ -151,10 +158,11 @@ def match_recap_rows(
     date_to: date | None = None,
 ) -> dict[str, Any]:
     """
-    Pair each recap row with at most one booking. Date may be ±1 day.
+    Pair each recap row with at most one booking.
 
-    Includes cancelled bookings (no status filter). Optional delimiters
-    (group / lines / date range) narrow the candidate search.
+    Date may differ by up to ``VESSEL_ITINERARY_BUFFER_DAYS`` (±N, same as
+    itinerary proximity). Includes cancelled bookings (no status filter).
+    Optional delimiters (group / lines / date range) narrow candidates.
     """
     allowed = set(allowed_ports) if allowed_ports is not None else None
     line_ids = _normalize_id_list(shipping_line_ids)
@@ -328,7 +336,7 @@ def match_recap_rows(
                     **base,
                     "reason": (
                         f"Sin reserva de {vessel.name} en {_port_label(port)} "
-                        f"el {_date_label(call_date)} (±1 día)."
+                        f"el {_date_label(call_date)} ({_DATE_WINDOW_LABEL})."
                     ),
                 }
             )

@@ -485,19 +485,23 @@ def _matrix_pdf(
 
     def _metric_table(section: dict[str, Any], metric_key: str) -> Table:
         data = [[row_header, *MONTH_LABELS, "TOTAL"]]
+        has_total_row = False
         for data_row in section.get(metric_key) or []:
-            label = (
-                "TOTAL"
-                if data_row.get("year") == "total"
-                else str(data_row.get("year") or "")
+            is_total = data_row.get("year") == "total" or data_row.get(
+                "is_total", False
             )
+            if is_total:
+                has_total_row = True
+            label = "TOTAL" if is_total else str(data_row.get("year") or "")
             months = [_fmt_matrix_num(value)
                       for value in (data_row.get("months") or [])]
             data.append(
                 [label, *months, _fmt_matrix_num(data_row.get("total") or 0)])
+        # Only emphasize a real TOTAL footer — ports_totals has none (last year
+        # must not look like a total, e.g. 2030).
         return _data_table(
             data,
-            emphasize_last=True,
+            emphasize_last=has_total_row,
             first_col_ratio=0.12,
             usable_width=inner,
         )
