@@ -233,6 +233,12 @@ class BookingViewSet(
             status_values,
             parse_cancellation_reason_param(self.request.query_params),
         )
+        # Calendar occupancy: drop cancelled unless the client asked for them.
+        exclude_cancelled = str(
+            self.request.query_params.get("exclude_cancelled") or ""
+        ).strip().lower() in {"1", "true", "yes", "si", "sí"}
+        if exclude_cancelled and BookingStatus.C not in status_values:
+            qs = qs.exclude(status=BookingStatus.C)
         has_conflict = self.request.query_params.get("has_conflict")
         if has_conflict is not None and str(has_conflict).strip() != "":
             flag = str(has_conflict).strip().lower() in {"1", "true", "yes", "si", "sí"}
