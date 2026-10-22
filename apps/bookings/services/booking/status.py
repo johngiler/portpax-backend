@@ -6,7 +6,10 @@ from apps.bookings.services.confirmation_pdf import (
     CONFIRMATION_PDF_STATUSES,
     save_confirmation_pdf,
 )
-from apps.bookings.services.position_assignment import auto_assign_position
+from apps.bookings.services.position_assignment import (
+    POSITION_REQUIRED_MESSAGE,
+    auto_assign_position,
+)
 from apps.catalogs.utils.position_code import position_short_code
 
 
@@ -96,9 +99,10 @@ def update_booking_status(
                 booking.call_date,
                 exclude_booking_id=booking.id,
             )
-            if position:
-                booking.position = position
-                booking.save(update_fields=["position", "updated_at"])
+            if position is None:
+                raise BookingStatusError(POSITION_REQUIRED_MESSAGE)
+            booking.position = position
+            booking.save(update_fields=["position", "updated_at"])
 
         if acknowledge_combined_red and not user_may_authorize_exceptions(user):
             raise BookingStatusError(
@@ -251,6 +255,9 @@ def update_booking_operational(
     prior_position_id = booking.position_id
     prior_call_date = booking.call_date
 
+    if position_id is not None and not position_id:
+        raise BookingStatusError(POSITION_REQUIRED_MESSAGE)
+
     pending_position = position_id is not None and position_id != booking.position_id
     pending_eta = eta is not None and eta != booking.eta
     pending_etd = etd is not None and etd != booking.etd
@@ -301,7 +308,7 @@ def update_booking_operational(
             "from_code": old_position_code,
             "to_code": None,
         }
-        booking.position_id = position_id or None
+        booking.position_id = position_id
         update_fields.append("position")
         position_changed = True
 
@@ -361,14 +368,13 @@ def update_booking_operational(
 
     if position_changed or schedule_changed:
         if position_changed:
-            if booking.position_id:
-                from apps.catalogs.models import Position
+            if not booking.position_id:
+                raise BookingStatusError(POSITION_REQUIRED_MESSAGE)
+            from apps.catalogs.models import Position
 
-                booking.position = Position.objects.select_related("berth", "port").get(
-                    pk=booking.position_id,
-                )
-            else:
-                booking.position = None
+            booking.position = Position.objects.select_related("berth", "port").get(
+                pk=booking.position_id,
+            )
             if "position_id" in changes and isinstance(changes["position_id"], dict):
                 if booking.position is not None:
                     pos = booking.position

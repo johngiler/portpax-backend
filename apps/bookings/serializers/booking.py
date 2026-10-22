@@ -317,7 +317,7 @@ class BookingUpdateSerializer(serializers.Serializer):
         choices=BookingStatus.choices,
         required=False,
     )
-    position = serializers.IntegerField(required=False, allow_null=True)
+    position = serializers.IntegerField(required=False, min_value=1)
     eta = serializers.TimeField(required=False, allow_null=True)
     etd = serializers.TimeField(required=False, allow_null=True)
     eta_real = serializers.TimeField(required=False, allow_null=True)

@@ -15,6 +15,15 @@ from apps.catalogs.services.position_combination import (
     position_is_combined,
 )
 
+POSITION_REQUIRED_MESSAGE = "La reserva debe tener una posición asignada."
+
+
+def missing_position_message(port: Port, call_date: date) -> str:
+    return (
+        f"No hay posición disponible para asignar el {call_date.isoformat()} "
+        f"en {port.name}."
+    )
+
 
 def _rank_position(vessel: Vessel, position: Position, port: Port) -> tuple:
     """Lower tuple wins: catalog order, then LOA slack, then overhang."""

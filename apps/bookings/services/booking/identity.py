@@ -15,10 +15,63 @@ from apps.bookings.services.booking.shipping_line_group import (
     same_shipping_line_group,
     vessel_line_mismatch_error,
 )
+from apps.bookings.services.position_assignment import auto_assign_position
 from apps.catalogs.models import Port, ShippingLine, Vessel
 from apps.catalogs.utils.position_code import position_short_code
 
 __all__ = ["GROUP_MISMATCH_MESSAGE", "update_booking_identity"]
+
+
+def _ensure_position_for_identity(
+    booking: Booking,
+    *,
+    new_port: Port,
+    new_vessel: Vessel,
+    new_call_date: date,
+    changes: dict,
+    update_fields: list[str],
+) -> None:
+    current = booking.position
+    if current is not None and current.port_id == new_port.id:
+        return
+
+    new_position = auto_assign_position(
+        new_port,
+        new_vessel,
+        new_call_date,
+        exclude_booking_id=booking.pk,
+    )
+    if new_position is None:
+        message = (
+            f"No hay posición disponible para asignar en {new_port.name}."
+        )
+        raise BookingValidationError(
+            message,
+            [
+                {
+                    "code": "position_required",
+                    "message": message,
+                    "severity": "error",
+                }
+            ],
+        )
+
+    old_code = None
+    if current is not None:
+        port_code = current.port.code if current.port_id else None
+        old_code = (
+            position_short_code(port_code, current.code)
+            if port_code and current.code
+            else current.code
+        )
+    changes["position_id"] = {
+        "from": booking.position_id,
+        "to": new_position.id,
+        "from_code": old_code,
+        "to_code": position_short_code(new_port.code, new_position.code),
+    }
+    booking.position = new_position
+    update_fields.append("position")
 
 
 def _not_found(entity: str) -> BookingValidationError:
@@ -222,19 +275,15 @@ def update_booking_identity(
             booking.booking_code = new_code
             update_fields.append("booking_code")
 
-        # Position belongs to the old port — clear when port changes.
-        position = booking.position
-        if position is not None and position.port_id != new_port.id:
-            changes["position_id"] = {
-                "from": booking.position_id,
-                "to": None,
-                "from_code": position_short_code(position.port.code, position.code)
-                if position.port_id
-                else position.code,
-                "to_code": None,
-            }
-            booking.position = None
-            update_fields.append("position")
+        # Position belongs to a port — reassign when missing or the port changed.
+        _ensure_position_for_identity(
+            booking,
+            new_port=new_port,
+            new_vessel=new_vessel,
+            new_call_date=new_call_date,
+            changes=changes,
+            update_fields=update_fields,
+        )
 
         # Re-match LTA after identity change (clear or assign best agreement).
         if rematch_lta:

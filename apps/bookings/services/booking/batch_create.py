@@ -9,7 +9,10 @@ from django.db import transaction
 
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.booking.code import resolve_unique_booking_code
-from apps.bookings.services.position_assignment import resolve_booking_position
+from apps.bookings.services.position_assignment import (
+    missing_position_message,
+    resolve_booking_position,
+)
 from apps.bookings.services.validation.rules import related_position_ids
 from apps.bookings.services.booking.shipping_line_group import (
     CREATE_GROUP_MISMATCH_MESSAGE,
@@ -210,8 +213,12 @@ def create_booking_batch(
                 preferred_position_id=spec.get("position_id"),
                 reserved_position_ids=reserved,
             )
-            if position:
-                reserved.update(related_position_ids(position.id))
+            if position is None:
+                raise BookingBatchCreateError(
+                    missing_position_message(port, call_date),
+                    "position",
+                )
+            reserved.update(related_position_ids(position.id))
 
             code = resolve_unique_booking_code(
                 port,
