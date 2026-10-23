@@ -48,6 +48,7 @@ def update_booking_status(
     user=None,
     request=None,
     cancellation_reason: str | None = None,
+    cancellation_notes: str | None = None,
     cancellation_evidence=None,
     actual_pax=None,
     eta_real=None,
@@ -135,6 +136,7 @@ def update_booking_status(
 
     old_status = booking.status
     old_cancellation_reason = booking.cancellation_reason or None
+    old_cancellation_notes = booking.cancellation_notes or None
     cleared_lta_code: str | None = None
     booking.status = new_status
 
@@ -155,6 +157,13 @@ def update_booking_status(
             booking.cancellation_evidence.delete(save=False)
             booking.cancellation_evidence = None
             update_fields.append("cancellation_evidence")
+        if booking.cancellation_notes:
+            reactivation_clears["cancellation_notes"] = {
+                "from": booking.cancellation_notes,
+                "to": None,
+            }
+            booking.cancellation_notes = ""
+            update_fields.append("cancellation_notes")
 
     if new_status == BookingStatus.C:
         if booking.long_term_agreement_id:
@@ -167,6 +176,9 @@ def update_booking_status(
         if cancellation_reason:
             booking.cancellation_reason = cancellation_reason
             update_fields.append("cancellation_reason")
+        if cancellation_notes is not None:
+            booking.cancellation_notes = cancellation_notes.strip()
+            update_fields.append("cancellation_notes")
     if cancellation_evidence:
         booking.cancellation_evidence = cancellation_evidence
         update_fields.append("cancellation_evidence")
@@ -201,6 +213,12 @@ def update_booking_status(
             "from": old_cancellation_reason,
             "to": booking.cancellation_reason or None,
         }
+        new_notes = booking.cancellation_notes or None
+        if old_cancellation_notes or new_notes:
+            status_changes["cancellation_notes"] = {
+                "from": old_cancellation_notes,
+                "to": new_notes,
+            }
     if cleared_lta_code is not None:
         status_changes["long_term_agreement"] = {
             "from": cleared_lta_code,

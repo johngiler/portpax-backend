@@ -100,6 +100,10 @@ class Booking(models.Model):
         blank=True,
         help_text="Reason selected when cancelling (provisional catalog).",
     )
+    cancellation_notes = models.TextField(
+        blank=True,
+        help_text="Free-text comment captured when cancelling (not identity notes).",
+    )
     cancellation_evidence = models.FileField(
         upload_to="bookings/cancellation_evidence/",
         null=True,

@@ -261,6 +261,7 @@ class BookingSerializer(
             "conflict_highlights",
             "cancellation_reason",
             "cancellation_reason_display",
+            "cancellation_notes",
             "cancellation_evidence_url",
             "confirmation_pdf_url",
             "arrival_manifest_url",
@@ -337,6 +338,11 @@ class BookingUpdateSerializer(serializers.Serializer):
         required=False,
         allow_blank=True,
     )
+    cancellation_notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=2000,
+    )
     cancellation_evidence = serializers.FileField(required=False, allow_null=True)
     port_operator_override = serializers.BooleanField(required=False, default=False)
     acknowledge_combined_red = serializers.BooleanField(required=False, default=False)
@@ -358,6 +364,7 @@ class BookingUpdateSerializer(serializers.Serializer):
         user = request.user if request else None
         cancellation_evidence = validated_data.pop("cancellation_evidence", None)
         cancellation_reason = validated_data.pop("cancellation_reason", None)
+        cancellation_notes = validated_data.pop("cancellation_notes", None)
         arrival_manifest = validated_data.pop("arrival_manifest", None)
         new_status = validated_data.pop("status", None)
         port_operator_override = validated_data.pop("port_operator_override", False)
@@ -434,6 +441,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                     user=user,
                     request=request,
                     cancellation_reason=cancellation_reason,
+                    cancellation_notes=cancellation_notes,
                     cancellation_evidence=cancellation_evidence,
                     actual_pax=operational_fields.get("actual_pax"),
                     eta_real=operational_fields.get("eta_real"),
@@ -470,6 +478,7 @@ class BookingUpdateSerializer(serializers.Serializer):
                         user=user,
                         request=request,
                         cancellation_reason=cancellation_reason,
+                        cancellation_notes=cancellation_notes,
                         cancellation_evidence=cancellation_evidence,
                         acknowledge_combined_red=acknowledge_combined_red,
                     )

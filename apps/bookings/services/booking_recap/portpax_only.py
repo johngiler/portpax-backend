@@ -6,11 +6,18 @@ from datetime import date
 from typing import Any
 
 from apps.bookings.constants import ACTIVE_BOOKING_STATUSES
-from apps.bookings.models import Booking
+from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.services.booking_export import STATUS_LABELS_ES
 from apps.bookings.services.validation.legend_labels import port_legend_label
 
 DEFAULT_PORTPAX_ONLY_PAGE_SIZE = 10
+
+# Commercial recap: ghost LTA slots are not confirmed yet (Beto).
+RECAP_PORTPAX_ONLY_STATUSES = tuple(
+    status
+    for status in ACTIVE_BOOKING_STATUSES
+    if status != BookingStatus.LTA
+)
 
 
 def _hhmm(value) -> str | None:
@@ -72,6 +79,9 @@ def find_portpax_only_bookings(
 
     Excludes Cancelada and Real — only active/planned statuses (ops still
     expect them on a commercial recap).
+
+    Ghost LTA slots (status LTA) are not confirmed yet — omit them (Beto).
+    Confirmada LTA (CL) stays.
     """
     if not date_from or not date_to or date_from > date_to:
         return [], 0
@@ -92,7 +102,7 @@ def find_portpax_only_bookings(
         port_id__in=port_ids,
         call_date__gte=date_from,
         call_date__lte=date_to,
-        status__in=ACTIVE_BOOKING_STATUSES,
+        status__in=RECAP_PORTPAX_ONLY_STATUSES,
     ).select_related("vessel", "port", "shipping_line")
     if matched_ids:
         qs = qs.exclude(id__in=matched_ids)
