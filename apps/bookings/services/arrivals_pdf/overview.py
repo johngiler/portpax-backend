@@ -18,6 +18,13 @@ from apps.bookings.services.arrivals_pdf.chrome import (
 )
 from apps.bookings.services.arrivals_pdf.labels import range_span_label
 from apps.bookings.services.booking_export import STATUS_LABELS_ES
+from apps.bookings.services.report_exports.common import (
+    PAX_BASIS_CAPACITY,
+    PAX_BASIS_PLANNED,
+    booking_pax,
+    format_pax_count,
+    normalize_pax_basis,
+)
 
 KIND_LABELS = {
     "list": "Lista de arribos",
@@ -93,13 +100,18 @@ def build_overview(
     extra_kpis: list[ExportKpi] | None = None,
     extra_criteria: list[tuple[str, str]] | None = None,
     payload: dict | None = None,
+    pax_basis: str = PAX_BASIS_PLANNED,
 ) -> ExportOverview:
     rows = list(bookings or [])
+    raw_basis = pax_basis
+    if query is not None:
+        raw_basis = _get(query, "pax_basis") or pax_basis
+    basis = normalize_pax_basis(raw_basis)
     start, end = _range(rows, date_from, date_to, query)
-    criteria = _criteria_from_query(query, start=start, end=end)
+    criteria = _criteria_from_query(query, start=start, end=end, pax_basis=basis)
     if extra_criteria:
         criteria.extend(extra_criteria)
-    kpis = extra_kpis or _default_kpis(kind, rows, payload)
+    kpis = extra_kpis or _default_kpis(kind, rows, payload, pax_basis=basis)
     return ExportOverview(
         kind=kind,
         kind_label=KIND_LABELS.get(kind, "Reservas"),
@@ -188,7 +200,13 @@ def _range(rows, date_from, date_to, query) -> tuple[date | None, date | None]:
     return start, end
 
 
-def _default_kpis(kind: str, rows: list, payload: dict | None) -> list[ExportKpi]:
+def _default_kpis(
+    kind: str,
+    rows: list,
+    payload: dict | None,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
+) -> list[ExportKpi]:
     if kind == "proximity" and payload is not None:
         cells = list(payload.get("cells") or [])
         ports = list(payload.get("ports") or [])
@@ -209,8 +227,10 @@ def _default_kpis(kind: str, rows: list, payload: dict | None) -> list[ExportKpi
         if getattr(item, "shipping_line_id", None)
     }
     dates = {item.call_date for item in rows if getattr(item, "call_date", None)}
+    pax_total = sum(booking_pax(item, pax_basis=pax_basis) for item in rows)
     kpis = [
         ExportKpi("Arribos", str(len(rows))),
+        ExportKpi("PAX", format_pax_count(pax_total)),
         ExportKpi("Puertos", str(len(ports))),
     ]
     if kind == "availability":
@@ -220,11 +240,15 @@ def _default_kpis(kind: str, rows: list, payload: dict | None) -> list[ExportKpi
     return kpis
 
 
-def _criteria_from_query(query, *, start, end) -> list[tuple[str, str]]:
+def _criteria_from_query(
+    query, *, start, end, pax_basis: str = PAX_BASIS_PLANNED
+) -> list[tuple[str, str]]:
     if query is None:
         items: list[tuple[str, str]] = []
         if start and end:
             items.append(("Rango", range_span_label(start, end)))
+        if normalize_pax_basis(pax_basis) == PAX_BASIS_CAPACITY:
+            items.append(("Base PAX", "Cap. máx."))
         return items
     items: list[tuple[str, str]] = []
     if start and end:
@@ -267,6 +291,8 @@ def _criteria_from_query(query, *, start, end) -> list[tuple[str, str]]:
     if call_dates:
         count = len([part for part in call_dates.split(",") if part.strip()])
         items.append(("Fechas importadas", str(count)))
+    if normalize_pax_basis(pax_basis) == PAX_BASIS_CAPACITY:
+        items.append(("Base PAX", "Cap. máx."))
     return items
 
 

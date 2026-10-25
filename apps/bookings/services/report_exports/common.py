@@ -48,6 +48,11 @@ def booking_pax(
     return 0
 
 
+def format_pax_count(value: int) -> str:
+    """Thousands separator shared by calendar cells and list flyers."""
+    return f"{int(value):,}"
+
+
 def booking_pax_sum_expr(pax_basis: str = PAX_BASIS_PLANNED):
     """ORM twin of booking_pax() for list/dashboard aggregates."""
     if normalize_pax_basis(pax_basis) == PAX_BASIS_CAPACITY:

@@ -28,40 +28,33 @@ from apps.bookings.services.arrivals_pdf.overview import (
     draw_overview_band,
 )
 from apps.bookings.services.arrivals_pdf.list_data import (
-    LIST_CENTER_COLS,
-    LIST_HEADERS,
     group_bookings_by_port,
+    list_center_cols,
+    list_col_fracs,
+    list_headers,
     list_row_values,
 )
 from apps.bookings.services.arrivals_pdf.logo import port_logo_reader
+from apps.bookings.services.report_exports.common import PAX_BASIS_PLANNED
 
-HEADERS = LIST_HEADERS
-COL_FRACS = (
-    0.04,
-    0.13,
-    0.16,
-    0.15,
-    0.07,
-    0.07,
-    0.05,
-    0.07,
-    0.06,
-    0.055,
-    0.055,
-    0.09,
-)
-CENTER_COLS = LIST_CENTER_COLS
 ROW_H = 12.4
 HEAD_H = 14.0
 
 
 def build_arrivals_list_pdf(
-    bookings: list, *, overview: ExportOverview | None = None
+    bookings: list,
+    *,
+    overview: ExportOverview | None = None,
+    pax_basis: str = PAX_BASIS_PLANNED,
+    include_cancellation: bool = False,
 ) -> bytes:
     pagesize = landscape(A4)
     page_w, page_h = pagesize
     usable = page_w - 2 * MARGIN
-    col_w = [usable * frac for frac in COL_FRACS]
+    col_w = [
+        usable * frac
+        for frac in list_col_fracs(include_cancellation=include_cancellation)
+    ]
     updated = timezone.localdate()
 
     groups = group_bookings_by_port(bookings)
@@ -85,6 +78,8 @@ def build_arrivals_list_pdf(
             rows=rows,
             updated=updated,
             overview=overview,
+            pax_basis=pax_basis,
+            include_cancellation=include_cancellation,
         )
 
     pdf.save()
@@ -103,6 +98,8 @@ def _draw_group_pages(
     rows: list,
     updated,
     overview: ExportOverview | None = None,
+    pax_basis: str = PAX_BASIS_PLANNED,
+    include_cancellation: bool = False,
 ) -> None:
     top = page_h - MARGIN - HEADER_H
     if overview is not None:
@@ -126,14 +123,28 @@ def _draw_group_pages(
         )
         y = page_h - MARGIN - HEADER_H
         y = draw_overview_band(pdf, MARGIN, y, table_w, overview)
-        y = _draw_header_row(pdf, MARGIN, y, col_w)
+        y = _draw_header_row(
+            pdf,
+            MARGIN,
+            y,
+            col_w,
+            headers=list_headers(include_cancellation=include_cancellation),
+        )
         for booking in chunk:
             _draw_body_row(
                 pdf,
                 MARGIN,
                 y,
                 col_w,
-                values=list_row_values(booking, number=number),
+                values=list_row_values(
+                    booking,
+                    number=number,
+                    pax_basis=pax_basis,
+                    include_cancellation=include_cancellation,
+                ),
+                center_cols=list_center_cols(
+                    include_cancellation=include_cancellation
+                ),
             )
             y -= ROW_H
             number += 1
@@ -151,14 +162,19 @@ def _draw_group_pages(
 
 
 def _draw_header_row(
-    pdf: canvas.Canvas, x: float, y: float, col_w: list[float]
+    pdf: canvas.Canvas,
+    x: float,
+    y: float,
+    col_w: list[float],
+    *,
+    headers: tuple[str, ...],
 ) -> float:
     pdf.setFillColor(NAVY)
     pdf.rect(x, y - HEAD_H, sum(col_w), HEAD_H, fill=1, stroke=0)
     pdf.setFillColor(white)
     pdf.setFont("Helvetica-Bold", 7.2)
     cx = x
-    for width, label in zip(col_w, HEADERS, strict=True):
+    for width, label in zip(col_w, headers, strict=True):
         pdf.drawCentredString(
             cx + width / 2, y - HEAD_H + 4.2, fit_text(pdf, label, width - 4)
         )
@@ -174,6 +190,7 @@ def _draw_body_row(
     col_w: list[float],
     *,
     values: tuple[str, ...],
+    center_cols: set[int],
 ) -> None:
     pdf.setFillColor(white)
     pdf.rect(x, y - ROW_H, sum(col_w), ROW_H, fill=1, stroke=0)
@@ -183,7 +200,7 @@ def _draw_body_row(
     for i, (width, value) in enumerate(zip(col_w, values, strict=True)):
         text = fit_text(pdf, value, width - 6)
         text_y = y - ROW_H + 3.4
-        if i in CENTER_COLS:
+        if i in center_cols:
             pdf.drawCentredString(cx + width / 2, text_y, text)
         else:
             pdf.drawString(cx + 3, text_y, text)

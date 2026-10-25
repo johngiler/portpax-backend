@@ -11,13 +11,15 @@ from openpyxl.utils import get_column_letter
 
 from apps.bookings.services.arrivals_pdf.labels import arrivals_range_title
 from apps.bookings.services.arrivals_pdf.list_data import (
-    LIST_CENTER_COLS,
-    LIST_HEADERS,
     group_bookings_by_port,
+    list_center_cols,
+    list_col_widths,
+    list_headers,
     list_row_values,
 )
 from apps.bookings.services.arrivals_pdf.logo import add_worksheet_port_logo
 from apps.bookings.services.arrivals_pdf.overview import ExportOverview, paint_overview
+from apps.bookings.services.report_exports.common import PAX_BASIS_PLANNED
 
 NAVY = "1F4E79"
 INK = "111111"
@@ -34,14 +36,18 @@ ALIGN_L = Alignment(horizontal="left", vertical="center", wrap_text=True)
 THIN = Side(style="thin", color=GRID)
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-BLOCK_COLS = len(LIST_HEADERS)
 GAP_COLS = 1
-COL_WIDTHS = (5, 14, 18, 22, 10, 10, 8, 10, 8, 8, 8, 10)
 
 
 def build_arrivals_list_xlsx(
-    bookings: list, *, overview: ExportOverview | None = None
+    bookings: list,
+    *,
+    overview: ExportOverview | None = None,
+    pax_basis: str = PAX_BASIS_PLANNED,
+    include_cancellation: bool = False,
 ) -> bytes:
+    headers = list_headers(include_cancellation=include_cancellation)
+    block_cols = len(headers)
     wb = Workbook()
     ws = wb.active
     ws.title = "Arribos"
@@ -49,22 +55,40 @@ def build_arrivals_list_xlsx(
     ws.page_setup.orientation = "landscape"
     groups = group_bookings_by_port(bookings)
     n_blocks = max(len(groups), 1)
-    last_col = n_blocks * (BLOCK_COLS + GAP_COLS) - GAP_COLS
+    last_col = n_blocks * (block_cols + GAP_COLS) - GAP_COLS
     start_row = paint_overview(ws, overview, last_col=last_col)
     start_col = 1
     for port, rows in groups:
         _paint_port_block(
-            ws, start_col=start_col, start_row=start_row, port=port, rows=rows
+            ws,
+            start_col=start_col,
+            start_row=start_row,
+            port=port,
+            rows=rows,
+            pax_basis=pax_basis,
+            include_cancellation=include_cancellation,
         )
-        start_col += BLOCK_COLS + GAP_COLS
+        start_col += block_cols + GAP_COLS
     stream = BytesIO()
     wb.save(stream)
     return stream.getvalue()
 
 
-def _paint_port_block(ws, *, start_col: int, start_row: int = 1, port, rows: list) -> None:
-    last_col = start_col + BLOCK_COLS - 1
-    for offset, width in enumerate(COL_WIDTHS):
+def _paint_port_block(
+    ws,
+    *,
+    start_col: int,
+    start_row: int = 1,
+    port,
+    rows: list,
+    pax_basis: str = PAX_BASIS_PLANNED,
+    include_cancellation: bool = False,
+) -> None:
+    headers = list_headers(include_cancellation=include_cancellation)
+    widths = list_col_widths(include_cancellation=include_cancellation)
+    center = list_center_cols(include_cancellation=include_cancellation)
+    last_col = start_col + len(headers) - 1
+    for offset, width in enumerate(widths):
         ws.column_dimensions[get_column_letter(start_col + offset)].width = width
 
     has_logo = add_worksheet_port_logo(
@@ -83,7 +107,7 @@ def _paint_port_block(ws, *, start_col: int, start_row: int = 1, port, rows: lis
     ws.row_dimensions[start_row].height = 40 if has_logo else 22
 
     head_row = start_row + 1
-    for offset, header in enumerate(LIST_HEADERS):
+    for offset, header in enumerate(headers):
         col = start_col + offset
         head = ws.cell(head_row, col, header)
         head.font = FONT_HEAD
@@ -94,12 +118,17 @@ def _paint_port_block(ws, *, start_col: int, start_row: int = 1, port, rows: lis
 
     for index, booking in enumerate(rows, start=1):
         excel_row = head_row + index
-        ws.row_dimensions[excel_row].height = 16
-        values = list_row_values(booking, number=index)
+        ws.row_dimensions[excel_row].height = 18 if include_cancellation else 16
+        values = list_row_values(
+            booking,
+            number=index,
+            pax_basis=pax_basis,
+            include_cancellation=include_cancellation,
+        )
         for offset, value in enumerate(values):
             col = start_col + offset
             body = ws.cell(excel_row, col, value)
             body.font = FONT_BODY
             body.fill = FILL_WHITE
-            body.alignment = ALIGN_C if offset in LIST_CENTER_COLS else ALIGN_L
+            body.alignment = ALIGN_C if offset in center else ALIGN_L
             body.border = BORDER

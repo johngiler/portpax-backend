@@ -17,6 +17,7 @@ from apps.bookings.services.arrivals_pdf.occupancy import days_in_range, prepare
 from apps.bookings.services.report_exports.common import (
     PAX_BASIS_PLANNED,
     booking_pax,
+    format_pax_count,
 )
 
 BLOCK_META_COLS = 2
@@ -135,10 +136,6 @@ def _slot_index(booking, pos_index: dict[int, int], n_pos: int) -> int:
     return idx
 
 
-def _format_pax(value: int) -> str:
-    return f"{int(value):,}"
-
-
 def _ship_cell(bookings: list, *, pax_basis: str = PAX_BASIS_PLANNED) -> str:
     """Occupied cell: vessel name(s) plus PAX. Empty occupancy stays ``0``."""
     names: list[str] = []
@@ -153,7 +150,7 @@ def _ship_cell(bookings: list, *, pax_basis: str = PAX_BASIS_PLANNED) -> str:
         pax_by_name[name] += booking_pax(booking, pax_basis=pax_basis)
     if not names:
         return "0"
-    pax_line = " / ".join(_format_pax(pax_by_name[name]) for name in names)
+    pax_line = " / ".join(format_pax_count(pax_by_name[name]) for name in names)
     return f"{' / '.join(names)}\n{pax_line}"
 
 

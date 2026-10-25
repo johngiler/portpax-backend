@@ -91,10 +91,15 @@ def vessel_size_label(booking: Booking) -> str:
     return (vessel.size_category or "").strip()
 
 
-def booking_export_row(booking: Booking, today: date | None = None) -> list:
+def booking_export_row(
+    booking: Booking,
+    today: date | None = None,
+    *,
+    include_cancellation: bool = False,
+) -> list:
     today = today or timezone.localdate()
     vessel = booking.vessel
-    return [
+    row = [
         booking.booking_code,
         _status_label(booking, today),
         booking.port.name,
@@ -116,26 +121,60 @@ def booking_export_row(booking: Booking, today: date | None = None) -> list:
         _cell_value(booking.planned_pax),
         _cell_value(booking.actual_pax),
         _cell_value(booking.actual_crew),
-        booking.get_cancellation_reason_display() if booking.cancellation_reason else "",
-        booking.cancellation_notes or "",
-        booking.notes or "",
-        _format_datetime(booking.created_at),
-        _format_datetime(booking.updated_at),
     ]
+    if include_cancellation:
+        row.extend(
+            [
+                booking.get_cancellation_reason_display()
+                if booking.cancellation_reason
+                else "",
+                booking.cancellation_notes or "",
+            ]
+        )
+    row.extend(
+        [
+            booking.notes or "",
+            _format_datetime(booking.created_at),
+            _format_datetime(booking.updated_at),
+        ]
+    )
+    return row
 
 
-def build_bookings_xlsx(bookings, overview=None) -> bytes:
+def _csv_headers(*, include_cancellation: bool) -> list[str]:
+    if include_cancellation:
+        return list(HEADERS)
+    skip = {"Motivo de cancelación", "Comentario de cancelación"}
+    return [header for header in HEADERS if header not in skip]
+
+
+def build_bookings_xlsx(
+    bookings,
+    overview=None,
+    *,
+    pax_basis: str = "planned",
+    include_cancellation: bool = False,
+) -> bytes:
     from apps.bookings.services.arrivals_pdf.list_xlsx import build_arrivals_list_xlsx
 
-    return build_arrivals_list_xlsx(bookings, overview=overview)
+    return build_arrivals_list_xlsx(
+        bookings,
+        overview=overview,
+        pax_basis=pax_basis,
+        include_cancellation=include_cancellation,
+    )
 
 
-def build_bookings_csv(bookings) -> bytes:
+def build_bookings_csv(bookings, *, include_cancellation: bool = False) -> bytes:
     today = timezone.localdate()
     buffer = StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(HEADERS)
+    writer.writerow(_csv_headers(include_cancellation=include_cancellation))
     for booking in bookings:
-        writer.writerow(booking_export_row(booking, today))
+        writer.writerow(
+            booking_export_row(
+                booking, today, include_cancellation=include_cancellation
+            )
+        )
     # UTF-8 BOM so Excel/Numbers detect Spanish characters correctly.
     return ("\ufeff" + buffer.getvalue()).encode("utf-8")

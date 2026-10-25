@@ -69,6 +69,7 @@ from apps.bookings.services.arrivals_pdf import (
     build_proximity_matrix_pdf,
     build_proximity_matrix_xlsx,
 )
+from apps.bookings.services.arrivals_pdf.list_data import include_list_cancellation
 from apps.bookings.services.booking_export import build_bookings_csv, build_bookings_xlsx
 from apps.bookings.services.calendar_export import (
     build_calendar_csv,
@@ -1405,20 +1406,37 @@ class BookingViewSet(
             )
 
         stamp = timezone.localdate().isoformat()
+        pax_basis = self._report_pax_basis(request)
+        include_cancellation = include_list_cancellation(request.query_params)
         overview = build_overview(
-            kind="list", query=request.query_params, bookings=bookings
+            kind="list",
+            query=request.query_params,
+            bookings=bookings,
+            pax_basis=pax_basis,
         )
         if fmt == "pdf":
-            content = build_arrivals_list_pdf(bookings, overview=overview)
+            content = build_arrivals_list_pdf(
+                bookings,
+                overview=overview,
+                pax_basis=pax_basis,
+                include_cancellation=include_cancellation,
+            )
             filename = arrivals_pdf_filename(bookings, kind="list")
             return _pdf_download(content, filename)
         if fmt == "csv":
-            content = build_bookings_csv(bookings)
+            content = build_bookings_csv(
+                bookings, include_cancellation=include_cancellation
+            )
             response = HttpResponse(content, content_type="text/csv; charset=utf-8")
             response["Content-Disposition"] = f'attachment; filename="reservas_{stamp}.csv"'
             return response
 
-        content = build_bookings_xlsx(bookings, overview=overview)
+        content = build_bookings_xlsx(
+            bookings,
+            overview=overview,
+            pax_basis=pax_basis,
+            include_cancellation=include_cancellation,
+        )
         response = HttpResponse(
             content,
             content_type=(
@@ -1631,6 +1649,7 @@ class BookingViewSet(
             bookings=bookings,
             date_from=date_from,
             date_to=date_to,
+            pax_basis=pax_basis,
         )
         if fmt == "pdf":
             content = build_arrivals_calendar_pdf(
