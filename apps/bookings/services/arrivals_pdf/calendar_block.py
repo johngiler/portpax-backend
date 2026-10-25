@@ -14,6 +14,10 @@ from apps.bookings.services.arrivals_pdf.labels import (
 )
 from apps.bookings.services.arrivals_pdf.month_grid import bookings_by_day, month_weeks
 from apps.bookings.services.arrivals_pdf.occupancy import days_in_range, prepare_availability_layout
+from apps.bookings.services.report_exports.common import (
+    PAX_BASIS_PLANNED,
+    booking_pax,
+)
 
 BLOCK_META_COLS = 2
 DAYS = 7
@@ -38,7 +42,14 @@ class MonthBlock:
     weekday_labels: tuple[str, ...] = WEEKDAYS_CAL_SHORT
 
 
-def build_month_block(port, year: int, month: int, rows: list) -> MonthBlock:
+def build_month_block(
+    port,
+    year: int,
+    month: int,
+    rows: list,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
+) -> MonthBlock:
     labels, pos_index, _counts = prepare_availability_layout(port, rows)
     by_day = bookings_by_day(rows)
     n_pos = max(len(labels), 1)
@@ -58,7 +69,7 @@ def build_month_block(port, year: int, month: int, rows: list) -> MonthBlock:
                     for booking in by_day.get(day, [])
                     if _slot_index(booking, pos_index, n_pos) == index
                 ]
-                cells.append(_ship_cell(ships) if ships else "0")
+                cells.append(_ship_cell(ships, pax_basis=pax_basis) if ships else "0")
             pos_rows.append((label, cells))
         weeks.append(WeekBand(count=count, dates=dates, rows=pos_rows))
     return MonthBlock(
@@ -82,7 +93,13 @@ def week_dates(date_from: date, date_to: date | None = None) -> list[date]:
     return days_in_range(start, start + timedelta(days=6))
 
 
-def build_week_block(port, days: list[date], rows: list) -> MonthBlock:
+def build_week_block(
+    port,
+    days: list[date],
+    rows: list,
+    *,
+    pax_basis: str = PAX_BASIS_PLANNED,
+) -> MonthBlock:
     labels, pos_index, _counts = prepare_availability_layout(port, rows)
     by_day = bookings_by_day(rows)
     n_pos = max(len(labels), 1)
@@ -97,7 +114,7 @@ def build_week_block(port, days: list[date], rows: list) -> MonthBlock:
                 for booking in by_day.get(day, [])
                 if _slot_index(booking, pos_index, n_pos) == index
             ]
-            cells.append(_ship_cell(ships) if ships else "0")
+            cells.append(_ship_cell(ships, pax_basis=pax_basis) if ships else "0")
         pos_rows.append((label, cells))
     start, end = days[0], days[-1]
     return MonthBlock(
@@ -118,13 +135,26 @@ def _slot_index(booking, pos_index: dict[int, int], n_pos: int) -> int:
     return idx
 
 
-def _ship_cell(bookings: list) -> str:
-    names = []
+def _format_pax(value: int) -> str:
+    return f"{int(value):,}"
+
+
+def _ship_cell(bookings: list, *, pax_basis: str = PAX_BASIS_PLANNED) -> str:
+    """Occupied cell: vessel name(s) plus PAX. Empty occupancy stays ``0``."""
+    names: list[str] = []
+    pax_by_name: dict[str, int] = {}
     for booking in bookings:
         name = booking.vessel.name if booking.vessel_id else ""
-        if name and name not in names:
+        if not name:
+            continue
+        if name not in pax_by_name:
             names.append(name)
-    return " / ".join(names)
+            pax_by_name[name] = 0
+        pax_by_name[name] += booking_pax(booking, pax_basis=pax_basis)
+    if not names:
+        return "0"
+    pax_line = " / ".join(_format_pax(pax_by_name[name]) for name in names)
+    return f"{' / '.join(names)}\n{pax_line}"
 
 
 def _day_stamp(value: date) -> str:

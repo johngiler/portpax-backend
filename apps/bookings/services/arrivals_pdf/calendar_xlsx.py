@@ -30,6 +30,7 @@ from apps.bookings.services.arrivals_pdf.month_grid import (
     months_in_range,
 )
 from apps.bookings.services.arrivals_pdf.overview import ExportOverview, paint_overview
+from apps.bookings.services.report_exports.common import PAX_BASIS_PLANNED
 
 MONTHS_PER_ROW = 3
 GAP_COLS = 1
@@ -64,6 +65,7 @@ def build_arrivals_calendar_xlsx(
     date_from=None,
     date_to=None,
     ports: list | None = None,
+    pax_basis: str = PAX_BASIS_PLANNED,
 ) -> bytes:
     if mode == "weekly" and date_from is not None:
         return _build_week_xlsx(
@@ -72,6 +74,7 @@ def build_arrivals_calendar_xlsx(
             date_from=date_from,
             date_to=date_to,
             ports=ports,
+            pax_basis=pax_basis,
         )
     if mode != "annual":
         return _build_month_xlsx(
@@ -80,6 +83,7 @@ def build_arrivals_calendar_xlsx(
             date_from=date_from,
             date_to=date_to,
             ports=ports,
+            pax_basis=pax_basis,
         )
     wb = Workbook()
     wb.remove(wb.active)
@@ -118,9 +122,14 @@ def build_arrivals_calendar_xlsx(
                 band_row = band_bottom + 2
                 col_i = 0
             start_col = 1 + col_i * (BLOCK_COLS + GAP_COLS)
-            block = build_month_block(port, year, month, rows)
+            block = build_month_block(port, year, month, rows, pax_basis=pax_basis)
             bottom = _paint_month(
-                ws, block=block, updated=updated, start_row=band_row, start_col=start_col
+                ws,
+                block=block,
+                updated=updated,
+                start_row=band_row,
+                start_col=start_col,
+                row_h=22,
             )
             band_bottom = max(band_bottom, bottom)
             col_i += 1
@@ -136,17 +145,23 @@ def _build_week_xlsx(
     date_from,
     date_to,
     ports: list | None,
+    pax_basis: str = PAX_BASIS_PLANNED,
 ) -> bytes:
     days = week_dates(date_from, date_to)
     grouped = group_bookings_by_port(bookings)
     by_port = {port.id: rows for port, rows in grouped}
     port_list = list(ports or [port for port, _rows in grouped])
     items = [
-        (port, build_week_block(port, days, by_port.get(port.id, [])))
+        (
+            port,
+            build_week_block(
+                port, days, by_port.get(port.id, []), pax_basis=pax_basis
+            ),
+        )
         for port in port_list
     ]
     return _workbook_one_sheet(
-        items, overview=overview, sheet_title="Semana", row_h=22
+        items, overview=overview, sheet_title="Semana", row_h=28
     )
 
 
@@ -157,6 +172,7 @@ def _build_month_xlsx(
     date_from,
     date_to,
     ports: list | None,
+    pax_basis: str = PAX_BASIS_PLANNED,
 ) -> bytes:
     grouped = group_bookings_by_port(bookings)
     by_port = {port.id: rows for port, rows in grouped}
@@ -181,8 +197,15 @@ def _build_month_xlsx(
                 for booking in rows
                 if booking.call_date.year == year and booking.call_date.month == month
             ]
-            items.append((port, build_month_block(port, year, month, month_rows)))
-    return _workbook_one_sheet(items, overview=overview, sheet_title="Mes", row_h=15)
+            items.append(
+                (
+                    port,
+                    build_month_block(
+                        port, year, month, month_rows, pax_basis=pax_basis
+                    ),
+                )
+            )
+    return _workbook_one_sheet(items, overview=overview, sheet_title="Mes", row_h=22)
 
 
 def _workbook_one_sheet(
@@ -279,7 +302,7 @@ def _paint_month(
     updated,
     start_row: int,
     start_col: int,
-    row_h: int = 15,
+    row_h: int = 22,
 ) -> int:
     last_col = start_col + BLOCK_COLS - 1
     widths = (5, 8, 13, 13, 13, 13, 13, 13, 13)
@@ -325,7 +348,7 @@ def _paint_month(
     return row
 
 
-def _paint_week(ws, row: int, start_col: int, week: WeekBand, row_h: int = 15) -> int:
+def _paint_week(ws, row: int, start_col: int, week: WeekBand, row_h: int = 22) -> int:
     _fill_cell(ws, row, start_col, str(week.count), FONT_POS, FILL_DATE, ALIGN_C)
     _fill_cell(ws, row, start_col + 1, "", FONT_DATE, FILL_DATE, ALIGN_C)
     for i, stamp in enumerate(week.dates):

@@ -1624,6 +1624,7 @@ class BookingViewSet(
             if code not in seen:
                 seen.append(code)
         filename = calendar_export_filename(seen, date_from, date_to, fmt)
+        pax_basis = self._report_pax_basis(request)
         overview = build_overview(
             kind="calendar",
             query=request.query_params,
@@ -1639,6 +1640,7 @@ class BookingViewSet(
                 date_from=date_from,
                 date_to=date_to,
                 ports=ports,
+                pax_basis=pax_basis,
             )
             filename = arrivals_pdf_filename(bookings, kind="calendar")
             return _pdf_download(content, filename)
@@ -1653,6 +1655,7 @@ class BookingViewSet(
                 date_from=date_from,
                 date_to=date_to,
                 ports=ports,
+                pax_basis=pax_basis,
             )
             response = HttpResponse(
                 content,

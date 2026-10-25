@@ -75,6 +75,7 @@ def build_calendar_xlsx(
     date_from: date | None = None,
     date_to: date | None = None,
     ports: list | None = None,
+    pax_basis: str = "planned",
 ) -> bytes:
     return build_arrivals_calendar_xlsx(
         bookings,
@@ -83,6 +84,7 @@ def build_calendar_xlsx(
         date_from=date_from,
         date_to=date_to,
         ports=ports,
+        pax_basis=pax_basis,
     )
 
 

@@ -36,11 +36,12 @@ from apps.bookings.services.arrivals_pdf.overview import (
     ExportOverview,
     draw_overview_band,
 )
+from apps.bookings.services.report_exports.common import PAX_BASIS_PLANNED
 
 HEADER_H = 1.7 * cm
 HEAD_H = 14.0
 DATE_H = 12.0
-POS_H = 11.0
+POS_H = 13.0
 COUNT_W = 0.9 * cm
 POS_W = 1.35 * cm
 
@@ -53,6 +54,7 @@ def build_arrivals_calendar_pdf(
     date_from=None,
     date_to=None,
     ports: list | None = None,
+    pax_basis: str = PAX_BASIS_PLANNED,
 ) -> bytes:
     page_w, page_h = landscape(A4)
     updated = timezone.localdate()
@@ -65,7 +67,9 @@ def build_arrivals_calendar_pdf(
         by_port = {port.id: rows for port, rows in grouped}
         port_list = list(ports or [port for port, _rows in grouped])
         for port in port_list:
-            block = build_week_block(port, days, by_port.get(port.id, []))
+            block = build_week_block(
+                port, days, by_port.get(port.id, []), pax_basis=pax_basis
+            )
             _draw_month(
                 pdf,
                 page_w,
@@ -80,7 +84,7 @@ def build_arrivals_calendar_pdf(
             pdf.showPage()
     else:
         for port, year, month, rows in group_port_months(bookings):
-            block = build_month_block(port, year, month, rows)
+            block = build_month_block(port, year, month, rows, pax_basis=pax_basis)
             _draw_month(
                 pdf,
                 page_w,
@@ -127,7 +131,7 @@ def _draw_month(
     y = page_h - MARGIN - HEADER_H
     y = draw_overview_band(pdf, x, y, table_w, overview)
     y = _draw_header(pdf, x, y, col_w, block.title, block.weekday_labels)
-    pos_h = 22.0 if weekly else POS_H
+    pos_h = 26.0 if weekly else POS_H
     date_h = 16.0 if weekly else DATE_H
     for week in block.weeks:
         y = _draw_week(pdf, x, y, col_w, week, pos_h=pos_h, date_h=date_h)
@@ -201,14 +205,39 @@ def _draw_week(
             x + col_w[0] + col_w[1] / 2, y - pos_h / 2 - 2.0, label
         )
         cx = x + col_w[0] + col_w[1]
-        pdf.setFont("Helvetica", 7 if pos_h > 14 else 6.2)
         for width, value in zip(col_w[2:], cells, strict=True):
-            text = fit_text(pdf, value, width - 4)
-            pdf.drawCentredString(cx + width / 2, y - pos_h / 2 - 2.0, text)
+            _draw_ship_cell(pdf, cx + width / 2, y, width, pos_h, value)
             cx += width
         _stroke(pdf, x, y - pos_h, col_w, pos_h)
         y -= pos_h
     return y
+
+
+def _draw_ship_cell(
+    pdf: canvas.Canvas,
+    cx: float,
+    y: float,
+    width: float,
+    pos_h: float,
+    value: str,
+) -> None:
+    pdf.setFillColor(INK)
+    lines = [line for line in str(value).split("\n") if line]
+    if not lines:
+        return
+    if len(lines) == 1:
+        size = 7 if pos_h > 18 else 6.2
+        pdf.setFont("Helvetica", size)
+        pdf.drawCentredString(cx, y - pos_h / 2 - 2.0, fit_text(pdf, lines[0], width - 4))
+        return
+    name_size = 6.6 if pos_h > 18 else 5.6
+    pax_size = 6.2 if pos_h > 18 else 5.4
+    gap = 6.4 if pos_h > 18 else 4.6
+    mid = y - pos_h / 2
+    pdf.setFont("Helvetica", name_size)
+    pdf.drawCentredString(cx, mid + gap / 2 - 1.2, fit_text(pdf, lines[0], width - 4))
+    pdf.setFont("Helvetica", pax_size)
+    pdf.drawCentredString(cx, mid - gap / 2 - 1.8, fit_text(pdf, lines[1], width - 4))
 
 
 def _stroke(
