@@ -9,6 +9,7 @@ from apps.accounts.permissions import (
     user_port_ids,
     user_role,
 )
+from apps.bookings.services.booking.viewer_scope import apply_viewer_open_market_filter
 from apps.bookings.models import Booking
 from apps.catalogs.models import Port, ShippingLine, Vessel
 
@@ -35,7 +36,7 @@ class GlobalSearchView(APIView):
             payload["ports"] = _search_ports(q, allowed_ports)
             payload["shipping_lines"] = _search_shipping_lines(q)
             payload["ships"] = _search_vessels(q)
-        payload["scales"] = _search_bookings(q, allowed_ports)
+        payload["scales"] = _search_bookings(q, allowed_ports, request.user)
         return Response(payload)
 
 
@@ -110,7 +111,7 @@ def _search_vessels(q: str) -> list[dict]:
     ]
 
 
-def _search_bookings(q: str, allowed_ports: set[int] | None) -> list[dict]:
+def _search_bookings(q: str, allowed_ports: set[int] | None, user) -> list[dict]:
     from apps.bookings.utils.list_search import apply_booking_text_search
 
     qs = apply_booking_text_search(Booking.objects.all(), q).select_related(
@@ -118,6 +119,7 @@ def _search_bookings(q: str, allowed_ports: set[int] | None) -> list[dict]:
     ).order_by("-call_date", "-id")
     if allowed_ports is not None:
         qs = qs.filter(port_id__in=allowed_ports)
+    qs = apply_viewer_open_market_filter(qs, user)
     return [
         {
             "id": booking.id,

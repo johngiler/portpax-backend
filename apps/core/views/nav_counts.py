@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import IsFrontendAppUser, user_port_ids, user_role
+from apps.bookings.services.booking.viewer_scope import apply_viewer_open_market_filter
 from apps.bookings.models import Booking, LongTermAgreement
 from apps.catalogs.models import Port, ShippingLine
 
@@ -35,6 +36,11 @@ class NavCountsView(APIView):
             bookings_qs = bookings_qs.filter(port_id__in=allowed_ports)
             ports_qs = ports_qs.filter(id__in=allowed_ports)
             lta_qs = lta_qs.filter(port_id__in=allowed_ports)
+        bookings_qs = apply_viewer_open_market_filter(bookings_qs, request.user)
+        if role != UserRole.ADMIN:
+            payload_lta = 0
+        else:
+            payload_lta = lta_qs.count()
 
         today = timezone.localdate()
         year_bookings = bookings_qs.filter(call_date__year=today.year)
@@ -44,7 +50,7 @@ class NavCountsView(APIView):
             "reports": year_bookings.count(),
             "ports": ports_qs.count(),
             "shipping_lines": ShippingLine.objects.filter(is_active=True).count(),
-            "lta_agreements": lta_qs.count(),
+            "lta_agreements": payload_lta,
             "users": None,
             "report_modules": REPORT_MODULE_COUNT,
         }

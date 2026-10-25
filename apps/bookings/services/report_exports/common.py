@@ -13,6 +13,7 @@ from apps.bookings.constants import (
     OCCUPATION_CONFLICT_STATUSES,
 )
 from apps.bookings.models import Booking, BookingStatus
+from apps.bookings.services.booking.viewer_scope import clamp_viewer_open_market_range
 
 PAX_BASIS_PLANNED = "planned"
 PAX_BASIS_CAPACITY = "capacity"
@@ -97,6 +98,8 @@ def scheduled_bookings_qs(
     status: str | None = None,
     without_lta: bool = False,
     include_cancelled: bool = False,
+    user=None,
+    request=None,
 ):
     """Bookings for occupancy / availability reports.
 
@@ -105,6 +108,10 @@ def scheduled_bookings_qs(
     ``include_cancelled`` adds Cancelada to the default occupancy set
     (e.g. tag-filtered movement summary of cancelled cohorts).
     """
+    actor = user if user is not None else getattr(request, "user", None)
+    date_from, date_to = clamp_viewer_open_market_range(actor, date_from, date_to)
+    if date_to < date_from:
+        return Booking.objects.none()
     qs = Booking.objects.filter(
         call_date__gte=date_from,
         call_date__lte=date_to,
@@ -152,6 +159,8 @@ def scheduled_bookings_qs(
 
 
 def years_in_range(date_from: date, date_to: date) -> list[int]:
+    if date_to < date_from:
+        return []
     return list(range(date_from.year, date_to.year + 1))
 
 

@@ -20,6 +20,10 @@ from rest_framework.response import Response
 from urllib.parse import quote
 
 from apps.accounts.permissions import DenyViewerWrites, user_can_access_port, user_port_ids
+from apps.bookings.services.booking.viewer_scope import (
+    apply_viewer_open_market_filter,
+    clamp_viewer_open_market_range,
+)
 from apps.bookings.models import Booking, BookingImportBatch, BookingRunBatch, BookingStatus
 from apps.bookings.utils.size_category_query import parse_size_category_params
 from apps.bookings.utils.status_query import (
@@ -219,6 +223,7 @@ class BookingViewSet(
         allowed_ports = user_port_ids(self.request.user)
         if allowed_ports is not None:
             qs = qs.filter(port_id__in=allowed_ports)
+        qs = apply_viewer_open_market_filter(qs, self.request.user)
         port_raw = self.request.query_params.get("port")
         if port_raw:
             port_ids: list[int] = []
@@ -1451,6 +1456,9 @@ class BookingViewSet(
         date_to = parse_date("date_to", default_to)
         if isinstance(date_to, Response):
             return date_to
+        date_from, date_to = clamp_viewer_open_market_range(
+            request.user, date_from, date_to
+        )
 
         port_ids = parse_id_list(request.query_params.get("port"))
         shipping_line_ids = parse_id_list(
@@ -1498,6 +1506,25 @@ class BookingViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+    def _parse_open_market_date_range(
+        self,
+        from_key: str,
+        to_key: str,
+        *,
+        required: bool = True,
+    ):
+        date_from, err = self._parse_iso_date_param(from_key, required=required)
+        if err:
+            return None, None, err
+        date_to, err = self._parse_iso_date_param(to_key, required=required)
+        if err:
+            return None, None, err
+        if date_from and date_to:
+            date_from, date_to = clamp_viewer_open_market_range(
+                self.request.user, date_from, date_to
+            )
+        return date_from, date_to, None
+
     @action(detail=False, methods=["get"], url_path="calendar-export")
     def calendar_export(self, request):
         """Export operational calendar rows for one or more ports and a date range.
@@ -1525,10 +1552,9 @@ class BookingViewSet(
         for port_id in port_ids:
             self._ensure_port_access(port_id)
 
-        date_from, err = self._parse_iso_date_param("call_date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("call_date_to")
+        date_from, date_to, err = self._parse_open_market_date_range(
+            "call_date_from", "call_date_to"
+        )
         if err:
             return err
 
@@ -1549,6 +1575,7 @@ class BookingViewSet(
         allowed_ports = user_port_ids(request.user)
         if allowed_ports is not None:
             qs = qs.filter(port_id__in=allowed_ports)
+        qs = apply_viewer_open_market_filter(qs, request.user)
         qs = qs.filter(
             port_id__in=port_ids,
             call_date__gte=date_from,
@@ -1670,10 +1697,9 @@ class BookingViewSet(
 
     @action(detail=False, methods=["get"], url_path="report-availability")
     def report_availability(self, request):
-        date_from, err = self._parse_iso_date_param("date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("date_to")
+        date_from, date_to, err = self._parse_open_market_date_range(
+            "date_from", "date_to"
+        )
         if err:
             return err
         port_id = self._optional_int_param("port")
@@ -1815,10 +1841,9 @@ class BookingViewSet(
 
     @action(detail=False, methods=["get"], url_path="report-ports-totals-matrix")
     def report_ports_totals_matrix(self, request):
-        date_from, err = self._parse_iso_date_param("date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("date_to")
+        date_from, date_to, err = self._parse_open_market_date_range(
+            "date_from", "date_to"
+        )
         if err:
             return err
         port_ids = self._optional_int_list_param("ports")
@@ -1850,10 +1875,9 @@ class BookingViewSet(
 
     @action(detail=False, methods=["get"], url_path="report-port-carrier-matrix")
     def report_port_carrier_matrix(self, request):
-        date_from, err = self._parse_iso_date_param("date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("date_to")
+        date_from, date_to, err = self._parse_open_market_date_range(
+            "date_from", "date_to"
+        )
         if err:
             return err
         port_id = self._optional_int_param("port")
@@ -1900,10 +1924,9 @@ class BookingViewSet(
 
     @action(detail=False, methods=["get"], url_path="report-port-trends")
     def report_port_trends(self, request):
-        date_from, err = self._parse_iso_date_param("date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("date_to")
+        date_from, date_to, err = self._parse_open_market_date_range(
+            "date_from", "date_to"
+        )
         if err:
             return err
         port_id = self._optional_int_param("port")
@@ -1950,10 +1973,9 @@ class BookingViewSet(
 
     @action(detail=False, methods=["get"], url_path="report-solicitudes-port")
     def report_solicitudes_port(self, request):
-        date_from, err = self._parse_iso_date_param("date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("date_to")
+        date_from, date_to, err = self._parse_open_market_date_range(
+            "date_from", "date_to"
+        )
         if err:
             return err
         port_id = self._optional_int_param("port")
@@ -2017,6 +2039,7 @@ class BookingViewSet(
             data = build_booking_movements_report(
                 year=year,
                 allowed_ports=user_port_ids(request.user),
+                user=request.user,
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -2024,10 +2047,9 @@ class BookingViewSet(
 
     @action(detail=False, methods=["get"], url_path="report-carrier-panorama")
     def report_carrier_panorama(self, request):
-        date_from, err = self._parse_iso_date_param("date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("date_to")
+        date_from, date_to, err = self._parse_open_market_date_range(
+            "date_from", "date_to"
+        )
         if err:
             return err
         shipping_line_ids = parse_id_list(
@@ -2174,16 +2196,17 @@ class BookingViewSet(
                 allowed = user_port_ids(request.user)
                 if fmt == "csv":
                     content = build_booking_movements_csv(
-                        year=year, allowed_ports=allowed
+                        year=year, allowed_ports=allowed, user=request.user
                     )
                 elif fmt == "pdf":
                     content = build_booking_movements_pdf(
-                        year=year, allowed_ports=allowed
+                        year=year, allowed_ports=allowed, user=request.user
                     )
                 else:
                     payload = build_booking_movements_report(
                         year=year,
                         allowed_ports=allowed,
+                        user=request.user,
                     )
                     content = build_booking_movements_xlsx(payload)
                 filename = booking_movements_filename(year, ext=fmt)
@@ -2200,10 +2223,9 @@ class BookingViewSet(
             )
             return response
 
-        date_from, err = self._parse_iso_date_param("date_from")
-        if err:
-            return err
-        date_to, err = self._parse_iso_date_param("date_to")
+        date_from, date_to, err = self._parse_open_market_date_range(
+            "date_from", "date_to"
+        )
         if err:
             return err
 

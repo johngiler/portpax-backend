@@ -591,6 +591,7 @@ def build_port_trends(
         port_id=port_id,
         allowed_ports=allowed_ports,
         without_lta=without_lta,
+        request=request,
     )
     if use_seasons:
         qs = _filter_qs_by_season(
@@ -1028,6 +1029,7 @@ def build_ports_totals_matrix(
         date_to=date_to,
         allowed_ports=scoped_ports,
         without_lta=without_lta,
+        request=request,
     )
     years = years_in_range(date_from, date_to)
     use_seasons = season_kind != SEASON_NATURAL
@@ -1155,6 +1157,7 @@ def build_port_carrier_matrix(
         port_id=port_id,
         allowed_ports=allowed_ports,
         without_lta=without_lta,
+        request=request,
     )
     years = years_in_range(date_from, date_to)
     use_seasons = season_kind != SEASON_NATURAL

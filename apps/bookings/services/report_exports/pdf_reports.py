@@ -729,9 +729,9 @@ def build_port_trends_pdf(**kwargs) -> bytes:
     return _build_doc(story)
 
 
-def build_booking_movements_pdf(*, year: int, allowed_ports=None) -> bytes:
+def build_booking_movements_pdf(*, year: int, allowed_ports=None, user=None) -> bytes:
     payload = build_booking_movements_report(
-        year=year, allowed_ports=allowed_ports)
+        year=year, allowed_ports=allowed_ports, user=user)
     note = str(payload.get("note") or "").strip()
     subtitle = f"Año {year}" + (f" · {note}" if note else "")
     story = _banner_flowables(

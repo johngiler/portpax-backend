@@ -223,6 +223,7 @@ def build_carrier_panorama(
         shipping_line_group_ids=effective_group_ids or None,
         allowed_ports=scoped,
         without_lta=without_lta,
+        request=request,
     )
     for booking in qs.iterator(chunk_size=500):
         period = period_for_call_date(booking.call_date, periods)

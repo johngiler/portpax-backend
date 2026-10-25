@@ -53,6 +53,11 @@ def user_may_edit_port_operations(user) -> bool:
     return user_role(user) in {UserRole.ADMIN, UserRole.PORT_OPERATOR}
 
 
+def user_may_access_lta(user) -> bool:
+    """LTA agreements are admin-only (not viewer, not operators)."""
+    return user_role(user) == UserRole.ADMIN
+
+
 class IsFrontendAppUser(BasePermission):
     """Allow only non-superusers with an assigned UserProfile role."""
 

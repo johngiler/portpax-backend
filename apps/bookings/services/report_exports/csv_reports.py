@@ -162,9 +162,9 @@ def build_port_trends_csv(**kwargs) -> bytes:
     return _csv_bytes(rows)
 
 
-def build_booking_movements_csv(*, year: int, allowed_ports=None) -> bytes:
+def build_booking_movements_csv(*, year: int, allowed_ports=None, user=None) -> bytes:
     payload = build_booking_movements_report(
-        year=year, allowed_ports=allowed_ports)
+        year=year, allowed_ports=allowed_ports, user=user)
     rows: list[list[Any]] = [
         [payload.get("title") or "Movimientos de bookings"],
         [f"Año {year}"],

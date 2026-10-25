@@ -228,7 +228,9 @@ def build_solicitudes_port_report(
         date_to=date_to,
         port_id=port_id,
         allowed_ports=set(allowed_ports) if allowed_ports is not None else None,
-        without_lta=without_lta)
+        without_lta=without_lta,
+        request=request,
+    )
 
     # Port summary: full occupancy set at port (no tag / naviera filter).
     port_qs = scheduled_bookings_qs(**base_kwargs).select_related("vessel")

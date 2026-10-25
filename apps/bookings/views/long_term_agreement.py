@@ -7,7 +7,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.accounts.permissions import DenyViewerWrites, user_port_ids
+from apps.accounts.permissions import IsAdminRole, user_port_ids
 from apps.audit.models import LtaAuditEntry
 from apps.audit.services.record import record_lta_audit
 from apps.bookings.models import Booking, BookingStatus, LongTermAgreement
@@ -92,7 +92,7 @@ def _enqueue_user_id(request) -> int | None:
 
 
 class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated, DenyViewerWrites]
+    permission_classes = [IsAuthenticated, IsAdminRole]
     serializer_class = LongTermAgreementSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     port_access_field = "port_id"

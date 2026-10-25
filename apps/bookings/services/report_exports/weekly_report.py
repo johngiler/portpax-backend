@@ -195,6 +195,7 @@ def _port_year_totals(
     allowed: set[int] | None,
     without_lta: bool,
     pax_basis: str,
+    request=None,
 ) -> dict[int, list[int]]:
     """Full-year port PAX totals (not week movements) for each call year column."""
     if not call_years:
@@ -208,6 +209,7 @@ def _port_year_totals(
         date_to=date_to,
         allowed_ports=allowed,
         without_lta=without_lta,
+        request=request,
     ).select_related("vessel")
     for booking in qs.iterator(chunk_size=500):
         cy = booking.call_date.year if booking.call_date else None
@@ -318,6 +320,7 @@ def build_weekly_report(
         allowed=allowed,
         without_lta=without_lta,
         pax_basis=basis,
+        request=request,
     )
 
     port_ids = sorted(set(pax_map.keys()) | set(port_year_totals.keys()))

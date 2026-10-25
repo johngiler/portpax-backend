@@ -142,6 +142,10 @@ def build_vessel_proximity_matrix(
     page: int | None = None,
     page_size: int = DEFAULT_MATRIX_PAGE_SIZE,
 ) -> dict:
+    from apps.bookings.services.booking.viewer_scope import (
+        apply_viewer_open_market_filter,
+    )
+
     if call_date_to < call_date_from:
         raise ValueError("call_date_to must be on or after call_date_from.")
 
@@ -162,10 +166,13 @@ def build_vessel_proximity_matrix(
 
     allowed_ports = user_port_ids(user)
 
-    qs = Booking.objects.filter(
-        vessel_id=vessel_id,
-        call_date__gte=call_date_from,
-        call_date__lte=call_date_to,
+    qs = apply_viewer_open_market_filter(
+        Booking.objects.filter(
+            vessel_id=vessel_id,
+            call_date__gte=call_date_from,
+            call_date__lte=call_date_to,
+        ),
+        user,
     ).select_related(
         "port",
         "vessel",

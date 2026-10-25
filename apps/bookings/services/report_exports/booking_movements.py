@@ -193,6 +193,7 @@ def build_booking_movements_report(
     *,
     year: int,
     allowed_ports: set[int] | list[int] | None = None,
+    user=None,
 ) -> dict[str, Any]:
     """
     Block A: event counts by movement kind × ops month.
@@ -220,13 +221,18 @@ def build_booking_movements_report(
         .order_by("created_at", "id")
     )
     booking_ids = {e.booking_id for e in entries if e.booking_id}
-    bookings = {
-        b.pk: b
-        for b in Booking.objects.filter(pk__in=booking_ids).select_related(
+    from apps.bookings.services.booking.viewer_scope import (
+        apply_viewer_open_market_filter,
+    )
+
+    bookings_qs = apply_viewer_open_market_filter(
+        Booking.objects.filter(pk__in=booking_ids).select_related(
             "port",
             "vessel",
-        )
-    }
+        ),
+        user,
+    )
+    bookings = {b.pk: b for b in bookings_qs}
 
     counts: dict[str, list[int]] = {k: [0] * 12 for k in MOVEMENT_KINDS}
     # port_id -> call_year -> month(0-11) -> pax

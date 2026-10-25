@@ -456,6 +456,7 @@ def _occupied_matching_days(
             port_id=port_id,
             allowed_ports=allowed_ports,
             status=None,
+            request=request,
         )
         .values_list("call_date", flat=True)
         .distinct()
@@ -480,6 +481,7 @@ def _density_matching_days(
             port_id=port_id,
             allowed_ports=allowed_ports,
             status=None,
+            request=request,
         )
         .values("call_date")
         .annotate(ship_count=Count("id"))
@@ -508,6 +510,7 @@ def _neighbor_bookings_for_days(
             port_id=port_id,
             allowed_ports=allowed_ports,
             status=None,
+            request=request,
         ).filter(call_date__in=page_days)
     )
     if not include_cancelled:
@@ -519,6 +522,7 @@ def _neighbor_bookings_for_days(
         port_id=port_id,
         allowed_ports=allowed_ports,
         status="c",
+        request=request,
     ).filter(call_date__in=page_days):
         if booking.id not in seen:
             bookings.append(booking)
@@ -678,8 +682,14 @@ def build_availability_data(
     matching days in the DB, page those days, then load *all* calls on the page
     days so neighbors stay visible. Opacity is a FE concern.
     """
+    from apps.bookings.services.booking.viewer_scope import (
+        clamp_viewer_open_market_range,
+    )
     from apps.bookings.services.report_exports.common import _merge_id_filters
 
+    date_from, date_to = clamp_viewer_open_market_range(
+        getattr(request, "user", None), date_from, date_to
+    )
     if allowed_ports is not None and port_id not in allowed_ports:
         raise ValueError("Puerto no permitido.")
     if ships_per_day is not None and (
@@ -814,6 +824,7 @@ def build_availability_data(
             port_id=port_id,
             allowed_ports=allowed_ports,
             status=None,
+            request=request,
         )
     )
     bookings_by_day, columns = _place_bookings_by_day(

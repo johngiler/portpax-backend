@@ -306,6 +306,15 @@ def build_dashboard_stats(
         date_from, date_to = date_to, date_from
 
     today = today or date.today()
+    from apps.bookings.services.booking.viewer_scope import (
+        apply_viewer_open_market_filter,
+        clamp_viewer_open_market_range,
+    )
+
+    actor = getattr(request, "user", None)
+    date_from, date_to = clamp_viewer_open_market_range(
+        actor, date_from, date_to, today=today
+    )
     basis = normalize_pax_basis(pax_basis)
     scoped_ports = [int(p) for p in (port_ids or []) if p]
     line_ids = _merge_ids(shipping_line_id, shipping_line_ids)
@@ -319,9 +328,12 @@ def build_dashboard_stats(
     }
     projected_pax = _projected_pax_expr(basis)
 
-    qs = _apply_scope(
-        Booking.objects.filter(call_date__gte=date_from, call_date__lte=date_to),
-        **scope_kwargs,
+    qs = apply_viewer_open_market_filter(
+        _apply_scope(
+            Booking.objects.filter(call_date__gte=date_from, call_date__lte=date_to),
+            **scope_kwargs,
+        ),
+        actor,
     )
 
     status_counts = {
@@ -347,7 +359,7 @@ def build_dashboard_stats(
         allowed_ports=allowed_ports,
     )
     position_count = positions_qs.count()
-    day_count = (date_to - date_from).days + 1
+    day_count = max(0, (date_to - date_from).days + 1)
     capacity_slot_days = position_count * day_count
     occupancy_rows = iter_occupancy_booking_rows(
         qs.filter(status__in=OCCUPANCY_STATUSES)
@@ -509,9 +521,12 @@ def build_dashboard_stats(
         ports_in_scope = ports_in_scope.filter(id__in=scoped_ports)
 
     # --- Pendientes de confirmar: Hold + LTA in dashboard date range ---
-    pending_base = _apply_scope(
-        Booking.objects.filter(call_date__gte=date_from, call_date__lte=date_to),
-        **scope_kwargs,
+    pending_base = apply_viewer_open_market_filter(
+        _apply_scope(
+            Booking.objects.filter(call_date__gte=date_from, call_date__lte=date_to),
+            **scope_kwargs,
+        ),
+        actor,
     )
     holds_pending = pending_base.filter(status=BookingStatus.H)
     lta_pending = pending_base.filter(status=BookingStatus.LTA)
@@ -568,7 +583,10 @@ def build_dashboard_stats(
     lta_total = lta_pending.count()
 
     # Legacy action_queue shape (Hold + NR from today) — kept for older clients.
-    forward_base = _apply_scope(Booking.objects.all(), **scope_kwargs)
+    forward_base = apply_viewer_open_market_filter(
+        _apply_scope(Booking.objects.all(), **scope_kwargs),
+        actor,
+    )
     holds_open = forward_base.filter(status=BookingStatus.H, call_date__gte=today)
     nr_open = forward_base.filter(status=BookingStatus.NR, call_date__gte=today)
     action_by_port_map: dict[int, dict] = {}
@@ -611,12 +629,15 @@ def build_dashboard_stats(
     # --- Current calendar week (Mon–Sun): ops snap, ignore dashboard filters ---
     week_from = today - timedelta(days=today.weekday())
     week_to = week_from + timedelta(days=6)
-    week_qs = _apply_scope(
-        Booking.objects.all(),
-        port_ids=None,
-        shipping_line_id=None,
-        shipping_line_group_id=None,
-        allowed_ports=allowed_ports,
+    week_qs = apply_viewer_open_market_filter(
+        _apply_scope(
+            Booking.objects.all(),
+            port_ids=None,
+            shipping_line_id=None,
+            shipping_line_group_id=None,
+            allowed_ports=allowed_ports,
+        ),
+        actor,
     ).filter(
         call_date__gte=week_from,
         call_date__lte=week_to,
@@ -648,9 +669,12 @@ def build_dashboard_stats(
     # --- Spec 7.7: YoY vs same calendar window prior year ---
     prior_from = _shift_year(date_from, -1)
     prior_to = _shift_year(date_to, -1)
-    prior_qs = _apply_scope(
-        Booking.objects.filter(call_date__gte=prior_from, call_date__lte=prior_to),
-        **scope_kwargs,
+    prior_qs = apply_viewer_open_market_filter(
+        _apply_scope(
+            Booking.objects.filter(call_date__gte=prior_from, call_date__lte=prior_to),
+            **scope_kwargs,
+        ),
+        actor,
     )
     prior_active = prior_qs.exclude(status=BookingStatus.C)
     prior_calls = prior_active.count()
