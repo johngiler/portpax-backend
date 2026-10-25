@@ -72,6 +72,9 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
     vessel_names = serializers.SerializerMethodField()
     position_codes = serializers.SerializerMethodField()
     linked_bookings_count = serializers.IntegerField(read_only=True, default=0)
+    confirmed_bookings_count = serializers.IntegerField(read_only=True, default=0)
+    pending_lta_bookings_count = serializers.IntegerField(read_only=True, default=0)
+    total_pax = serializers.IntegerField(read_only=True, default=0)
     contract_file = serializers.FileField(
         required=False,
         allow_null=True,
@@ -116,6 +119,9 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             "bookings_generated",
             "notes",
             "linked_bookings_count",
+            "confirmed_bookings_count",
+            "pending_lta_bookings_count",
+            "total_pax",
             "contract_file",
             "contract_file_url",
             "contract_file_name",
@@ -131,6 +137,9 @@ class LongTermAgreementSerializer(serializers.ModelSerializer):
             "contract_file_url",
             "contract_file_name",
             "linked_bookings_count",
+            "confirmed_bookings_count",
+            "pending_lta_bookings_count",
+            "total_pax",
             "bookings_generated",
         ]
         extra_kwargs = {

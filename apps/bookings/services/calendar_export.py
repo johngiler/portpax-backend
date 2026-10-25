@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import csv
 from datetime import date
-from io import BytesIO, StringIO
-
-from openpyxl import Workbook
-from openpyxl.styles import Font
+from io import StringIO
 
 from apps.bookings.models import Booking
+from apps.bookings.services.arrivals_pdf.calendar_xlsx import (
+    build_arrivals_calendar_xlsx,
+)
 from apps.bookings.services.booking_export import (
     STATUS_LABELS_ES,
     _format_time,
@@ -67,18 +67,23 @@ def build_calendar_csv(bookings: list[Booking]) -> str:
     return buffer.getvalue()
 
 
-def build_calendar_xlsx(bookings: list[Booking]) -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Calendario"
-    ws.append(HEADERS)
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-    for booking in bookings:
-        ws.append(_row(booking))
-    stream = BytesIO()
-    wb.save(stream)
-    return stream.getvalue()
+def build_calendar_xlsx(
+    bookings: list[Booking],
+    overview=None,
+    *,
+    mode: str = "monthly",
+    date_from: date | None = None,
+    date_to: date | None = None,
+    ports: list | None = None,
+) -> bytes:
+    return build_arrivals_calendar_xlsx(
+        bookings,
+        overview=overview,
+        mode=mode,
+        date_from=date_from,
+        date_to=date_to,
+        ports=ports,
+    )
 
 
 def calendar_export_filename(

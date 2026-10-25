@@ -139,6 +139,28 @@ def _avg_pax_per_call(calls: int, pax: int) -> float:
     return round(pax / calls, 1)
 
 
+def _pick_main_vessel(
+    counts: dict[int, int],
+    names: dict[int, str],
+) -> dict[str, Any] | None:
+    """Vessel with the most calls at this port; name as tie-breaker."""
+    if not counts:
+        return None
+    vessel_id = max(
+        counts,
+        key=lambda vid: (counts[vid], (names.get(vid) or "").lower()),
+    )
+    name = (names.get(vessel_id) or "").strip()
+    if not name:
+        return None
+    return {"id": vessel_id, "name": name}
+
+
+def _main_vessel_label(item: dict[str, Any] | None) -> str:
+    vessel = (item or {}).get("main_vessel") or {}
+    return str(vessel.get("name") or "").strip() or "—"
+
+
 def build_carrier_panorama(
     *,
     date_from: date,
@@ -190,6 +212,10 @@ def build_carrier_panorama(
     cells: dict[int, dict[str, dict[str, int]]] = defaultdict(
         lambda: defaultdict(lambda: {"calls": 0, "pax": 0})
     )
+    vessel_calls: dict[int, dict[int, int]] = defaultdict(
+        lambda: defaultdict(int)
+    )
+    vessel_names: dict[int, str] = {}
     qs = scheduled_bookings_qs(
         date_from=date_from,
         date_to=date_to,
@@ -210,6 +236,11 @@ def build_carrier_panorama(
         if year_cell is not None:
             year_cell["calls"] += 1
             year_cell["pax"] += pax
+        vessel = getattr(booking, "vessel", None)
+        if vessel is not None:
+            vessel_calls[booking.port_id][vessel.id] += 1
+            if vessel.id not in vessel_names:
+                vessel_names[vessel.id] = (vessel.name or "").strip()
 
     rows: list[dict[str, Any]] = []
     totals_by_period = {key: {"calls": 0, "pax": 0} for key in period_keys}
@@ -250,6 +281,10 @@ def build_carrier_panorama(
                 "logo": assets["url"],
                 "logo_name": assets["name"],
                 "logo_path": assets["path"],
+                "main_vessel": _pick_main_vessel(
+                    vessel_calls.get(port.id) or {},
+                    vessel_names,
+                ),
                 "by_period": by_period,
                 # Alias for older clients that still read by_year.
                 "by_year": [
@@ -266,6 +301,14 @@ def build_carrier_panorama(
                 "total_pax": row_pax,
             }
         )
+
+    rows.sort(
+        key=lambda row: (
+            -int(row.get("total_pax") or 0),
+            -int(row.get("total_calls") or 0),
+            (row.get("port_name") or "").lower(),
+        )
+    )
 
     share_basis = grand_pax if grand_pax > 0 else grand_calls
     port_share = []
@@ -412,7 +455,7 @@ def _period_labels(payload: dict[str, Any]) -> list[str]:
 
 
 def _matrix_headers(labels: list[str]) -> list[str]:
-    headers = ["Puerto"]
+    headers = ["Puerto", "Barco principal"]
     for label in labels:
         headers.extend([f"{label} arribos", f"{label} PAX"])
     headers.extend(["Total arribos", "Total PAX"])
@@ -438,9 +481,6 @@ def build_carrier_panorama_csv(payload: dict[str, Any]) -> bytes:
     rows: list[list[Any]] = [
         [payload.get("title") or "Panorama Navieras"],
     ]
-    subtitle = str(payload.get("subtitle") or "").strip()
-    if subtitle:
-        rows.append([subtitle])
     rows.append([])
     rows.append(["Indicador", "Valor"])
     rows.append(["Arribos totales", kpis.get("total_calls") or 0])
@@ -452,19 +492,6 @@ def build_carrier_panorama_csv(payload: dict[str, Any]) -> bytes:
         ]
     )
     rows.append(["Promedio PAX/arribo", kpis.get("avg_pax_per_call") or 0])
-    for year_kpi in kpis.get("by_year") or []:
-        year = year_kpi.get("year")
-        rows.append([f"Arribos {year}", year_kpi.get("calls") or 0])
-        rows.append([f"PAX {year}", year_kpi.get("pax") or 0])
-        rows.append(
-            [f"Promedio PAX/arribo {year}", year_kpi.get("avg_pax_per_call") or 0]
-        )
-        calls_yoy = year_kpi.get("calls_yoy_pct")
-        pax_yoy = year_kpi.get("pax_yoy_pct")
-        if calls_yoy is not None:
-            rows.append([f"YoY arribos {year}", f"{calls_yoy}%"])
-        if pax_yoy is not None:
-            rows.append([f"YoY PAX {year}", f"{pax_yoy}%"])
     rows.append([])
     rows.append(["Participación por puerto"])
     rows.append(["Puerto", "Arribos", "PAX", "%"])
@@ -483,9 +510,15 @@ def build_carrier_panorama_csv(payload: dict[str, Any]) -> bytes:
     )
     rows.append(_matrix_headers(labels))
     for item in payload.get("rows") or []:
-        rows.append([item.get("port_name"), *_matrix_values(item, labels)])
+        rows.append(
+            [
+                item.get("port_name"),
+                _main_vessel_label(item),
+                *_matrix_values(item, labels),
+            ]
+        )
     totals = payload.get("totals") or {}
-    rows.append(["TOTAL", *_matrix_values(totals, labels)])
+    rows.append(["TOTAL", "—", *_matrix_values(totals, labels)])
     return _csv_bytes(rows)
 
 
@@ -534,12 +567,15 @@ def build_carrier_panorama_xlsx(payload: dict[str, Any]) -> bytes:
     ws.title = _excel_sheet_title(payload.get("subject_name") or "Panorama")
     prepare_report_sheet(ws)
 
+    from apps.bookings.services.arrivals_pdf.logo import ports_from_report_payload
+
     row = write_report_banner(
         ws,
         1,
         title=str(payload.get("title") or "Panorama Navieras"),
-        subtitle=str(payload.get("subtitle") or "").strip() or None,
+        subtitle=None,
         col_span=col_span,
+        ports=ports_from_report_payload(payload),
     )
 
     write_section_banner(ws, row, "Indicadores", col_span)
@@ -555,19 +591,6 @@ def build_carrier_panorama_xlsx(payload: dict[str, Any]) -> bytes:
         ],
         ["Promedio PAX/arribo", kpis.get("avg_pax_per_call") or 0],
     ]
-    for year_kpi in kpis.get("by_year") or []:
-        year = year_kpi.get("year")
-        kpi_rows.append([f"Arribos {year}", year_kpi.get("calls") or 0])
-        kpi_rows.append([f"PAX {year}", year_kpi.get("pax") or 0])
-        kpi_rows.append(
-            [f"Promedio PAX/arribo {year}", year_kpi.get("avg_pax_per_call") or 0]
-        )
-        calls_yoy = year_kpi.get("calls_yoy_pct")
-        pax_yoy = year_kpi.get("pax_yoy_pct")
-        if calls_yoy is not None:
-            kpi_rows.append([f"YoY arribos {year}", f"{calls_yoy}%"])
-        if pax_yoy is not None:
-            kpi_rows.append([f"YoY PAX {year}", f"{pax_yoy}%"])
     kpi_start = row
     row = _write_numeric_rows(
         ws,
@@ -613,11 +636,15 @@ def build_carrier_panorama_xlsx(payload: dict[str, Any]) -> bytes:
     row += 1
     body_start = row
     body_rows = [
-        [item.get("port_name"), *_matrix_values(item, labels)]
+        [
+            item.get("port_name"),
+            _main_vessel_label(item),
+            *_matrix_values(item, labels),
+        ]
         for item in payload.get("rows") or []
     ]
     totals = payload.get("totals") or {}
-    body_rows.append(["TOTAL", *_matrix_values(totals, labels)])
+    body_rows.append(["TOTAL", "—", *_matrix_values(totals, labels)])
     row = _write_numeric_rows(
         ws, row, body_rows, col_count=len(matrix_headers), emphasize_last=True
     )

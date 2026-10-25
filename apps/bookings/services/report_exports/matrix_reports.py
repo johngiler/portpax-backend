@@ -64,6 +64,10 @@ MONTH_LABELS = (
     "NOV",
     "DIC",
 )
+# Cruise year (Summer + Winter): May → April.
+CRUISE_YEAR_MONTHS = (5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3, 4)
+CRUISE_YEAR_MONTH_LABELS = tuple(MONTH_LABELS[month - 1] for month in CRUISE_YEAR_MONTHS)
+CALENDAR_MONTHS = tuple(range(1, 13))
 
 DEFAULT_MATRIX_SECTION_PAGE_SIZE = 2
 DEFAULT_TRENDS_LINE_PAGE_SIZE = 10
@@ -292,9 +296,32 @@ def _aggregate_trends_by_line_periods(
     return data, meta
 
 
+def _axis_growth_prev_indices(
+    row_axis: list[tuple[Any, Any]],
+    periods,
+) -> list[int | None]:
+    """Natural years: YoY. Temporadas: Summer vs prior Summer, Winter vs prior Winter."""
+    if not periods:
+        return [None if idx == 0 else idx - 1 for idx in range(len(row_axis))]
+    by_key = {period.key: period for period in periods}
+    last_of_kind: dict[str, int] = {}
+    out: list[int | None] = []
+    for idx, (key, _label) in enumerate(row_axis):
+        period = by_key.get(key)
+        kind = period.kind if period is not None else None
+        if kind:
+            out.append(last_of_kind.get(kind))
+            last_of_kind[kind] = idx
+        else:
+            out.append(None if idx == 0 else idx - 1)
+    return out
+
+
 def _trend_metrics_for_axis(
     axis_cells: dict[Any, dict[str, int]],
     row_axis: list[tuple[Any, Any]],
+    *,
+    prev_indices: list[int | None] | None = None,
 ) -> dict[str, Any]:
     """Build Ships/PAX + growth along natural years or season periods."""
     by_year: list[dict[str, Any]] = []
@@ -318,13 +345,16 @@ def _trend_metrics_for_axis(
     growth: list[dict[str, Any]] = []
     for idx, (_key, label) in enumerate(row_axis):
         pax = by_year[idx]["pax"]
-        prev = by_year[idx - 1]["pax"] if idx > 0 else 0
-        growth.append(
-            {
-                "year": label,
-                "pct": _growth_pct(pax, prev) if idx > 0 else None,
-            }
+        prev_idx = (
+            prev_indices[idx]
+            if prev_indices is not None
+            else (idx - 1 if idx > 0 else None)
         )
+        if prev_idx is None:
+            pct = None
+        else:
+            pct = _growth_pct(pax, by_year[prev_idx]["pax"])
+        growth.append({"year": label, "pct": pct})
     return {
         "by_year": by_year,
         "growth": growth,
@@ -363,12 +393,15 @@ def _build_trends_groups(
     line_logos: dict[int, str | None],
     row_axis: list[tuple[Any, Any]],
     axis_keys: list[Any],
+    prev_indices: list[int | None] | None = None,
 ) -> list[dict[str, Any]]:
     groups_map: dict[int, dict[str, Any]] = {}
     for line_id in line_ids:
         info = line_meta.get(line_id, {})
         group_id = int(info.get("group_id") or 0)
-        metrics = _trend_metrics_for_axis(line_data[line_id], row_axis)
+        metrics = _trend_metrics_for_axis(
+            line_data[line_id], row_axis, prev_indices=prev_indices
+        )
         line_row = {
             "shipping_line_id": line_id,
             "code": info.get("code") or "",
@@ -397,6 +430,7 @@ def _build_trends_groups(
         group_metrics = _trend_metrics_for_axis(
             _sum_axis_cells(line_data, lids, axis_keys),
             row_axis,
+            prev_indices=prev_indices,
         )
         groups.append({**group, **group_metrics})
     groups.sort(
@@ -408,40 +442,43 @@ def _build_trends_groups(
     return groups
 
 
-def _build_by_line_month(
-    qs,
+def _line_axis_metric_sum(
+    line_data: dict[int, dict[Any, dict[str, int]]],
+    line_id: int,
+    metric: str,
+) -> int:
+    return sum(
+        int(cell.get(metric, 0) or 0)
+        for cell in line_data.get(line_id, {}).values()
+    )
+
+
+def _build_by_line_period(
     *,
+    line_data: dict[int, dict[Any, dict[str, int]]],
     line_meta: dict[int, dict[str, Any]],
+    row_axis: list[tuple[Any, Any]],
     focus_ids: list[int] | None,
     others_ids: list[int],
-    pax_basis: str,
     limit: int = 8,
 ) -> dict[str, Any]:
-    """Monthly calls/PAX by shipping line (dashboard combo-chart shape)."""
-    month_map: dict[int, dict[int, dict[str, int]]] = defaultdict(
-        lambda: {m: {"calls": 0, "pax": 0} for m in range(1, 13)}
-    )
-    for booking in qs.iterator(chunk_size=500):
-        lid = booking.shipping_line_id
-        if lid is None:
-            continue
-        cell = month_map[lid][booking.call_date.month]
-        cell["calls"] += 1
-        cell["pax"] += booking_pax(booking, pax_basis=pax_basis)
+    """Calls/PAX by shipping line along the report axis (years or seasons)."""
+    labels = [str(label) for _key, label in row_axis]
 
     def series_for(line_id: int, name: str, code: str) -> dict[str, Any]:
-        months = month_map.get(line_id, {})
+        cells = line_data.get(line_id, {})
         return {
             "shipping_line_id": line_id,
             "name": name,
             "code": code,
-            "months": [
+            "points": [
                 {
-                    "month": m,
-                    "calls": int(months.get(m, {}).get("calls", 0) or 0),
-                    "passengers": int(months.get(m, {}).get("pax", 0) or 0),
+                    "key": key,
+                    "label": str(label),
+                    "calls": int(cells.get(key, {}).get("calls", 0) or 0),
+                    "passengers": int(cells.get(key, {}).get("pax", 0) or 0),
                 }
-                for m in range(1, 13)
+                for key, label in row_axis
             ],
         }
 
@@ -450,7 +487,7 @@ def _build_by_line_month(
         ranked = sorted(
             focus_ids,
             key=lambda lid: (
-                -sum(int(c["pax"]) for c in month_map.get(lid, {}).values()),
+                -_line_axis_metric_sum(line_data, lid, "pax"),
                 (line_meta.get(lid, {}).get("name") or "").lower(),
             ),
         )
@@ -464,31 +501,32 @@ def _build_by_line_month(
                 )
             )
         if others_ids:
-            others_months = {m: {"calls": 0, "pax": 0} for m in range(1, 13)}
-            for lid in others_ids:
-                for m, cell in month_map.get(lid, {}).items():
-                    others_months[m]["calls"] += int(cell.get("calls", 0) or 0)
-                    others_months[m]["pax"] += int(cell.get("pax", 0) or 0)
+            combined = _sum_axis_cells(
+                line_data, others_ids, [key for key, _ in row_axis]
+            )
             lines_out.append(
                 {
                     "shipping_line_id": -1,
                     "name": "Otros",
                     "code": "",
-                    "months": [
+                    "points": [
                         {
-                            "month": m,
-                            "calls": others_months[m]["calls"],
-                            "passengers": others_months[m]["pax"],
+                            "key": key,
+                            "label": str(label),
+                            "calls": int(combined.get(key, {}).get("calls", 0) or 0),
+                            "passengers": int(
+                                combined.get(key, {}).get("pax", 0) or 0
+                            ),
                         }
-                        for m in range(1, 13)
+                        for key, label in row_axis
                     ],
                 }
             )
     else:
         ranked = sorted(
-            month_map.keys(),
+            line_data.keys(),
             key=lambda lid: (
-                -sum(int(c["calls"]) for c in month_map[lid].values()),
+                -_line_axis_metric_sum(line_data, lid, "calls"),
                 (line_meta.get(lid, {}).get("name") or "").lower(),
             ),
         )[:limit]
@@ -501,7 +539,17 @@ def _build_by_line_month(
                     info.get("code") or "",
                 )
             )
-    return {"lines": lines_out}
+    return {"labels": labels, "lines": lines_out}
+
+
+def _daily_call_rows(qs) -> list[dict[str, Any]]:
+    counts: dict[date, int] = defaultdict(int)
+    for booking in qs.iterator(chunk_size=500):
+        counts[booking.call_date] += 1
+    return [
+        {"date": day.isoformat(), "calls": counts[day]}
+        for day in sorted(counts)
+    ]
 
 
 def build_port_trends(
@@ -534,6 +582,7 @@ def build_port_trends(
         row_axis = _natural_row_axis(years)
         column_labels = list(years)
     axis_keys = [key for key, _ in row_axis]
+    prev_indices = _axis_growth_prev_indices(row_axis, periods)
 
     # Full port scope — Otros needs bookings outside the carrier filter.
     qs = scheduled_bookings_qs(
@@ -573,6 +622,7 @@ def build_port_trends(
         line_logos=line_logos,
         row_axis=row_axis,
         axis_keys=axis_keys,
+        prev_indices=prev_indices,
     )
 
     others_group: dict[str, Any] | None = None
@@ -592,12 +642,17 @@ def build_port_trends(
                     "code": info.get("code") or "",
                     "name": info.get("name") or f"Línea {lid}",
                     "logo": line_logos.get(lid),
-                    **_trend_metrics_for_axis(line_data[lid], row_axis),
+                    **_trend_metrics_for_axis(
+                        line_data[lid],
+                        row_axis,
+                        prev_indices=prev_indices,
+                    ),
                 }
             )
         others_metrics = _trend_metrics_for_axis(
             _sum_axis_cells(line_data, others_ids, axis_keys),
             row_axis,
+            prev_indices=prev_indices,
         )
         others_group = {
             "shipping_line_group_id": -1,
@@ -611,6 +666,7 @@ def build_port_trends(
     totals = _trend_metrics_for_axis(
         _sum_axis_cells(line_data, list(line_data.keys()), axis_keys),
         row_axis,
+        prev_indices=prev_indices,
     )
 
     page_groups, pagination = _paginate_items(
@@ -620,19 +676,20 @@ def build_port_trends(
         default_page_size=DEFAULT_TRENDS_LINE_PAGE_SIZE,
     )
 
-    by_line_month = _build_by_line_month(
-        qs,
+    by_line_period = _build_by_line_period(
+        line_data=line_data,
         line_meta=line_meta,
+        row_axis=row_axis,
         focus_ids=focus_ids if has_selection else None,
         others_ids=others_ids,
-        pax_basis=pax_basis,
     )
+    daily_calls = {"days": _daily_call_rows(qs)}
 
     port = Port.objects.get(pk=port_id)
     port_logo = _media_url(request, port.logo)
     port_label = _port_friendly_name(port)
     growth_note = (
-        "Growth % = variación vs período anterior de PAX."
+        "Growth % = variación Summer vs Summer y Winter vs Winter de PAX."
         if use_seasons
         else "Growth % = variación YoY de PAX."
     )
@@ -662,7 +719,8 @@ def build_port_trends(
         "groups": page_groups,
         "others": others_group,
         "totals": totals,
-        "by_line_month": by_line_month,
+        "by_line_period": by_line_period,
+        "daily_calls": daily_calls,
         "note": note,
         **pagination,
     }
@@ -674,18 +732,19 @@ def _year_rows_metric(
     metric: str,
     *,
     include_column_totals: bool = True,
+    month_order: tuple[int, ...] = CALENDAR_MONTHS,
 ) -> list[dict[str, Any]]:
     """Build matrix rows. row_axis = [(agg_key, display_label), ...]."""
     rows: list[dict[str, Any]] = []
-    month_totals = [0] * 12
+    month_totals = [0] * len(month_order)
     grand = 0
     for key, label in row_axis:
         months = []
         year_total = 0
-        for month in range(1, 13):
+        for index, month in enumerate(month_order):
             value = agg.get(key, {}).get(month, {}).get(metric, 0)
             months.append(value)
-            month_totals[month - 1] += value
+            month_totals[index] += value
             year_total += value
         rows.append({"year": label, "months": months, "total": year_total})
         grand += year_total
@@ -707,6 +766,50 @@ def _natural_row_axis(years: list[int]) -> list[tuple[Any, Any]]:
 
 def _season_row_axis(periods) -> list[tuple[Any, Any]]:
     return [(period.key, period.label) for period in periods]
+
+
+def _cruise_year_key(year: int) -> str:
+    return f"cruise-{year}"
+
+
+def _cruise_year_label(year: int) -> str:
+    return f"{year}/{year + 1}"
+
+
+def _cruise_year_row_axis(periods) -> list[tuple[str, str]]:
+    """One row per cruise year (May–Apr): Summer + Winter of the same start year."""
+    seen: list[int] = []
+    for period in periods:
+        if period.year not in seen:
+            seen.append(period.year)
+    return [
+        (_cruise_year_key(year), _cruise_year_label(year)) for year in seen
+    ]
+
+
+def _collapse_period_agg_to_cruise_year(data, periods):
+    """entity -> period_key -> month  →  entity -> cruise-year -> month."""
+    key_map = {period.key: _cruise_year_key(period.year) for period in periods}
+    collapsed: dict[Any, dict[Any, dict[int, dict[str, int]]]] = defaultdict(
+        _empty_keyed_months
+    )
+    for entity_id, keyed in data.items():
+        for period_key, months in keyed.items():
+            cruise_key = key_map.get(period_key)
+            if cruise_key is None:
+                continue
+            dest_year = collapsed[entity_id][cruise_key]
+            for month, cell in months.items():
+                dest = dest_year[month]
+                dest["calls"] += int(cell.get("calls") or 0)
+                dest["pax"] += int(cell.get("pax") or 0)
+    return collapsed
+
+
+def _matrix_month_axis(use_seasons: bool) -> tuple[list[str], tuple[int, ...]]:
+    if use_seasons:
+        return list(CRUISE_YEAR_MONTH_LABELS), CRUISE_YEAR_MONTHS
+    return list(MONTH_LABELS), CALENDAR_MONTHS
 
 
 def _period_span_label(periods) -> str:
@@ -795,18 +898,28 @@ def _matrix_section(
     *,
     is_total: bool = False,
     include_column_totals: bool = True,
+    month_order: tuple[int, ...] = CALENDAR_MONTHS,
     logo: str | None = None,
     logo_kind: str | None = None,
     logo_name: str | None = None,
     logo_path: str | None = None,
+    port_id: int | None = None,
 ) -> dict[str, Any]:
     section: dict[str, Any] = {
         "label": label,
         "calls": _year_rows_metric(
-            agg, row_axis, "calls", include_column_totals=include_column_totals
+            agg,
+            row_axis,
+            "calls",
+            include_column_totals=include_column_totals,
+            month_order=month_order,
         ),
         "pax": _year_rows_metric(
-            agg, row_axis, "pax", include_column_totals=include_column_totals
+            agg,
+            row_axis,
+            "pax",
+            include_column_totals=include_column_totals,
+            month_order=month_order,
         ),
         "is_total": is_total,
     }
@@ -818,6 +931,8 @@ def _matrix_section(
         section["logo_name"] = logo_name
     if logo_path:
         section["logo_path"] = logo_path
+    if port_id:
+        section["port_id"] = port_id
     return section
 
 
@@ -900,6 +1015,12 @@ def build_ports_totals_matrix(
     page: int | None = None,
     page_size: int | None = None,
 ) -> dict[str, Any]:
+    """
+    CALL/PAX matrices per port.
+
+    Columns stay months. Rows are calendar years (natural) or one cruise-year
+    row (May–Apr: Summer + Winter) when Temporadas is on.
+    """
     season_kind = normalize_panorama_season(season)
     scoped_ports = _scope_allowed_ports(allowed_ports, port_ids)
     qs = scheduled_bookings_qs(
@@ -915,6 +1036,7 @@ def build_ports_totals_matrix(
         if use_seasons
         else []
     )
+    month_labels, month_order = _matrix_month_axis(use_seasons)
     if use_seasons:
         qs = _filter_qs_by_season(
             qs, date_from=date_from, date_to=date_to, season=season_kind
@@ -922,7 +1044,8 @@ def build_ports_totals_matrix(
         port_data, port_meta = _aggregate_by_port_periods(
             qs, periods, pax_basis=pax_basis
         )
-        row_axis = _season_row_axis(periods)
+        port_data = _collapse_period_agg_to_cruise_year(port_data, periods)
+        row_axis = _cruise_year_row_axis(periods)
         axis_keys = [key for key, _ in row_axis]
         row_label_header = "Temporada"
     else:
@@ -941,6 +1064,7 @@ def build_ports_totals_matrix(
             row_axis,
             is_total=True,
             include_column_totals=False,
+            month_order=month_order,
         ),
     )
 
@@ -962,10 +1086,12 @@ def build_ports_totals_matrix(
                 port_data[port_id],
                 row_axis,
                 include_column_totals=False,
+                month_order=month_order,
                 logo=assets.get("url"),
                 logo_name=assets.get("name"),
                 logo_path=assets.get("path"),
                 logo_kind="port",
+                port_id=port_id,
             )
         )
 
@@ -977,8 +1103,9 @@ def build_ports_totals_matrix(
     )
 
     note = pax_basis_note(pax_basis)
-    span = _period_span_label(periods) if use_seasons else ""
-    if use_seasons and span:
+    if use_seasons and row_axis:
+        labels = [str(label) for _key, label in row_axis]
+        span = labels[0] if len(labels) == 1 else f"{labels[0]}–{labels[-1]}"
         note = f"{note} Filas: {span}."
 
     return {
@@ -989,7 +1116,7 @@ def build_ports_totals_matrix(
         "without_lta": without_lta,
         "pax_basis": pax_basis,
         "season": season_kind,
-        "month_labels": list(MONTH_LABELS),
+        "month_labels": month_labels,
         "years": years,
         "periods": [p.as_dict() for p in periods] if use_seasons else [],
         "row_label_header": row_label_header,
@@ -1017,8 +1144,8 @@ def build_port_carrier_matrix(
     """
     CALL/PAX matrices per shipping line at one port.
 
-    Columns stay months. Rows are calendar years (natural) or Summer/Winter
-    season titles (Temporadas) — same dual-matrix layout either way.
+    Columns stay months. Rows are calendar years (natural) or one cruise-year
+    row (May–Apr: Summer + Winter) when Temporadas is on.
     """
     season_kind = normalize_panorama_season(season)
     port = Port.objects.get(pk=port_id)
@@ -1036,6 +1163,7 @@ def build_port_carrier_matrix(
         if use_seasons
         else []
     )
+    month_labels, month_order = _matrix_month_axis(use_seasons)
     if use_seasons:
         qs = _filter_qs_by_season(
             qs, date_from=date_from, date_to=date_to, season=season_kind
@@ -1043,7 +1171,8 @@ def build_port_carrier_matrix(
         line_data, line_meta = _aggregate_by_line_periods(
             qs, periods, pax_basis=pax_basis
         )
-        row_axis = _season_row_axis(periods)
+        line_data = _collapse_period_agg_to_cruise_year(line_data, periods)
+        row_axis = _cruise_year_row_axis(periods)
         axis_keys = [key for key, _ in row_axis]
         row_label_header = "Temporada"
     else:
@@ -1070,10 +1199,12 @@ def build_port_carrier_matrix(
             combined,
             row_axis,
             is_total=True,
+            month_order=month_order,
             logo=port_assets["url"],
             logo_name=port_assets["name"],
             logo_path=port_assets["path"],
             logo_kind="port",
+            port_id=port.id,
         )
     )
 
@@ -1101,6 +1232,7 @@ def build_port_carrier_matrix(
                 name or code,
                 line_data[line_id],
                 row_axis,
+                month_order=month_order,
                 logo=assets.get("url"),
                 logo_name=assets.get("name"),
                 logo_path=assets.get("path"),
@@ -1116,6 +1248,7 @@ def build_port_carrier_matrix(
                 "Otros",
                 others_combined,
                 row_axis,
+                month_order=month_order,
                 logo_kind="shipping_line",
             )
         )
@@ -1128,8 +1261,9 @@ def build_port_carrier_matrix(
     )
 
     note = pax_basis_note(pax_basis)
-    span = _period_span_label(periods) if use_seasons else ""
-    if use_seasons and span:
+    if use_seasons and row_axis:
+        labels = [str(label) for _key, label in row_axis]
+        span = labels[0] if len(labels) == 1 else f"{labels[0]}–{labels[-1]}"
         note = f"{note} Filas: {span}."
 
     return {
@@ -1146,7 +1280,7 @@ def build_port_carrier_matrix(
         "without_lta": without_lta,
         "pax_basis": pax_basis,
         "season": season_kind,
-        "month_labels": list(MONTH_LABELS),
+        "month_labels": month_labels,
         "years": years,
         "periods": [p.as_dict() for p in periods] if use_seasons else [],
         "row_label_header": row_label_header,
@@ -1179,6 +1313,8 @@ def _write_matrix_block(
     sections: list[dict[str, Any]],
     metric_key: str,
     row_label_header: str,
+    month_labels: list[str] | tuple[str, ...] | None = None,
+    banner_ports: list | None = None,
 ) -> int:
     col_span = 14
     row = write_report_banner(
@@ -1187,12 +1323,24 @@ def _write_matrix_block(
         title=title,
         subtitle=subtitle,
         col_span=col_span,
+        ports=banner_ports,
     )
     for section in sections:
-        write_section_banner(ws, row, section["label"], col_span)
+        write_section_banner(
+            ws,
+            row,
+            section["label"],
+            col_span,
+            logo_path=section.get("logo_path"),
+            logo_name=section.get("logo_name"),
+        )
         row += 1
         write_matrix_header(
-            ws, row, row_label=row_label_header, month_labels=MONTH_LABELS)
+            ws,
+            row,
+            row_label=row_label_header,
+            month_labels=tuple(month_labels or MONTH_LABELS),
+        )
         block_start = row
         row += 1
         rows = section[metric_key]
@@ -1237,6 +1385,10 @@ def _write_dual_matrix_sheet(
     prepare_report_sheet(ws)
     subtitle = _matrix_subtitle(report)
     row_header = str(report.get("row_label_header") or "Año").upper()
+    month_labels = report.get("month_labels") or MONTH_LABELS
+    from apps.bookings.services.arrivals_pdf.logo import ports_from_report_payload
+
+    banner_ports = ports_from_report_payload(report)
     end_calls = _write_matrix_block(
         ws,
         1,
@@ -1245,6 +1397,8 @@ def _write_dual_matrix_sheet(
         sections=report["sections"],
         metric_key="calls",
         row_label_header=row_header,
+        month_labels=month_labels,
+        banner_ports=banner_ports,
     )
     _write_matrix_block(
         ws,
@@ -1254,6 +1408,8 @@ def _write_dual_matrix_sheet(
         sections=report["sections"],
         metric_key="pax",
         row_label_header=row_header,
+        month_labels=month_labels,
+        banner_ports=banner_ports,
     )
     autosize_columns(ws)
 
@@ -1296,6 +1452,12 @@ def _trends_export_columns(report: dict[str, Any]) -> list[Any]:
     return list(report.get("years") or [])
 
 
+def _trends_growth_export_title(report: dict[str, Any]) -> str:
+    if report.get("season") and report.get("season") != SEASON_NATURAL:
+        return "GROWTH PERCENTAGE (PAX Summer vs Summer / Winter vs Winter)"
+    return "GROWTH PERCENTAGE (PAX YoY)"
+
+
 def _trends_export_groups(report: dict[str, Any]) -> list[dict[str, Any]]:
     groups = list(report.get("groups") or [])
     others = report.get("others")
@@ -1320,12 +1482,16 @@ def build_port_trends_xlsx(**kwargs) -> bytes:
     header.extend(["Total SHIPS", "Total PAX"])
     trends_cols = len(header)
 
+    from apps.bookings.services.arrivals_pdf.logo import ports_from_report_payload
+
+    report_ports = ports_from_report_payload(report)
     row = write_report_banner(
         ws,
         1,
         title=f"TRENDS — {port_name.upper()}",
         subtitle=subtitle or None,
         col_span=trends_cols,
+        ports=report_ports,
     )
     header_row = row
     write_column_header_band(ws, row, header)
@@ -1403,17 +1569,14 @@ def build_port_trends_xlsx(**kwargs) -> bytes:
     ws_g = wb.create_sheet("Growth")
     prepare_report_sheet(ws_g)
     growth_cols = 1 + len(years)
-    growth_title = (
-        "GROWTH PERCENTAGE (PAX vs período anterior)"
-        if report.get("season") and report.get("season") != SEASON_NATURAL
-        else "GROWTH PERCENTAGE (PAX YoY)"
-    )
+    growth_title = _trends_growth_export_title(report)
     grow = write_report_banner(
         ws_g,
         1,
         title=growth_title,
         subtitle=subtitle or None,
         col_span=growth_cols,
+        ports=report_ports,
     )
     g_header_row = grow
     write_column_header_band(

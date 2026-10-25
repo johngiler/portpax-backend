@@ -1,4 +1,5 @@
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, IntegerField, OuterRef, Prefetch, Q, Subquery, Sum
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
@@ -9,7 +10,7 @@ from rest_framework.response import Response
 from apps.accounts.permissions import DenyViewerWrites, user_port_ids
 from apps.audit.models import LtaAuditEntry
 from apps.audit.services.record import record_lta_audit
-from apps.bookings.models import BookingStatus, LongTermAgreement
+from apps.bookings.models import Booking, BookingStatus, LongTermAgreement
 from apps.bookings.serializers.long_term_agreement import (
     LongTermAgreementDetailSerializer,
     LongTermAgreementSerializer,
@@ -40,7 +41,47 @@ from apps.bookings.services.lta.generate_bookings import (
     validate_generate_prerequisites,
 )
 from apps.bookings.services.lta.windows import windows_as_dict
+from apps.bookings.services.report_exports.common import (
+    booking_pax_sum_expr,
+    normalize_pax_basis,
+)
 from apps.catalogs.views.mixins import UserPortScopedQuerysetMixin
+
+
+def _annotate_lta_booking_stats(qs, *, pax_basis: str):
+    """Linked counts + PAX for the agreements list (non-cancelled bookings)."""
+    pax_sq = (
+        Booking.objects.filter(long_term_agreement_id=OuterRef("pk"))
+        .exclude(status=BookingStatus.C)
+        .order_by()
+        .values("long_term_agreement_id")
+        .annotate(total=Sum(booking_pax_sum_expr(pax_basis)))
+        .values("total")[:1]
+    )
+    return qs.annotate(
+        linked_bookings_count=Count(
+            "bookings",
+            filter=~Q(bookings__status=BookingStatus.C),
+            distinct=True,
+        ),
+        confirmed_bookings_count=Count(
+            "bookings",
+            filter=Q(
+                bookings__status__in=[BookingStatus.CO, BookingStatus.CL]
+            ),
+            distinct=True,
+        ),
+        pending_lta_bookings_count=Count(
+            "bookings",
+            filter=Q(bookings__status=BookingStatus.LTA),
+            distinct=True,
+        ),
+        total_pax=Coalesce(
+            Subquery(pax_sq, output_field=IntegerField()),
+            0,
+            output_field=IntegerField(),
+        ),
+    )
 
 
 def _enqueue_user_id(request) -> int | None:
@@ -81,13 +122,8 @@ class LongTermAgreementViewSet(UserPortScopedQuerysetMixin, viewsets.ModelViewSe
     ).prefetch_related("vessels", "positions")
 
     def get_queryset(self):
-        qs = super().get_queryset().annotate(
-            linked_bookings_count=Count(
-                "bookings",
-                filter=~Q(bookings__status=BookingStatus.C),
-                distinct=True,
-            ),
-        )
+        pax_basis = normalize_pax_basis(self.request.query_params.get("pax_basis"))
+        qs = _annotate_lta_booking_stats(super().get_queryset(), pax_basis=pax_basis)
         port_id = self.request.query_params.get("port")
         if port_id:
             qs = qs.filter(port_id=port_id)

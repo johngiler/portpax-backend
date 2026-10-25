@@ -159,21 +159,26 @@ def _paint_merged_band(
     font: Font,
     fill: PatternFill,
     alignment: Alignment = ALIGN_LEFT,
+    value_col: int = 1,
 ) -> None:
     """Merge one row across ``col_span`` and paint fill on every cell in the span."""
     if col_span < 1:
         col_span = 1
+    value_col = max(1, min(int(value_col), col_span))
     # Paint fill first, then merge — Excel keeps top-left style for the merged area.
     for col in range(1, col_span + 1):
         cell = ws.cell(row=row, column=col)
-        if col == 1:
+        if col == value_col:
             cell.value = value
         else:
             cell.value = None
         style_cell(cell, font=font, fill=fill, alignment=alignment, border=BORDER_NONE)
-    if col_span > 1:
+    if col_span > value_col:
         ws.merge_cells(
-            start_row=row, start_column=1, end_row=row, end_column=col_span
+            start_row=row,
+            start_column=value_col,
+            end_row=row,
+            end_column=col_span,
         )
     clear_range_borders(
         ws, min_row=row, max_row=row, min_col=1, max_col=col_span
@@ -195,11 +200,14 @@ def write_report_banner(
     subtitle: str | None = None,
     col_span: int,
     right_badge: str | None = None,
+    ports: list | None = None,
 ) -> int:
     """
     Unified header band spanning exactly ``col_span`` columns (full table width).
     Title + optional subtitle are contiguous filled rows — no blank spacer below.
     Optional ``right_badge`` (e.g. Sem. card) sits in the last column of the banner.
+    A port logo is allowed only when ``ports`` resolves to exactly one unique
+    port (the name in this banner). Never a strip of several logos.
     Returns the next free row immediately after the banner.
     """
     prepare_report_sheet(ws)
@@ -207,6 +215,25 @@ def write_report_banner(
     use_badge = bool(badge) and col_span >= 2
     title_span = col_span - 1 if use_badge else col_span
 
+    placed = 0
+    from apps.bookings.services.arrivals_pdf.logo import (
+        add_worksheet_port_logo,
+        unique_banner_ports,
+    )
+
+    unique_ports = unique_banner_ports(ports)
+    if unique_ports and add_worksheet_port_logo(
+        ws,
+        unique_ports[0],
+        row=start_row,
+        col=1,
+        max_w=88,
+        max_h=36,
+    ):
+        placed = 1
+    value_col = 1
+    if placed:
+        value_col = min(2, title_span)
     _paint_merged_band(
         ws,
         start_row,
@@ -214,10 +241,15 @@ def write_report_banner(
         value=title,
         font=FONT_TITLE,
         fill=FILL_TITLE,
+        value_col=value_col,
     )
     ws.row_dimensions[start_row].height = _banner_row_height(
         title, title_span, base=22
     )
+    if placed:
+        ws.row_dimensions[start_row].height = max(
+            ws.row_dimensions[start_row].height or 22, 40
+        )
     next_row = start_row + 1
     if subtitle and str(subtitle).strip():
         sub = str(subtitle).strip()
@@ -282,7 +314,30 @@ def write_title_row(ws: Worksheet, row: int, title: str, col_span: int) -> None:
     write_report_banner(ws, row, title=title, col_span=col_span)
 
 
-def write_section_banner(ws: Worksheet, row: int, label: str, col_span: int) -> None:
+def write_section_banner(
+    ws: Worksheet,
+    row: int,
+    label: str,
+    col_span: int,
+    *,
+    logo_path: str | None = None,
+    logo_name: str | None = None,
+) -> None:
+    placed = False
+    if logo_path or logo_name:
+        from apps.bookings.services.arrivals_pdf.logo import (
+            add_worksheet_logo,
+            logo_png_from_assets,
+        )
+
+        placed = add_worksheet_logo(
+            ws,
+            logo_png_from_assets(path=logo_path, name=logo_name),
+            row=row,
+            col=1,
+            max_w=28,
+            max_h=16,
+        )
     _paint_merged_band(
         ws,
         row,
@@ -290,6 +345,7 @@ def write_section_banner(ws: Worksheet, row: int, label: str, col_span: int) -> 
         value=label,
         font=FONT_SECTION,
         fill=FILL_SECTION,
+        value_col=2 if placed else 1,
     )
 
 

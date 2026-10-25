@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from django.db.models import Q
+from django.db.models import F, IntegerField, Q
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from apps.bookings.constants import (
@@ -44,6 +45,17 @@ def booking_pax(
     if booking.planned_pax is not None:
         return int(booking.planned_pax)
     return 0
+
+
+def booking_pax_sum_expr(pax_basis: str = PAX_BASIS_PLANNED):
+    """ORM twin of booking_pax() for list/dashboard aggregates."""
+    if normalize_pax_basis(pax_basis) == PAX_BASIS_CAPACITY:
+        projected = Coalesce(
+            F("vessel__pax_capacity"), 0, output_field=IntegerField()
+        )
+    else:
+        projected = Coalesce(F("planned_pax"), 0, output_field=IntegerField())
+    return Coalesce(F("actual_pax"), projected, output_field=IntegerField())
 
 
 def pax_basis_note(pax_basis: str) -> str:

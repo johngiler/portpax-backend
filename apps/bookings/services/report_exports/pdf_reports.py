@@ -23,7 +23,9 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from apps.bookings.services.report_exports.availability import _availability_export_rows
+from apps.bookings.services.report_exports.availability import (
+    _availability_export_bookings,
+)
 from apps.bookings.services.report_exports.booking_movements import (
     MONTH_LABELS_ES,
     build_booking_movements_report,
@@ -51,6 +53,7 @@ from apps.bookings.services.report_exports.report_theme import (
     TITLE_SIZE,
     WHITE as WHITE_HEX,
 )
+from apps.bookings.services.arrivals_pdf.logo import ports_from_report_payload
 from apps.catalogs.models import Port
 
 NAVY = colors.HexColor(f"#{NAVY_HEX}")
@@ -216,6 +219,54 @@ def _week_badge_flowable(week: int | str | None) -> Table:
     return badge
 
 
+def _port_logo_strip(ports, size: float = 1.15 * cm) -> tuple[Table | None, float]:
+    from apps.bookings.services.arrivals_pdf.logo import (
+        port_logo_png_bytes,
+        unique_banner_ports,
+    )
+
+    unique = unique_banner_ports(ports)
+    if not unique:
+        return None, 0
+    images: list[Image] = []
+    for port in unique:
+        png = port_logo_png_bytes(port)
+        if not png:
+            continue
+        bio = BytesIO(png)
+        try:
+            reader = ImageReader(bio)
+            width_px, height_px = reader.getSize()
+            if not width_px or not height_px:
+                continue
+            if width_px >= height_px:
+                width, height = size, size * (height_px / width_px)
+            else:
+                height, width = size, size * (width_px / height_px)
+            bio.seek(0)
+            image = Image(bio, width=width, height=height)
+            image.hAlign = "LEFT"
+            images.append(image)
+        except Exception:
+            continue
+    if not images:
+        return None, 0
+    cell_w = size + 0.18 * cm
+    strip = Table([images], colWidths=[cell_w] * len(images))
+    strip.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]
+        )
+    )
+    return strip, cell_w * len(images)
+
+
 def _banner_flowables(
     title: str,
     subtitle: str | None,
@@ -223,6 +274,7 @@ def _banner_flowables(
     *,
     right_flowable: Any | None = None,
     landscape_mode: bool = True,
+    ports: list | None = None,
 ):
     """Excel-parity banner: sky fill, title (+ subtitle), optional right badge."""
     title_s, subtitle_s, _, _ = _styles()
@@ -246,41 +298,35 @@ def _banner_flowables(
             ]
         )
     )
-    if right_flowable is None:
-        banner = Table([[left]], colWidths=[usable])
-        banner.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, -1), SKY_LIGHT),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                    ("TOPPADDING", (0, 0), (-1, -1), 0),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-                ]
-            )
-        )
-    else:
+    logo_strip, logo_w = _port_logo_strip(ports)
+    content: list[Any] = []
+    widths: list[float] = []
+    if logo_strip is not None:
+        content.append(logo_strip)
+        widths.append(logo_w)
+    content.append(left)
+    remaining = usable - sum(widths)
+    if right_flowable is not None:
         badge_w = 2.6 * cm
-        banner = Table(
-            [[left, right_flowable]],
-            colWidths=[usable - badge_w, badge_w],
+        remaining -= badge_w
+        content.append(right_flowable)
+        widths.extend([max(remaining, 4 * cm), badge_w])
+    else:
+        widths.append(max(remaining, 4 * cm))
+    banner = Table([content], colWidths=widths)
+    banner.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), SKY_LIGHT),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (-1, 0), (-1, 0), "RIGHT" if right_flowable else "LEFT"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
         )
-        banner.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, -1), SKY_LIGHT),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("ALIGN", (1, 0), (1, 0), "RIGHT"),
-                    ("LEFTPADDING", (0, 0), (0, 0), 0),
-                    ("RIGHTPADDING", (0, 0), (0, 0), 4),
-                    ("LEFTPADDING", (1, 0), (1, 0), 0),
-                    ("RIGHTPADDING", (1, 0), (1, 0), 6),
-                    ("TOPPADDING", (0, 0), (-1, -1), 4),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ]
-            )
-        )
+    )
     _ = col_count
     return [banner]
 
@@ -387,6 +433,7 @@ def _matrix_pdf(
         str(report.get("title") or calls_title),
         subtitle,
         14,
+        ports=ports_from_report_payload(report),
     )
     _, _, _, body_style = _styles()
     title_style = ParagraphStyle(
@@ -482,9 +529,10 @@ def _matrix_pdf(
         return banner
 
     row_header = str(report.get("row_label_header") or "Año").upper()
+    month_labels = report.get("month_labels") or MONTH_LABELS
 
     def _metric_table(section: dict[str, Any], metric_key: str) -> Table:
-        data = [[row_header, *MONTH_LABELS, "TOTAL"]]
+        data = [[row_header, *month_labels, "TOTAL"]]
         has_total_row = False
         for data_row in section.get(metric_key) or []:
             is_total = data_row.get("year") == "total" or data_row.get(
@@ -575,6 +623,7 @@ def build_port_trends_pdf(**kwargs) -> bytes:
     from apps.bookings.services.report_exports.matrix_reports import (
         _trends_export_columns,
         _trends_export_groups,
+        _trends_growth_export_title,
     )
 
     report = build_port_trends(**kwargs)
@@ -602,6 +651,7 @@ def build_port_trends_pdf(**kwargs) -> bytes:
             f"TRENDS — {report['port']['name'].upper()}",
             subtitle,
             trends_cols,
+            ports=ports_from_report_payload(report),
         )
     )
 
@@ -630,13 +680,14 @@ def build_port_trends_pdf(**kwargs) -> bytes:
     story.append(Spacer(1, 0.35 * cm))
 
     growth_cols = 1 + len(years)
-    growth_title = (
-        "GROWTH PERCENTAGE (PAX vs período anterior)"
-        if report.get("season") and report.get("season") != "natural"
-        else "GROWTH PERCENTAGE (PAX YoY)"
-    )
+    growth_title = _trends_growth_export_title(report)
     story.extend(
-        _banner_flowables(growth_title, subtitle, growth_cols)
+        _banner_flowables(
+            growth_title,
+            subtitle,
+            growth_cols,
+            ports=ports_from_report_payload(report),
+        )
     )
     growth: list[list[Any]] = [["Grupo / Naviera", *[str(y) for y in years]]]
     growth_emphasize: set[int] = set()
@@ -687,6 +738,7 @@ def build_booking_movements_pdf(*, year: int, allowed_ports=None) -> bytes:
         str(payload.get("title") or "Movimientos de bookings"),
         subtitle,
         14,
+        ports=ports_from_report_payload(payload),
     )
 
     header = ["", *MONTH_LABELS_ES, "Total general"]
@@ -740,7 +792,13 @@ def build_booking_movements_pdf(*, year: int, allowed_ports=None) -> bytes:
 def build_solicitudes_port_pdf(payload: dict[str, Any]) -> bytes:
     title = str(payload.get("title") or "RESUMEN")
     subtitle = str(payload.get("subtitle") or "").strip() or None
-    story = _banner_flowables(title, subtitle, 6, landscape_mode=False)
+    story = _banner_flowables(
+        title,
+        subtitle,
+        6,
+        landscape_mode=False,
+        ports=ports_from_report_payload(payload),
+    )
 
     for block in payload.get("year_blocks") or []:
         data: list[list[Any]] = [
@@ -804,16 +862,38 @@ def build_solicitudes_port_pdf(payload: dict[str, Any]) -> bytes:
 
 
 def build_availability_chart_pdf(**kwargs) -> bytes:
-    header, rows = _availability_export_rows(**kwargs)
-    port = Port.objects.get(pk=kwargs["port_id"])
-    subtitle = (
-        f"{port.name} · {kwargs['date_from'].isoformat()} → "
-        f"{kwargs['date_to'].isoformat()}"
+    from apps.bookings.services.arrivals_pdf.availability_block import (
+        resolve_export_ports,
     )
-    story = _banner_flowables("Availability Chart", subtitle, len(header))
-    data = [list(header), *[list(r) for r in rows]]
-    story.append(_data_table(data))
-    return _build_doc(story)
+    from apps.bookings.services.arrivals_pdf.availability_pdf import (
+        build_arrivals_availability_pdf,
+    )
+
+    overview = kwargs.pop("overview", None)
+    query = kwargs.pop("query", None)
+    ports = resolve_export_ports(
+        port_id=kwargs.get("port_id"),
+        port_ids=kwargs.get("port_ids"),
+        allowed_ports=kwargs.get("allowed_ports"),
+    )
+    bookings = list(_availability_export_bookings(**kwargs))
+    if overview is None:
+        from apps.bookings.services.arrivals_pdf.overview import build_overview
+
+        overview = build_overview(
+            kind="availability",
+            query=query,
+            bookings=bookings,
+            date_from=kwargs["date_from"],
+            date_to=kwargs["date_to"],
+        )
+    return build_arrivals_availability_pdf(
+        bookings,
+        ports=ports,
+        date_from=kwargs["date_from"],
+        date_to=kwargs["date_to"],
+        overview=overview,
+    )
 
 
 def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
@@ -830,6 +910,7 @@ def build_weekly_report_pdf(payload: dict[str, Any]) -> bytes:
         1 + len(call_years),
         right_flowable=_week_badge_flowable(week),
         landscape_mode=False,
+        ports=ports_from_report_payload(payload),
     )
 
     def _cell(n: int) -> str:

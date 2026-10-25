@@ -57,6 +57,14 @@ from apps.bookings.services.booking_tag import (
     set_import_batch_tag,
     set_run_batch_tag,
 )
+from apps.bookings.services.arrivals_pdf import (
+    arrivals_pdf_filename,
+    build_arrivals_calendar_pdf,
+    build_arrivals_list_pdf,
+    build_overview,
+    build_proximity_matrix_pdf,
+    build_proximity_matrix_xlsx,
+)
 from apps.bookings.services.booking_export import build_bookings_csv, build_bookings_xlsx
 from apps.bookings.services.calendar_export import (
     build_calendar_csv,
@@ -142,6 +150,32 @@ from apps.bookings.services.import_mass import (
 from apps.bookings.services.import_mass.export_rows import build_import_rows_xlsx
 from apps.bookings.utils.list_ordering import apply_booking_list_ordering
 from apps.bookings.utils.list_search import BookingSearchFilter
+
+
+def _xlsx_download(content: bytes, filename: str) -> HttpResponse:
+    response = HttpResponse(
+        content,
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    )
+    ascii_name = filename.encode("ascii", "replace").decode("ascii")
+    response["Content-Disposition"] = (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(filename)}"
+    )
+    return response
+
+
+def _pdf_download(content: bytes, filename: str) -> HttpResponse:
+    response = HttpResponse(content, content_type="application/pdf")
+    ascii_name = filename.encode("ascii", "replace").decode("ascii")
+    response["Content-Disposition"] = (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(filename)}"
+    )
+    return response
+
 
 _PORT_ACCESS_DENIED = "No tienes acceso a este puerto."
 
@@ -304,10 +338,16 @@ class BookingViewSet(
         return BookingSerializer
 
     def list(self, request, *args, **kwargs):
-        """List page + filter-scoped totals (count via pagination, planned PAX sum)."""
+        """List page + filter-scoped totals (count via pagination, Base PAX sum)."""
+        from apps.bookings.services.report_exports.common import booking_pax_sum_expr
+
         queryset = self.filter_queryset(self.get_queryset())
         total_planned_pax = queryset.aggregate(
-            total=Coalesce(Sum("planned_pax"), 0, output_field=IntegerField())
+            total=Coalesce(
+                Sum(booking_pax_sum_expr(self._report_pax_basis(request))),
+                0,
+                output_field=IntegerField(),
+            )
         )["total"]
         page = self.paginate_queryset(queryset)
         if page is not None:
@@ -1151,6 +1191,83 @@ class BookingViewSet(
 
         return Response(payload)
 
+    @action(detail=False, methods=["get"], url_path="vessel-proximity-export")
+    def vessel_proximity_export(self, request):
+        fmt = (request.query_params.get("export_format") or "pdf").lower()
+        if fmt not in ("pdf", "xlsx"):
+            return Response(
+                {"detail": "export_format debe ser pdf o xlsx."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            params = parse_vessel_proximity_matrix_params(request.query_params)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        if params["port_id"]:
+            self._ensure_port_access(params["port_id"])
+
+        dates: list[str] = []
+        cells: list[dict] = []
+        base: dict | None = None
+        page = 1
+        while page <= 50:
+            try:
+                payload = build_vessel_proximity_matrix(
+                    user=request.user,
+                    request=request,
+                    vessel_id=params["vessel_id"],
+                    call_date_from=params["call_date_from"],
+                    call_date_to=params["call_date_to"],
+                    status_values=params["status_values"],
+                    port_id=params["port_id"],
+                    has_conflict=params["has_conflict"],
+                    conflict_severity=params["conflict_severity"],
+                    conflict_type=params["conflict_type"],
+                    first_arrival=params.get("first_arrival"),
+                    cancellation_reason=params.get("cancellation_reason"),
+                    call_dates=params.get("call_dates"),
+                    page=page,
+                    page_size=100,
+                )
+            except ValueError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            if base is None:
+                base = payload
+            dates.extend(payload.get("dates") or [])
+            cells.extend(payload.get("cells") or [])
+            if not payload.get("has_more"):
+                break
+            page += 1
+        if base is None or not cells:
+            return Response(
+                {"detail": "No hay escalas para exportar con los filtros aplicados."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        payload = {**base, "dates": dates, "cells": cells}
+        overview = build_overview(
+            kind="proximity",
+            query=request.query_params,
+            date_from=params["call_date_from"],
+            date_to=params["call_date_to"],
+            payload=payload,
+            extra_criteria=[
+                ("Barco", str(payload.get("vessel_name") or "")),
+                ("Naviera", str(payload.get("shipping_line_name") or "")),
+            ],
+        )
+        vessel = str(payload.get("vessel_name") or "barco").replace(" ", "_")
+        filename = (
+            f"Proximidad_{vessel}_{payload.get('date_from')}_"
+            f"{payload.get('date_to')}.{fmt}"
+        )
+        if fmt == "xlsx":
+            return _xlsx_download(
+                build_proximity_matrix_xlsx(payload, overview=overview), filename
+            )
+        return _pdf_download(
+            build_proximity_matrix_pdf(payload, overview=overview), filename
+        )
+
     @action(detail=False, methods=["post"], url_path="validate")
     def validate(self, request):
         serializer = BookingValidateSerializer(data=request.data)
@@ -1263,15 +1380,15 @@ class BookingViewSet(
 
     @action(detail=False, methods=["get"], url_path="export")
     def export(self, request):
-        """Download bookings report (xlsx/csv) using the same filters as the list.
+        """Download bookings report (xlsx/csv/pdf) using the same filters as the list.
 
         Query param is `export_format` (not `format`) — DRF reserves `format`
         for content negotiation and returns 404 for unknown suffixes like xlsx.
         """
         fmt = (request.query_params.get("export_format") or "xlsx").lower()
-        if fmt not in ("xlsx", "csv"):
+        if fmt not in ("xlsx", "csv", "pdf"):
             return Response(
-                {"detail": "export_format debe ser xlsx o csv."},
+                {"detail": "export_format debe ser xlsx, csv o pdf."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1283,13 +1400,20 @@ class BookingViewSet(
             )
 
         stamp = timezone.localdate().isoformat()
+        overview = build_overview(
+            kind="list", query=request.query_params, bookings=bookings
+        )
+        if fmt == "pdf":
+            content = build_arrivals_list_pdf(bookings, overview=overview)
+            filename = arrivals_pdf_filename(bookings, kind="list")
+            return _pdf_download(content, filename)
         if fmt == "csv":
             content = build_bookings_csv(bookings)
             response = HttpResponse(content, content_type="text/csv; charset=utf-8")
             response["Content-Disposition"] = f'attachment; filename="reservas_{stamp}.csv"'
             return response
 
-        content = build_bookings_xlsx(bookings)
+        content = build_bookings_xlsx(bookings, overview=overview)
         response = HttpResponse(
             content,
             content_type=(
@@ -1409,9 +1533,9 @@ class BookingViewSet(
             return err
 
         fmt = (request.query_params.get("export_format") or "xlsx").lower()
-        if fmt not in ("xlsx", "csv"):
+        if fmt not in ("xlsx", "csv", "pdf"):
             return Response(
-                {"detail": "export_format debe ser xlsx o csv."},
+                {"detail": "export_format debe ser xlsx, csv o pdf."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1457,7 +1581,11 @@ class BookingViewSet(
         )
 
         bookings = list(qs)
-        if not bookings:
+        mode = (request.query_params.get("calendar_mode") or "monthly").strip().lower()
+        if mode not in {"weekly", "monthly", "annual"}:
+            mode = "monthly"
+        ports = list(Port.objects.filter(id__in=port_ids).order_by("name"))
+        if not bookings and mode not in {"weekly", "monthly"}:
             return Response(
                 {"detail": "No hay reservas para exportar en ese rango."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1469,11 +1597,36 @@ class BookingViewSet(
             if code not in seen:
                 seen.append(code)
         filename = calendar_export_filename(seen, date_from, date_to, fmt)
+        overview = build_overview(
+            kind="calendar",
+            query=request.query_params,
+            bookings=bookings,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if fmt == "pdf":
+            content = build_arrivals_calendar_pdf(
+                bookings,
+                overview=overview,
+                mode=mode,
+                date_from=date_from,
+                date_to=date_to,
+                ports=ports,
+            )
+            filename = arrivals_pdf_filename(bookings, kind="calendar")
+            return _pdf_download(content, filename)
         if fmt == "csv":
             content = build_calendar_csv(bookings)
             response = HttpResponse(content, content_type="text/csv; charset=utf-8")
         else:
-            content = build_calendar_xlsx(bookings)
+            content = build_calendar_xlsx(
+                bookings,
+                overview,
+                mode=mode,
+                date_from=date_from,
+                date_to=date_to,
+                ports=ports,
+            )
             response = HttpResponse(
                 content,
                 content_type=(
@@ -2076,13 +2229,11 @@ class BookingViewSet(
 
         try:
             if report_type == "availability":
-                if not port_id:
-                    return Response(
-                        {"detail": "port es obligatorio para Availability Chart."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                for pid in port_ids:
+                    self._ensure_port_access(pid)
                 common = dict(
                     port_id=port_id,
+                    port_ids=port_ids or None,
                     date_from=date_from,
                     date_to=date_to,
                     allowed_ports=allowed_ports,
@@ -2091,6 +2242,7 @@ class BookingViewSet(
                     vessel_id=vessel_id,
                     position_id=position_id,
                     statuses=status_values,
+                    query=request.query_params,
                 )
                 if fmt == "csv":
                     content = build_availability_chart_csv(**common)
@@ -2098,8 +2250,10 @@ class BookingViewSet(
                     content = build_availability_chart_pdf(**common)
                 else:
                     content = build_availability_chart_xlsx(**common)
-                port = Port.objects.get(pk=port_id)
-                filename = availability_filename(port.code, date_from, date_to, fmt)
+                port_code = ""
+                if port_id:
+                    port_code = Port.objects.get(pk=port_id).code
+                filename = availability_filename(port_code, date_from, date_to, fmt)
             elif report_type == "ports_totals_matrix":
                 from apps.bookings.services.report_exports.season_periods import (
                     normalize_panorama_season,

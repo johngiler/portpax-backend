@@ -1,15 +1,20 @@
 from django.utils import timezone
-from rest_framework import status, viewsets
+from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.accounts.permissions import IsAdminRole, IsFrontendAppUser
 from apps.notifications.models import Notification
 from apps.notifications.serializers import NotificationSerializer
 from apps.notifications.services.booking import mark_notification_read
 
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
+    """Campanita feed — admin-only until per-role leveling is defined."""
+
     serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated, IsFrontendAppUser, IsAdminRole]
 
     def get_queryset(self):
         return Notification.objects.filter(recipient=self.request.user)

@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import csv
 from datetime import date, datetime
-from io import BytesIO, StringIO
+from io import StringIO
 
 from django.utils import timezone
-from openpyxl import Workbook
-from openpyxl.styles import Font
 
 from apps.bookings.constants import ACTIVE_BOOKING_STATUSES
 from apps.bookings.models import Booking, BookingStatus
@@ -126,26 +124,10 @@ def booking_export_row(booking: Booking, today: date | None = None) -> list:
     ]
 
 
-def build_bookings_xlsx(bookings) -> bytes:
-    today = timezone.localdate()
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Reservas"
-    sheet.append(HEADERS)
-    for cell in sheet[1]:
-        cell.font = Font(bold=True)
-    for booking in bookings:
-        sheet.append(booking_export_row(booking, today))
-    for column_cells in sheet.columns:
-        max_len = 0
-        column_letter = column_cells[0].column_letter
-        for cell in column_cells:
-            value = "" if cell.value is None else str(cell.value)
-            max_len = max(max_len, len(value))
-        sheet.column_dimensions[column_letter].width = min(max_len + 2, 40)
-    buffer = BytesIO()
-    workbook.save(buffer)
-    return buffer.getvalue()
+def build_bookings_xlsx(bookings, overview=None) -> bytes:
+    from apps.bookings.services.arrivals_pdf.list_xlsx import build_arrivals_list_xlsx
+
+    return build_arrivals_list_xlsx(bookings, overview=overview)
 
 
 def build_bookings_csv(bookings) -> bytes:

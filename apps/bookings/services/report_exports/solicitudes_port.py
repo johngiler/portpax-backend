@@ -389,8 +389,15 @@ def build_solicitudes_port_xlsx(payload: dict[str, Any]) -> bytes:
 
     title = str(payload.get("title") or "RESUMEN")
     subtitle = str(payload.get("subtitle") or "").strip() or None
+    from apps.bookings.services.arrivals_pdf.logo import ports_from_report_payload
+
     row = write_report_banner(
-        ws, 1, title=title, subtitle=subtitle, col_span=9
+        ws,
+        1,
+        title=title,
+        subtitle=subtitle,
+        col_span=9,
+        ports=ports_from_report_payload(payload),
     )
 
     left_start = row

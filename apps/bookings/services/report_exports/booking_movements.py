@@ -430,12 +430,15 @@ def build_booking_movements_xlsx(payload: dict[str, Any]) -> bytes:
     subtitle_parts = [f"Año {year}"] if year else []
     if note:
         subtitle_parts.append(note)
+    from apps.bookings.services.arrivals_pdf.logo import ports_from_report_payload
+
     row = write_report_banner(
         ws,
         1,
         title=str(payload.get("title") or "Movimientos de bookings"),
         subtitle=" · ".join(subtitle_parts) or None,
         col_span=14,
+        ports=ports_from_report_payload(payload),
     )
 
     # Block A

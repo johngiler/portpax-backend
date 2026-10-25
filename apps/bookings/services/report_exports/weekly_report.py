@@ -415,6 +415,8 @@ def build_weekly_report_xlsx(payload: dict[str, Any]) -> bytes:
     title = str(payload.get("title") or payload.get("report_name") or "Reporte Semanal")
     week = payload.get("week")
     subtitle = f"{payload.get('week_start')} → {payload.get('week_end')}"
+    from apps.bookings.services.arrivals_pdf.logo import ports_from_report_payload
+
     row = write_report_banner(
         ws,
         1,
@@ -422,6 +424,7 @@ def build_weekly_report_xlsx(payload: dict[str, Any]) -> bytes:
         subtitle=subtitle,
         col_span=col_count,
         right_badge=f"Sem.\n{week}" if week is not None else None,
+        ports=ports_from_report_payload(payload),
     )
 
     write_column_header_band(

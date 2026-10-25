@@ -8,7 +8,11 @@ from io import BytesIO, StringIO
 
 from django.utils import timezone
 from openpyxl import Workbook
-from openpyxl.styles import Font
+from openpyxl.cell.cell import MergedCell
+from openpyxl.styles import Alignment, Font
+from openpyxl.utils import get_column_letter
+
+from apps.bookings.services.arrivals_pdf.logo import add_worksheet_port_logo
 
 from apps.bookings.models import Booking, BookingStatus, LongTermAgreement
 from apps.bookings.services.booking_export import (
@@ -105,18 +109,34 @@ def build_linked_bookings_xlsx(agreement: LongTermAgreement) -> bytes:
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Reservas del acuerdo"
+    placed = 0
+    if add_worksheet_port_logo(
+        sheet, agreement.port, row=1, col=1, max_w=88, max_h=36
+    ):
+        placed = 1
+    title_start = 3 if placed else 1
+    sheet.merge_cells(
+        start_row=1,
+        start_column=title_start,
+        end_row=1,
+        end_column=len(HEADERS),
+    )
+    title = sheet.cell(1, title_start, "Reservas del acuerdo")
+    title.font = Font(name="Calibri", size=16, bold=True)
+    title.alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[1].height = 40 if placed else 22
     sheet.append(HEADERS)
-    for cell in sheet[1]:
+    for cell in sheet[2]:
         cell.font = Font(bold=True)
     for booking in linked_bookings_queryset(agreement).iterator(chunk_size=200):
         sheet.append(_row(booking, agreement, extras))
-    for column_cells in sheet.columns:
+    for index, column_cells in enumerate(sheet.columns, start=1):
         max_len = 0
-        column_letter = column_cells[0].column_letter
         for cell in column_cells:
-            value = "" if cell.value is None else str(cell.value)
-            max_len = max(max_len, len(value))
-        sheet.column_dimensions[column_letter].width = min(max_len + 2, 48)
+            if isinstance(cell, MergedCell) or cell.value is None:
+                continue
+            max_len = max(max_len, len(str(cell.value)))
+        sheet.column_dimensions[get_column_letter(index)].width = min(max_len + 2, 48)
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()

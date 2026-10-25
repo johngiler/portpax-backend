@@ -90,6 +90,7 @@ class VesselSerializer(WebPImageFieldsMixin, serializers.ModelSerializer):
         rows = [
             {
                 "id": port.pk,
+                "code": getattr(port, "code", "") or "",
                 "name": port.name,
                 "country": port.country or "",
                 "logo": self._port_logo_url(port),

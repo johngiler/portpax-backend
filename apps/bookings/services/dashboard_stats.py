@@ -722,17 +722,20 @@ def build_dashboard_stats(
             occ = occupancy_by_year[year]
             first_arrivals = first_arrivals_by_year.get(year, 0)
             conflicts = conflicts_by_year.get(year, 0)
+            avg_pax = _avg_pax_per_call(calls, pax)
             prev_year = calendar_years[idx - 1] if idx > 0 else None
             prev_bookings = bookings_by_year.get(prev_year, 0) if prev_year else None
             prev_active = (
                 active_by_year.get(prev_year) if prev_year is not None else None
             )
             prev_occ = occupancy_by_year.get(prev_year) if prev_year else None
-            prev_first = (
-                first_arrivals_by_year.get(prev_year, 0) if prev_year else None
-            )
-            prev_conflicts = (
-                conflicts_by_year.get(prev_year, 0) if prev_year else None
+            prev_avg_pax = (
+                _avg_pax_per_call(
+                    int(prev_active["calls"]),
+                    int(prev_active["pax"]),
+                )
+                if prev_active is not None
+                else None
             )
             by_year_kpis.append(
                 {
@@ -740,7 +743,7 @@ def build_dashboard_stats(
                     "bookings": bookings,
                     "calls": calls,
                     "planned_pax": pax,
-                    "avg_pax_per_call": _avg_pax_per_call(calls, pax),
+                    "avg_pax_per_call": avg_pax,
                     "occupancy_pct": occ["occupancy_pct"],
                     "occupied_slot_days": occ["occupied_slot_days"],
                     "capacity_slot_days": occ["capacity_slot_days"],
@@ -764,14 +767,9 @@ def build_dashboard_stats(
                         if prev_occ is not None
                         else None
                     ),
-                    "first_arrivals_yoy_pct": (
-                        _delta_pct(first_arrivals, prev_first)
-                        if prev_first is not None
-                        else None
-                    ),
-                    "conflicts_yoy_pct": (
-                        _delta_pct(conflicts, prev_conflicts)
-                        if prev_conflicts is not None
+                    "avg_pax_yoy_pct": (
+                        _delta_pct(avg_pax, prev_avg_pax)
+                        if prev_avg_pax is not None
                         else None
                     ),
                 }

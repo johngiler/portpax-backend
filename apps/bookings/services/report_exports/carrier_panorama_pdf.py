@@ -12,6 +12,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
 
+from apps.bookings.services.arrivals_pdf.logo import ports_from_report_payload
 from apps.bookings.services.report_exports.pdf_reports import (
     GRID,
     NAVY,
@@ -128,33 +129,30 @@ def _kpi_shell(inner: Table, width: float, accent: str, tint: str) -> Table:
 def _plain_kpi_card(
     label: str,
     value: str,
-    hint: str,
+    hint: str = "",
     *,
     width: float,
     accent: str,
     tint: str,
 ) -> Table:
     label_s, value_s, hint_s = _kpi_styles()
-    inner = Table(
-        [
-            [Paragraph(label, label_s)],
-            [Paragraph(value, value_s)],
-            [Paragraph(hint or " ", hint_s)],
-        ],
-        colWidths=[width - 16],
-    )
-    inner.setStyle(
-        TableStyle(
-            [
-                ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                ("TOPPADDING", (0, 0), (-1, -1), 0),
-                ("BOTTOMPADDING", (0, 0), (0, 0), 3),
-                ("BOTTOMPADDING", (0, 1), (0, 1), 3),
-                ("BOTTOMPADDING", (0, 2), (0, 2), 0),
-            ]
-        )
-    )
+    rows: list[list[Any]] = [
+        [Paragraph(label, label_s)],
+        [Paragraph(value, value_s)],
+    ]
+    if (hint or "").strip():
+        rows.append([Paragraph(hint.strip(), hint_s)])
+    inner = Table(rows, colWidths=[width - 16])
+    cmds: list[tuple] = [
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (0, 0), 3),
+        ("BOTTOMPADDING", (0, 1), (0, 1), 0 if len(rows) == 2 else 3),
+    ]
+    if len(rows) > 2:
+        cmds.append(("BOTTOMPADDING", (0, 2), (0, 2), 0))
+    inner.setStyle(TableStyle(cmds))
     return _kpi_shell(inner, width, accent, tint)
 
 
@@ -248,7 +246,9 @@ def _share_kpi_card(
         )
     )
     chart_cell = donut if donut is not None else Paragraph("—", value_s)
-    center_name = Paragraph(str(top.get("port_name") or "Sin datos"), hint_s)
+    center_name = Paragraph(
+        str((top or {}).get("port_name") or "Sin datos"), hint_s
+    )
     center_pct = Paragraph(
         f"{top.get('share_pct')}%" if top else "0%",
         value_s,
@@ -380,8 +380,19 @@ def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
         textColor=NAVY,
     )
 
-    header_top: list[Any] = [Paragraph("Puerto", year_style)]
-    header_sub: list[Any] = [""]
+    vessel_style = ParagraphStyle(
+        "PanoramaVesselName",
+        parent=body,
+        fontName="Helvetica",
+        fontSize=PDF_TABLE_SIZE,
+        textColor=TEXT,
+        leading=PDF_TABLE_SIZE + 2,
+    )
+    header_top: list[Any] = [
+        Paragraph("Puerto", year_style),
+        Paragraph("Barco principal", year_style),
+    ]
+    header_sub: list[Any] = ["", ""]
     for label in labels:
         header_top.extend([Paragraph(str(label), year_style), ""])
         header_sub.extend(
@@ -398,7 +409,11 @@ def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
             str(cell.get("label") or cell.get("year") or ""): cell
             for cell in (row.get("by_period") or row.get("by_year") or [])
         }
-        values: list[Any] = [_port_label_cell(row, port_style)]
+        vessel = (row.get("main_vessel") or {}).get("name") or "—"
+        values: list[Any] = [
+            _port_label_cell(row, port_style),
+            Paragraph(str(vessel), vessel_style),
+        ]
         for label in labels:
             cell = by_label.get(label) or {}
             values.extend(
@@ -420,7 +435,10 @@ def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
         str(cell.get("label") or cell.get("year") or ""): cell
         for cell in (totals.get("by_period") or totals.get("by_year") or [])
     }
-    total_row: list[Any] = [Paragraph("Total", port_style)]
+    total_row: list[Any] = [
+        Paragraph("Total", port_style),
+        Paragraph("—", vessel_style),
+    ]
     for label in labels:
         cell = total_by_label.get(label) or {}
         total_row.extend(
@@ -437,21 +455,25 @@ def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
     )
     data.append(total_row)
 
-    ncols = 1 + len(labels) * 2 + 2
-    first = min(max(usable * 0.18, 3.1 * cm), 4.2 * cm)
-    rest = (usable - first) / max(ncols - 1, 1)
-    widths = [first] + [rest] * (ncols - 1)
+    ncols = 2 + len(labels) * 2 + 2
+    first = min(max(usable * 0.15, 2.6 * cm), 3.6 * cm)
+    vessel_w = min(max(usable * 0.14, 2.4 * cm), 3.4 * cm)
+    rest = (usable - first - vessel_w) / max(ncols - 2, 1)
+    widths = [first, vessel_w] + [rest] * (ncols - 2)
 
     table = Table(data, colWidths=widths, repeatRows=2)
     cmds: list[tuple] = [
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("BACKGROUND", (0, 1), (-1, 1), SKY),
         ("SPAN", (0, 0), (0, 1)),
-        ("TEXTCOLOR", (0, 0), (0, 1), WHITE),
-        ("FONTNAME", (0, 0), (0, 1), "Helvetica-Bold"),
-        ("BACKGROUND", (0, 0), (0, 1), NAVY),
-        ("ALIGN", (1, 0), (-1, 1), "CENTER"),
-        ("ALIGN", (1, 2), (-1, -1), "RIGHT"),
+        ("SPAN", (1, 0), (1, 1)),
+        ("TEXTCOLOR", (0, 0), (1, 1), WHITE),
+        ("FONTNAME", (0, 0), (1, 1), "Helvetica-Bold"),
+        ("BACKGROUND", (0, 0), (1, 1), NAVY),
+        ("ALIGN", (0, 0), (1, 1), "CENTER"),
+        ("ALIGN", (2, 0), (-1, 1), "CENTER"),
+        ("ALIGN", (0, 2), (1, -1), "LEFT"),
+        ("ALIGN", (2, 2), (-1, -1), "RIGHT"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
@@ -463,7 +485,7 @@ def _matrix_table(payload: dict[str, Any], usable: float) -> Table:
         ("LINEAFTER", (0, 0), (-2, -1), 0.35, GRID),
         ("BACKGROUND", (0, 2), (0, -2), SKY),
     ]
-    year_col = 1
+    year_col = 2
     for _ in labels:
         cmds.append(("SPAN", (year_col, 0), (year_col + 1, 0)))
         year_col += 2
@@ -564,31 +586,15 @@ def _fmt_avg(value: Any) -> str:
     return f"{number:,.1f}"
 
 
-def _fmt_yoy(value: Any) -> str:
-    if value is None:
-        return "—"
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return "—"
-    if number == 0:
-        return "0%"
-    sign = "+" if number > 0 else ""
-    return f"{sign}{number:g}%"
-
-
 def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
     kpis = payload.get("kpis") or {}
     share = list(payload.get("port_share") or [])
-    by_year = list(kpis.get("by_year") or [])
     title = str(payload.get("title") or "Panorama Navieras")
-    subtitle = str(payload.get("subtitle") or "").strip() or None
     landscape_mode = True
 
     usable = _page_usable_width(landscape_mode=landscape_mode)
     gap = 0.14 * cm
     card_w = (usable - 4 * gap) / 5
-    hint = subtitle or ""
     _, calls_accent, calls_tint = KPI_CARDS[0]
     _, pax_accent, pax_tint = KPI_CARDS[1]
     _, ports_accent, ports_tint = KPI_CARDS[2]
@@ -596,7 +602,12 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
     _, share_accent, share_tint = KPI_CARDS[4]
 
     story = _banner_flowables(
-        title, subtitle, 5, landscape_mode=landscape_mode)
+        title,
+        None,
+        5,
+        landscape_mode=landscape_mode,
+        ports=ports_from_report_payload(payload),
+    )
     story.append(Spacer(1, 0.22 * cm))
     kpi_row = Table(
         [
@@ -604,7 +615,6 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
                 _plain_kpi_card(
                     "Arribos totales",
                     _fmt_int(kpis.get("total_calls")),
-                    hint,
                     width=card_w,
                     accent=calls_accent,
                     tint=calls_tint,
@@ -613,7 +623,6 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
                 _plain_kpi_card(
                     "PAX totales",
                     _fmt_compact_pax(kpis.get("total_pax")),
-                    hint,
                     width=card_w,
                     accent=pax_accent,
                     tint=pax_tint,
@@ -622,7 +631,6 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
                 _plain_kpi_card(
                     "Puertos con programación",
                     f"{kpis.get('ports_with_calls') or 0} de {kpis.get('ports_total') or 0}",
-                    hint,
                     width=card_w,
                     accent=ports_accent,
                     tint=ports_tint,
@@ -631,7 +639,6 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
                 _plain_kpi_card(
                     "Promedio PAX/arribo",
                     _fmt_avg(kpis.get("avg_pax_per_call")),
-                    hint,
                     width=card_w,
                     accent=avg_accent,
                     tint=avg_tint,
@@ -639,7 +646,7 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
                 "",
                 _share_kpi_card(
                     share,
-                    hint,
+                    "",
                     width=card_w,
                     accent=share_accent,
                     tint=share_tint,
@@ -660,47 +667,6 @@ def build_carrier_panorama_pdf(payload: dict[str, Any]) -> bytes:
         )
     )
     story.append(kpi_row)
-
-    if by_year:
-        story.append(Spacer(1, 0.18 * cm))
-        year_gap = 0.12 * cm
-        year_w = (usable - max(0, len(by_year) - 1) * year_gap) / max(
-            len(by_year), 1
-        )
-        year_cells: list[Any] = []
-        year_widths: list[float] = []
-        for idx, year_kpi in enumerate(by_year):
-            if idx:
-                year_cells.append("")
-                year_widths.append(year_gap)
-            year_hint = (
-                f"Arribos YoY {_fmt_yoy(year_kpi.get('calls_yoy_pct'))}"
-                f" · PAX YoY {_fmt_yoy(year_kpi.get('pax_yoy_pct'))}"
-            )
-            year_cells.append(
-                _plain_kpi_card(
-                    str(year_kpi.get("year") or ""),
-                    f"{_fmt_int(year_kpi.get('calls'))} · {_fmt_compact_pax(year_kpi.get('pax'))}",
-                    year_hint,
-                    width=year_w,
-                    accent=calls_accent if idx % 2 == 0 else pax_accent,
-                    tint=calls_tint if idx % 2 == 0 else pax_tint,
-                )
-            )
-            year_widths.append(year_w)
-        year_row = Table([year_cells], colWidths=year_widths)
-        year_row.setStyle(
-            TableStyle(
-                [
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                    ("TOPPADDING", (0, 0), (-1, -1), 0),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-                ]
-            )
-        )
-        story.append(year_row)
 
     story.append(Spacer(1, 0.28 * cm))
     story.append(_matrix_card(payload, usable))

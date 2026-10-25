@@ -4,18 +4,13 @@ from __future__ import annotations
 
 import csv
 from datetime import date, timedelta
-from io import BytesIO, StringIO
+from io import StringIO
 from typing import Any
 
 from django.core.files.storage import default_storage
 from django.db.models import Q
-from openpyxl import Workbook
 
 from apps.bookings.services.report_exports.common import scheduled_bookings_qs
-from apps.bookings.services.report_exports.xlsx_style import (
-    autosize_columns,
-    write_report_table_block,
-)
 from apps.catalogs.models import Port, Position, PositionComponent
 from apps.catalogs.utils.position_code import position_short_code
 from apps.bookings.services.validation.conflict_display import (
@@ -126,7 +121,8 @@ def _position_display(booking) -> str:
 
 def _availability_export_bookings(
     *,
-    port_id: int,
+    port_id: int | None = None,
+    port_ids: list[int] | None = None,
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None = None,
@@ -139,12 +135,20 @@ def _availability_export_bookings(
     status: str | None = None,
     statuses: list[str] | None = None,
 ):
+    from apps.bookings.services.arrivals_pdf.availability_block import (
+        resolve_export_ports,
+    )
     from apps.bookings.services.report_exports.common import _merge_id_filters
 
-    if allowed_ports is not None and port_id not in allowed_ports:
-        raise ValueError("Puerto no permitido.")
+    ports = resolve_export_ports(
+        port_id=port_id,
+        port_ids=port_ids,
+        allowed_ports=allowed_ports,
+    )
+    if not ports:
+        raise ValueError("No hay puertos disponibles.")
+    selected_ids = [port.id for port in ports]
 
-    Port.objects.get(pk=port_id)
     status_filters = list(statuses or [])
     if status and status not in status_filters:
         status_filters.append(status)
@@ -155,14 +159,14 @@ def _availability_export_bookings(
     qs = scheduled_bookings_qs(
         date_from=date_from,
         date_to=date_to,
-        port_id=port_id,
+        port_id=None,
         allowed_ports=allowed_ports,
         shipping_line_ids=line_ids,
         shipping_line_group_ids=group_ids,
         vessel_id=vessel_id,
         position_id=position_id,
         status=None,
-    )
+    ).filter(port_id__in=selected_ids)
     if "c" in status_filters:
         from apps.bookings.models import Booking
         from apps.bookings.utils.status_query import apply_booking_status_filters
@@ -170,7 +174,7 @@ def _availability_export_bookings(
         base = Booking.objects.filter(
             call_date__gte=date_from,
             call_date__lte=date_to,
-            port_id=port_id,
+            port_id__in=selected_ids,
         ).select_related("port", "shipping_line", "shipping_line__group", "vessel", "position")
         if allowed_ports is not None:
             base = base.filter(port_id__in=allowed_ports)
@@ -187,12 +191,13 @@ def _availability_export_bookings(
         from apps.bookings.utils.status_query import apply_booking_status_filters
 
         qs = apply_booking_status_filters(qs, status_filters)
-    return qs.order_by("call_date", "position__sort_order", "vessel__name")
+    return qs.order_by("port__name", "call_date", "position__sort_order", "vessel__name")
 
 
 def _availability_export_rows(
     *,
-    port_id: int,
+    port_id: int | None = None,
+    port_ids: list[int] | None = None,
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None = None,
@@ -207,6 +212,7 @@ def _availability_export_rows(
 ) -> tuple[list[str], list[list[str]]]:
     qs = _availability_export_bookings(
         port_id=port_id,
+        port_ids=port_ids,
         date_from=date_from,
         date_to=date_to,
         allowed_ports=allowed_ports,
@@ -841,7 +847,8 @@ def build_availability_data(
 
 def build_availability_chart_xlsx(
     *,
-    port_id: int,
+    port_id: int | None = None,
+    port_ids: list[int] | None = None,
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None = None,
@@ -853,43 +860,60 @@ def build_availability_chart_xlsx(
     position_id: int | None = None,
     status: str | None = None,
     statuses: list[str] | None = None,
+    query=None,
+    overview=None,
 ) -> bytes:
-    header, rows = _availability_export_rows(
+    from apps.bookings.services.arrivals_pdf.availability_block import (
+        resolve_export_ports,
+    )
+    from apps.bookings.services.arrivals_pdf.availability_xlsx import (
+        build_arrivals_availability_xlsx,
+    )
+    from apps.bookings.services.arrivals_pdf.overview import build_overview
+
+    ports = resolve_export_ports(
         port_id=port_id,
+        port_ids=port_ids,
+        allowed_ports=allowed_ports,
+    )
+    bookings = list(
+        _availability_export_bookings(
+            port_id=port_id,
+            port_ids=port_ids,
+            date_from=date_from,
+            date_to=date_to,
+            allowed_ports=allowed_ports,
+            shipping_line_id=shipping_line_id,
+            shipping_line_ids=shipping_line_ids,
+            shipping_line_group_id=shipping_line_group_id,
+            shipping_line_group_ids=shipping_line_group_ids,
+            vessel_id=vessel_id,
+            position_id=position_id,
+            status=status,
+            statuses=statuses,
+        )
+    )
+    if overview is None:
+        overview = build_overview(
+            kind="availability",
+            query=query,
+            bookings=bookings,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    return build_arrivals_availability_xlsx(
+        bookings,
+        ports=ports,
         date_from=date_from,
         date_to=date_to,
-        allowed_ports=allowed_ports,
-        shipping_line_id=shipping_line_id,
-        shipping_line_ids=shipping_line_ids,
-        shipping_line_group_id=shipping_line_group_id,
-        shipping_line_group_ids=shipping_line_group_ids,
-        vessel_id=vessel_id,
-        position_id=position_id,
-        status=status,
-        statuses=statuses,
+        overview=overview,
     )
-    port = Port.objects.get(pk=port_id)
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Disponibilidad"
-    write_report_table_block(
-        ws,
-        1,
-        title="Availability Chart",
-        subtitle=f"{port.name} · {date_from.isoformat()} → {date_to.isoformat()}",
-        headers=list(header),
-        rows=rows,
-    )
-    autosize_columns(ws, min_width=10, max_width=28)
-    ws.freeze_panes = "A4"
-    buf = BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
 
 
 def build_availability_chart_csv(
     *,
-    port_id: int,
+    port_id: int | None = None,
+    port_ids: list[int] | None = None,
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None = None,
@@ -904,6 +928,7 @@ def build_availability_chart_csv(
 ) -> bytes:
     header, rows = _availability_export_rows(
         port_id=port_id,
+        port_ids=port_ids,
         date_from=date_from,
         date_to=date_to,
         allowed_ports=allowed_ports,

@@ -31,9 +31,10 @@ def _matrix_section_rows(
     sections: list[dict[str, Any]],
     metric_key: str,
     row_label_header: str = "AÑO",
+    month_labels: list[str] | tuple[str, ...] | None = None,
 ) -> list[list[Any]]:
     out: list[list[Any]] = [[title], []]
-    header = [row_label_header, *MONTH_LABELS, "TOTAL"]
+    header = [row_label_header, *(month_labels or MONTH_LABELS), "TOTAL"]
     for section in sections:
         out.append([section.get("label") or ""])
         out.append(header)
@@ -54,6 +55,7 @@ def _matrix_section_rows(
 def build_ports_totals_matrix_csv(**kwargs) -> bytes:
     report = build_ports_totals_matrix(**kwargs)
     row_header = str(report.get("row_label_header") or "Año").upper()
+    month_labels = report.get("month_labels") or MONTH_LABELS
     rows: list[list[Any]] = []
     rows.extend(
         _matrix_section_rows(
@@ -61,6 +63,7 @@ def build_ports_totals_matrix_csv(**kwargs) -> bytes:
             sections=report["sections"],
             metric_key="calls",
             row_label_header=row_header,
+            month_labels=month_labels,
         )
     )
     rows.extend(
@@ -69,6 +72,7 @@ def build_ports_totals_matrix_csv(**kwargs) -> bytes:
             sections=report["sections"],
             metric_key="pax",
             row_label_header=row_header,
+            month_labels=month_labels,
         )
     )
     return _csv_bytes(rows)
@@ -78,6 +82,7 @@ def build_port_carrier_matrix_csv(**kwargs) -> bytes:
     report = build_port_carrier_matrix(**kwargs)
     port_name = report["port"]["name"]
     row_header = str(report.get("row_label_header") or "Año").upper()
+    month_labels = report.get("month_labels") or MONTH_LABELS
     rows: list[list[Any]] = []
     rows.extend(
         _matrix_section_rows(
@@ -85,6 +90,7 @@ def build_port_carrier_matrix_csv(**kwargs) -> bytes:
             sections=report["sections"],
             metric_key="calls",
             row_label_header=row_header,
+            month_labels=month_labels,
         )
     )
     rows.extend(
@@ -93,6 +99,7 @@ def build_port_carrier_matrix_csv(**kwargs) -> bytes:
             sections=report["sections"],
             metric_key="pax",
             row_label_header=row_header,
+            month_labels=month_labels,
         )
     )
     return _csv_bytes(rows)
@@ -102,6 +109,7 @@ def build_port_trends_csv(**kwargs) -> bytes:
     from apps.bookings.services.report_exports.matrix_reports import (
         _trends_export_columns,
         _trends_export_groups,
+        _trends_growth_export_title,
     )
 
     report = build_port_trends(**kwargs)
@@ -133,11 +141,7 @@ def build_port_trends_csv(**kwargs) -> bytes:
     if totals:
         append_metric("TOTAL", totals)
 
-    growth_title = (
-        "GROWTH PERCENTAGE (PAX vs período anterior)"
-        if report.get("season") and report.get("season") != "natural"
-        else "GROWTH PERCENTAGE (PAX YoY)"
-    )
+    growth_title = _trends_growth_export_title(report)
     rows.extend([[], [growth_title], []])
     rows.append(["Grupo / Naviera", *[str(y) for y in years]])
 
