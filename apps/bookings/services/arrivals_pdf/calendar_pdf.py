@@ -28,13 +28,22 @@ from apps.bookings.services.arrivals_pdf.chrome import (
     fit_text,
     port_subtitle,
 )
-from apps.bookings.services.arrivals_pdf.labels import arrivals_title
-from apps.bookings.services.arrivals_pdf.logo import port_logo_reader
+from apps.bookings.services.arrivals_pdf.labels import (
+    arrivals_months_title,
+    arrivals_range_title,
+    arrivals_title,
+)
+from apps.bookings.services.arrivals_pdf.logo import port_logo_reader, unique_banner_ports
 from apps.bookings.services.arrivals_pdf.list_data import group_bookings_by_port
-from apps.bookings.services.arrivals_pdf.month_grid import group_port_months
+from apps.bookings.services.arrivals_pdf.month_grid import (
+    iter_port_months,
+    month_bounds,
+    month_pairs,
+)
 from apps.bookings.services.arrivals_pdf.overview import (
     ExportOverview,
     draw_overview_band,
+    scope_overview,
 )
 from apps.bookings.services.report_exports.common import PAX_BASIS_PLANNED
 
@@ -55,21 +64,36 @@ def build_arrivals_calendar_pdf(
     date_to=None,
     ports: list | None = None,
     pax_basis: str = PAX_BASIS_PLANNED,
+    months: list[int] | None = None,
 ) -> bytes:
     page_w, page_h = landscape(A4)
     updated = timezone.localdate()
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=landscape(A4))
+    if overview is not None:
+        _draw_total_page(
+            pdf,
+            page_w,
+            page_h,
+            overview=overview,
+            bookings=bookings,
+            date_from=date_from,
+            date_to=date_to,
+            ports=ports,
+            updated=updated,
+            months=months,
+        )
+        pdf.showPage()
     weekly = mode == "weekly" and date_from is not None
     if weekly:
         days = week_dates(date_from, date_to)
         grouped = group_bookings_by_port(bookings)
         by_port = {port.id: rows for port, rows in grouped}
         port_list = list(ports or [port for port, _rows in grouped])
+        week_start, week_end = (days[0], days[-1]) if days else (date_from, date_to)
         for port in port_list:
-            block = build_week_block(
-                port, days, by_port.get(port.id, []), pax_basis=pax_basis
-            )
+            rows = by_port.get(port.id, [])
+            block = build_week_block(port, days, rows, pax_basis=pax_basis)
             _draw_month(
                 pdf,
                 page_w,
@@ -78,12 +102,25 @@ def build_arrivals_calendar_pdf(
                 subtitle=port_subtitle(port),
                 block=block,
                 updated=updated,
-                overview=overview,
+                overview=scope_overview(
+                    overview,
+                    rows,
+                    date_from=week_start,
+                    date_to=week_end,
+                    pax_basis=pax_basis,
+                ),
                 weekly=True,
             )
             pdf.showPage()
     else:
-        for port, year, month, rows in group_port_months(bookings):
+        for port, year, month, rows in iter_port_months(
+            bookings,
+            date_from=date_from,
+            date_to=date_to,
+            ports=ports,
+            months=months,
+        ):
+            start, end = month_bounds(year, month)
             block = build_month_block(port, year, month, rows, pax_basis=pax_basis)
             _draw_month(
                 pdf,
@@ -93,11 +130,66 @@ def build_arrivals_calendar_pdf(
                 subtitle=port_subtitle(port),
                 block=block,
                 updated=updated,
-                overview=overview,
+                overview=scope_overview(
+                    overview,
+                    rows,
+                    date_from=start,
+                    date_to=end,
+                    pax_basis=pax_basis,
+                ),
             )
             pdf.showPage()
     pdf.save()
     return buffer.getvalue()
+
+
+def _draw_total_page(
+    pdf: canvas.Canvas,
+    page_w: float,
+    page_h: float,
+    *,
+    overview: ExportOverview,
+    bookings: list,
+    date_from,
+    date_to,
+    ports: list | None,
+    updated,
+    months: list[int] | None = None,
+) -> None:
+    banner_ports = unique_banner_ports(
+        ports or [getattr(item, "port", None) for item in bookings]
+    )
+    logo = port_logo_reader(banner_ports[0]) if banner_ports else None
+    subtitle = port_subtitle(banner_ports[0]) if banner_ports else overview.kind_label
+    start, end = date_from, date_to
+    dates = [item.call_date for item in bookings if getattr(item, "call_date", None)]
+    if dates:
+        start = start or min(dates)
+        end = end or max(dates)
+    pairs = month_pairs(start, end, months)
+    if months and pairs:
+        title = arrivals_months_title(pairs)
+    elif start and end:
+        title = arrivals_range_title(start, end)
+    else:
+        title = overview.kind_label
+    draw_flyer_header(
+        pdf,
+        page_w,
+        page_h,
+        logo=logo,
+        title=title,
+        subtitle=subtitle,
+        total=len(bookings),
+        title_size=18,
+        logo_h=1.25 * cm,
+    )
+    table_w = page_w - 2 * MARGIN
+    y = page_h - MARGIN - HEADER_H
+    draw_overview_band(pdf, MARGIN, y, table_w, overview)
+    draw_table_footer_bar(
+        pdf, MARGIN, MARGIN, table_w, updated=updated, kind="calendar"
+    )
 
 
 def _draw_month(

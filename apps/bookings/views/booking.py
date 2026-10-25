@@ -70,6 +70,7 @@ from apps.bookings.services.arrivals_pdf import (
     build_proximity_matrix_xlsx,
 )
 from apps.bookings.services.arrivals_pdf.list_data import include_list_cancellation
+from apps.bookings.services.arrivals_pdf.month_grid import parse_calendar_months
 from apps.bookings.services.booking_export import build_bookings_csv, build_bookings_xlsx
 from apps.bookings.services.calendar_export import (
     build_calendar_csv,
@@ -1625,12 +1626,19 @@ class BookingViewSet(
             parse_cancellation_reason_param(request.query_params),
         )
 
-        bookings = list(qs)
         mode = (request.query_params.get("calendar_mode") or "monthly").strip().lower()
         if mode not in {"weekly", "monthly", "annual"}:
             mode = "monthly"
+        months = (
+            parse_calendar_months(request.query_params.get("months"))
+            if mode == "annual"
+            else []
+        )
+        if months:
+            qs = qs.filter(call_date__month__in=months)
+        bookings = list(qs)
         ports = list(Port.objects.filter(id__in=port_ids).order_by("name"))
-        if not bookings and mode not in {"weekly", "monthly"}:
+        if not bookings and mode not in {"weekly", "monthly"} and not months:
             return Response(
                 {"detail": "No hay reservas para exportar en ese rango."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1641,7 +1649,11 @@ class BookingViewSet(
             code = booking.port.code
             if code not in seen:
                 seen.append(code)
-        filename = calendar_export_filename(seen, date_from, date_to, fmt)
+        if not seen:
+            seen = [port.code for port in ports]
+        filename = calendar_export_filename(
+            seen, date_from, date_to, fmt, mode=mode
+        )
         pax_basis = self._report_pax_basis(request)
         overview = build_overview(
             kind="calendar",
@@ -1650,6 +1662,7 @@ class BookingViewSet(
             date_from=date_from,
             date_to=date_to,
             pax_basis=pax_basis,
+            months=months or None,
         )
         if fmt == "pdf":
             content = build_arrivals_calendar_pdf(
@@ -1660,8 +1673,8 @@ class BookingViewSet(
                 date_to=date_to,
                 ports=ports,
                 pax_basis=pax_basis,
+                months=months or None,
             )
-            filename = arrivals_pdf_filename(bookings, kind="calendar")
             return _pdf_download(content, filename)
         if fmt == "csv":
             content = build_calendar_csv(bookings)
@@ -1675,6 +1688,7 @@ class BookingViewSet(
                 date_to=date_to,
                 ports=ports,
                 pax_basis=pax_basis,
+                months=months or None,
             )
             response = HttpResponse(
                 content,

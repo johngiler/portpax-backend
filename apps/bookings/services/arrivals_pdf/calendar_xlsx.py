@@ -19,6 +19,7 @@ from apps.bookings.services.arrivals_pdf.calendar_block import (
 )
 from apps.bookings.services.arrivals_pdf.labels import (
     FOOTER_NOTE_CAL,
+    arrivals_months_title,
     arrivals_range_title,
     updated_label,
 )
@@ -26,10 +27,16 @@ from apps.bookings.services.arrivals_pdf.logo import add_worksheet_port_logo
 from apps.bookings.services.arrivals_pdf.list_data import group_bookings_by_port
 from apps.bookings.services.arrivals_pdf.month_grid import (
     excel_sheet_title,
-    group_port_months,
+    iter_port_months,
+    month_bounds,
+    month_pairs,
     months_in_range,
 )
-from apps.bookings.services.arrivals_pdf.overview import ExportOverview, paint_overview
+from apps.bookings.services.arrivals_pdf.overview import (
+    FILL_OVERVIEW,
+    ExportOverview,
+    paint_overview,
+)
 from apps.bookings.services.report_exports.common import PAX_BASIS_PLANNED
 
 MONTHS_PER_ROW = 3
@@ -46,6 +53,7 @@ FILL_NAVY = PatternFill("solid", fgColor=NAVY)
 FILL_WHITE = PatternFill("solid", fgColor=WHITE)
 FILL_DATE = PatternFill("solid", fgColor="E8F0F7")
 FONT_TITLE = Font(name="Cambria", size=16, bold=True, color=INK)
+FONT_BLOCK_KPI = Font(name="Calibri", size=8, bold=True, color="163556")
 FONT_MONTH = Font(name="Calibri", size=10, bold=True, color=WHITE)
 FONT_WEEK = Font(name="Calibri", size=8, bold=True, color=WHITE)
 FONT_DATE = Font(name="Calibri", size=7, color=INK)
@@ -53,6 +61,7 @@ FONT_POS = Font(name="Calibri", size=8, bold=True, color=INK)
 FONT_SHIP = Font(name="Calibri", size=7, color=INK)
 FONT_FOOTER = Font(name="Calibri", size=8, color=WHITE)
 ALIGN_C = Alignment(horizontal="center", vertical="center", wrap_text=True)
+ALIGN_L = Alignment(horizontal="left", vertical="center", wrap_text=True)
 THIN = Side(style="thin", color=GRID)
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
@@ -66,7 +75,9 @@ def build_arrivals_calendar_xlsx(
     date_to=None,
     ports: list | None = None,
     pax_basis: str = PAX_BASIS_PLANNED,
+    months: list[int] | None = None,
 ) -> bytes:
+    month_filter = list(months) if months else None
     if mode == "weekly" and date_from is not None:
         return _build_week_xlsx(
             bookings,
@@ -91,26 +102,50 @@ def build_arrivals_calendar_xlsx(
     updated = timezone.localdate()
     by_port: dict[int, dict] = {}
     order: list[int] = []
-    for port, year, month, rows in group_port_months(bookings):
+    for port, year, month, rows in iter_port_months(
+        bookings,
+        date_from=date_from,
+        date_to=date_to,
+        ports=ports,
+        months=month_filter,
+    ):
         if port.id not in by_port:
             by_port[port.id] = {"port": port, "months": []}
             order.append(port.id)
         by_port[port.id]["months"].append((year, month, rows))
+    selected_pairs = month_pairs(date_from, date_to, month_filter)
     for port_id in order:
         pack = by_port[port_id]
         port = pack["port"]
         ws = wb.create_sheet(_unique_sheet(used, port.name or "Puerto"))
         ws.sheet_view.showGridLines = False
         ws.page_setup.orientation = "landscape"
-        dates = []
-        for year, month, rows in pack["months"]:
-            dates.extend(b.call_date for b in rows)
+        port_months = pack["months"]
+        if month_filter and selected_pairs:
+            banner_title = arrivals_months_title(selected_pairs)
+        elif date_from is not None and date_to is not None:
+            banner_title = arrivals_range_title(date_from, date_to)
+        elif port_months:
+            start, _ = month_bounds(port_months[0][0], port_months[0][1])
+            _, finish = month_bounds(port_months[-1][0], port_months[-1][1])
+            banner_title = arrivals_range_title(start, finish)
+        else:
+            dates = [
+                booking.call_date
+                for _y, _m, rows in port_months
+                for booking in rows
+            ]
+            banner_title = (
+                arrivals_range_title(min(dates), max(dates)) if dates else ""
+            )
         span = MONTHS_PER_ROW * (BLOCK_COLS + GAP_COLS) - GAP_COLS
-        start_row = paint_overview(ws, overview, last_col=span)
+        start_row = paint_overview(
+            ws, overview, last_col=span, kpi_prefix="Total"
+        )
         _paint_sheet_banner(
             ws,
             port=port,
-            title=arrivals_range_title(min(dates), max(dates)),
+            title=banner_title,
             span=span,
             start_row=start_row,
         )
@@ -123,11 +158,20 @@ def build_arrivals_calendar_xlsx(
                 col_i = 0
             start_col = 1 + col_i * (BLOCK_COLS + GAP_COLS)
             block = build_month_block(port, year, month, rows, pax_basis=pax_basis)
+            last_col = start_col + BLOCK_COLS - 1
+            _paint_block_kpis(
+                ws,
+                band_row,
+                start_col,
+                last_col,
+                block.kpi_line,
+                prefix="Mes",
+            )
             bottom = _paint_month(
                 ws,
                 block=block,
                 updated=updated,
-                start_row=band_row,
+                start_row=band_row + 1,
                 start_col=start_col,
                 row_h=22,
             )
@@ -161,7 +205,11 @@ def _build_week_xlsx(
         for port in port_list
     ]
     return _workbook_one_sheet(
-        items, overview=overview, sheet_title="Semana", row_h=28
+        items,
+        overview=overview,
+        sheet_title="Semana",
+        row_h=28,
+        block_prefix="Semana",
     )
 
 
@@ -205,7 +253,13 @@ def _build_month_xlsx(
                     ),
                 )
             )
-    return _workbook_one_sheet(items, overview=overview, sheet_title="Mes", row_h=22)
+    return _workbook_one_sheet(
+        items,
+        overview=overview,
+        sheet_title="Mes",
+        row_h=22,
+        block_prefix="Mes",
+    )
 
 
 def _workbook_one_sheet(
@@ -214,6 +268,7 @@ def _workbook_one_sheet(
     overview: ExportOverview | None,
     sheet_title: str,
     row_h: int,
+    block_prefix: str = "Mes",
 ) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -222,7 +277,9 @@ def _workbook_one_sheet(
     ws.page_setup.orientation = "landscape"
     updated = timezone.localdate()
     span = min(len(items), MONTHS_PER_ROW) * (BLOCK_COLS + GAP_COLS) - GAP_COLS
-    start_row = paint_overview(ws, overview, last_col=max(span, BLOCK_COLS))
+    start_row = paint_overview(
+        ws, overview, last_col=max(span, BLOCK_COLS), kpi_prefix="Total"
+    )
     col_i = 0
     band_row = start_row
     band_bottom = start_row
@@ -251,11 +308,19 @@ def _workbook_one_sheet(
         cell.font = FONT_TITLE
         cell.alignment = ALIGN_C
         ws.row_dimensions[band_row].height = 36 if has_logo else 22
+        _paint_block_kpis(
+            ws,
+            band_row + 1,
+            start_col,
+            last_col,
+            block.kpi_line,
+            prefix=block_prefix,
+        )
         bottom = _paint_month(
             ws,
             block=block,
             updated=updated,
-            start_row=band_row + 1,
+            start_row=band_row + 2,
             start_col=start_col,
             row_h=row_h,
         )
@@ -277,6 +342,32 @@ def _unique_sheet(used: set[str], raw: str) -> str:
         n += 1
     used.add(name)
     return name
+
+
+def _paint_block_kpis(
+    ws,
+    row: int,
+    start_col: int,
+    last_col: int,
+    kpi_line: str,
+    *,
+    prefix: str,
+) -> None:
+    text = f"{prefix}    {kpi_line}" if kpi_line else prefix
+    ws.merge_cells(
+        start_row=row,
+        start_column=start_col,
+        end_row=row,
+        end_column=last_col,
+    )
+    cell = ws.cell(row, start_col, text)
+    cell.font = FONT_BLOCK_KPI
+    cell.fill = FILL_OVERVIEW
+    cell.alignment = ALIGN_L
+    for col in range(start_col + 1, last_col + 1):
+        extra = ws.cell(row, col)
+        extra.fill = FILL_OVERVIEW
+    ws.row_dimensions[row].height = 18
 
 
 def _paint_sheet_banner(ws, *, port, title: str, span: int, start_row: int = 1) -> None:

@@ -76,6 +76,7 @@ def build_calendar_xlsx(
     date_to: date | None = None,
     ports: list | None = None,
     pax_basis: str = "planned",
+    months: list[int] | None = None,
 ) -> bytes:
     return build_arrivals_calendar_xlsx(
         bookings,
@@ -85,7 +86,15 @@ def build_calendar_xlsx(
         date_to=date_to,
         ports=ports,
         pax_basis=pax_basis,
+        months=months,
     )
+
+
+CALENDAR_MODE_FILE = {
+    "weekly": "semanal",
+    "monthly": "mensual",
+    "annual": "anual",
+}
 
 
 def calendar_export_filename(
@@ -93,11 +102,17 @@ def calendar_export_filename(
     date_from: date,
     date_to: date,
     ext: str,
+    *,
+    mode: str = "monthly",
 ) -> str:
+    vista = CALENDAR_MODE_FILE.get(mode, "mensual")
     if len(port_codes) == 1:
         label = port_codes[0]
     elif 1 < len(port_codes) <= 3:
         label = "_".join(port_codes)
     else:
         label = "multipuerto"
-    return f"calendario_{label}_{date_from.isoformat()}_{date_to.isoformat()}.{ext}"
+    return (
+        f"calendario_{vista}_{label}_"
+        f"{date_from.isoformat()}_{date_to.isoformat()}.{ext}"
+    )

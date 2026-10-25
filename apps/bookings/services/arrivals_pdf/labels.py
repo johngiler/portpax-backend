@@ -73,6 +73,59 @@ def range_span_label(start: date, end: date) -> str:
     return f"{title_date_label(start)} – {title_date_label(end)}"
 
 
+def _month_short_cap(month: int) -> str:
+    name = MONTHS_SHORT[month - 1]
+    return name[:1].upper() + name[1:]
+
+
+def selected_months_label(pairs: list[tuple[int, int]]) -> str:
+    """Non-contiguous months as 'Feb · Ago 2027' (runs as 'Feb – Abr')."""
+    ordered = sorted({(year, month) for year, month in pairs})
+    if not ordered:
+        return ""
+    if len(ordered) == 1:
+        year, month = ordered[0]
+        return f"{_month_short_cap(month)} {year}"
+
+    runs: list[list[int]] = []
+    for year, month in ordered:
+        if not runs:
+            runs.append([year, month, year, month])
+            continue
+        end_year, end_month = runs[-1][2], runs[-1][3]
+        nxt_year, nxt_month = (
+            (end_year + 1, 1) if end_month == 12 else (end_year, end_month + 1)
+        )
+        if (year, month) == (nxt_year, nxt_month):
+            runs[-1][2] = year
+            runs[-1][3] = month
+        else:
+            runs.append([year, month, year, month])
+
+    same_year = len({year for year, _month in ordered}) == 1
+
+    def _fmt(year: int, month: int, *, with_year: bool) -> str:
+        cap = _month_short_cap(month)
+        return f"{cap} {year}" if with_year else cap
+
+    parts: list[str] = []
+    for start_year, start_month, end_year, end_month in runs:
+        if (start_year, start_month) == (end_year, end_month):
+            parts.append(_fmt(start_year, start_month, with_year=not same_year))
+            continue
+        left = _fmt(start_year, start_month, with_year=not same_year)
+        right = _fmt(end_year, end_month, with_year=not same_year)
+        parts.append(f"{left} – {right}")
+    if same_year:
+        return f"{' · '.join(parts)} {ordered[0][0]}"
+    return " · ".join(parts)
+
+
+def arrivals_months_title(pairs: list[tuple[int, int]]) -> str:
+    label = selected_months_label(pairs)
+    return f"Arribos {label}" if label else "Arribos"
+
+
 def arrivals_range_title(start: date, end: date) -> str:
     return f"Arribos {range_span_label(start, end)}"
 

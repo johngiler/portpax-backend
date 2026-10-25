@@ -14,6 +14,10 @@ from apps.bookings.services.arrivals_pdf.labels import (
 )
 from apps.bookings.services.arrivals_pdf.month_grid import bookings_by_day, month_weeks
 from apps.bookings.services.arrivals_pdf.occupancy import days_in_range, prepare_availability_layout
+from apps.bookings.services.arrivals_pdf.overview import (
+    format_kpi_line,
+    kpis_for_bookings,
+)
 from apps.bookings.services.report_exports.common import (
     PAX_BASIS_PLANNED,
     booking_pax,
@@ -41,6 +45,7 @@ class MonthBlock:
     labels: list[str]
     weeks: list[WeekBand]
     weekday_labels: tuple[str, ...] = WEEKDAYS_CAL_SHORT
+    kpi_line: str = ""
 
 
 def build_month_block(
@@ -81,6 +86,7 @@ def build_month_block(
         labels=labels,
         weeks=weeks,
         weekday_labels=WEEKDAYS_CAL_SHORT,
+        kpi_line=format_kpi_line(kpis_for_bookings(rows, pax_basis=pax_basis)),
     )
 
 
@@ -126,6 +132,7 @@ def build_week_block(
         labels=labels,
         weeks=[WeekBand(count=count, dates=dates, rows=pos_rows)],
         weekday_labels=WEEKDAYS_WEEK_SHORT,
+        kpi_line=format_kpi_line(kpis_for_bookings(rows, pax_basis=pax_basis)),
     )
 
 

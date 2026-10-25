@@ -16,7 +16,11 @@ from apps.bookings.services.arrivals_pdf.chrome import (
     STEEL,
     fit_text,
 )
-from apps.bookings.services.arrivals_pdf.labels import range_span_label
+from apps.bookings.services.arrivals_pdf.labels import (
+    range_span_label,
+    selected_months_label,
+)
+from apps.bookings.services.arrivals_pdf.month_grid import month_pairs
 from apps.bookings.services.booking_export import STATUS_LABELS_ES
 from apps.bookings.services.report_exports.common import (
     PAX_BASIS_CAPACITY,
@@ -80,7 +84,7 @@ class ExportOverview:
 
     @property
     def kpi_line(self) -> str:
-        return "    ".join(f"{item.label}  {item.value}" for item in self.kpis)
+        return format_kpi_line(self.kpis)
 
     @property
     def criteria_line(self) -> str:
@@ -88,6 +92,53 @@ class ExportOverview:
             return "Filtros: sin filtros adicionales"
         joined = "  ·  ".join(f"{label}: {value}" for label, value in self.criteria)
         return f"Filtros: {joined}"
+
+
+def format_kpi_line(kpis: list[ExportKpi], *, prefix: str = "") -> str:
+    body = "    ".join(f"{item.label}  {item.value}" for item in kpis)
+    if not prefix:
+        return body
+    return f"{prefix}    {body}" if body else prefix
+
+
+def kpis_for_bookings(
+    bookings: list | None,
+    *,
+    kind: str = "calendar",
+    pax_basis: str = PAX_BASIS_PLANNED,
+) -> list[ExportKpi]:
+    return _default_kpis(
+        kind,
+        list(bookings or []),
+        None,
+        pax_basis=normalize_pax_basis(pax_basis),
+    )
+
+
+def scope_overview(
+    overview: ExportOverview | None,
+    bookings: list | None,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    pax_basis: str = PAX_BASIS_PLANNED,
+) -> ExportOverview | None:
+    """KPIs + Rango for one PDF page / Excel sheet; keep the file's other filters."""
+    if overview is None:
+        return None
+    rows = list(bookings or [])
+    basis = normalize_pax_basis(pax_basis)
+    start, end = _range(rows, date_from, date_to, None)
+    criteria = [(label, value) for label, value in overview.criteria if label != "Rango"]
+    if start and end:
+        criteria.insert(0, ("Rango", range_span_label(start, end)))
+    return ExportOverview(
+        kind=overview.kind,
+        kind_label=overview.kind_label,
+        kpis=_default_kpis(overview.kind, rows, None, pax_basis=basis),
+        criteria=_dedupe_criteria(criteria),
+        legend=overview.legend,
+    )
 
 
 def build_overview(
@@ -101,14 +152,25 @@ def build_overview(
     extra_criteria: list[tuple[str, str]] | None = None,
     payload: dict | None = None,
     pax_basis: str = PAX_BASIS_PLANNED,
+    months: list[int] | None = None,
 ) -> ExportOverview:
     rows = list(bookings or [])
+    if months:
+        allowed = set(months)
+        rows = [
+            item
+            for item in rows
+            if getattr(item, "call_date", None)
+            and item.call_date.month in allowed
+        ]
     raw_basis = pax_basis
     if query is not None:
         raw_basis = _get(query, "pax_basis") or pax_basis
     basis = normalize_pax_basis(raw_basis)
     start, end = _range(rows, date_from, date_to, query)
-    criteria = _criteria_from_query(query, start=start, end=end, pax_basis=basis)
+    criteria = _criteria_from_query(
+        query, start=start, end=end, pax_basis=basis, months=months
+    )
     if extra_criteria:
         criteria.extend(extra_criteria)
     kpis = extra_kpis or _default_kpis(kind, rows, payload, pax_basis=basis)
@@ -158,13 +220,19 @@ def paint_overview(
     start_row: int = 1,
     start_col: int = 1,
     last_col: int = 8,
+    kpi_prefix: str = "",
 ) -> int:
     if overview is None:
         return start_row
     last = max(last_col, start_col)
+    kpi_value = (
+        format_kpi_line(overview.kpis, prefix=kpi_prefix)
+        if kpi_prefix
+        else overview.kpi_line
+    )
     for offset, value, font, height in (
         (0, overview.kind_label, FONT_KIND, 20),
-        (1, overview.kpi_line, FONT_KPI, 18),
+        (1, kpi_value, FONT_KPI, 18),
         (2, overview.criteria_line, FONT_CRITERIA, 28),
     ):
         row = start_row + offset
@@ -240,19 +308,37 @@ def _default_kpis(
     return kpis
 
 
+def _range_criteria_value(
+    start, end, months: list[int] | None
+) -> str | None:
+    pairs = month_pairs(start, end, months)
+    if months and pairs:
+        return selected_months_label(pairs)
+    if start and end:
+        return range_span_label(start, end)
+    return None
+
+
 def _criteria_from_query(
-    query, *, start, end, pax_basis: str = PAX_BASIS_PLANNED
+    query,
+    *,
+    start,
+    end,
+    pax_basis: str = PAX_BASIS_PLANNED,
+    months: list[int] | None = None,
 ) -> list[tuple[str, str]]:
     if query is None:
         items: list[tuple[str, str]] = []
-        if start and end:
-            items.append(("Rango", range_span_label(start, end)))
+        rango = _range_criteria_value(start, end, months)
+        if rango:
+            items.append(("Rango", rango))
         if normalize_pax_basis(pax_basis) == PAX_BASIS_CAPACITY:
             items.append(("Base PAX", "Cap. máx."))
         return items
     items: list[tuple[str, str]] = []
-    if start and end:
-        items.append(("Rango", range_span_label(start, end)))
+    rango = _range_criteria_value(start, end, months)
+    if rango:
+        items.append(("Rango", rango))
     ports = _names("catalogs.Port", _ids(query, "port", "ports"))
     items.append(("Puertos", ", ".join(ports) if ports else "todos"))
     vessels = _names("catalogs.Vessel", _ids(query, "vessel"))
