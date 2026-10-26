@@ -320,6 +320,7 @@ def _focus_match_queryset(
     status_filters: list[str],
     first_arrival: bool | None = None,
     cancellation_reason: str | None = None,
+    request: Any = None,
 ):
     """Bookings that satisfy soft-focus filters (day discovery only)."""
     from apps.bookings.models import Booking
@@ -343,6 +344,7 @@ def _focus_match_queryset(
             port_id=port_id,
             allowed_ports=allowed_ports,
             status=None,
+            request=request,
         )
     if vessel_id:
         qs = qs.filter(vessel_id=vessel_id)
@@ -382,6 +384,7 @@ def _soft_focus_matching_days(
     conflict_type: str | None,
     first_arrival: bool | None = None,
     cancellation_reason: str | None = None,
+    request: Any = None,
 ) -> list[date]:
     qs = _focus_match_queryset(
         port_id=port_id,
@@ -396,6 +399,7 @@ def _soft_focus_matching_days(
         status_filters=status_filters,
         first_arrival=first_arrival,
         cancellation_reason=cancellation_reason,
+        request=request,
     )
     if not _conflict_filter_active(
         has_conflict=has_conflict,
@@ -448,6 +452,7 @@ def _occupied_matching_days(
     date_from: date,
     date_to: date,
     allowed_ports: set[int] | None,
+    request: Any = None,
 ) -> list[date]:
     return list(
         scheduled_bookings_qs(
@@ -471,6 +476,7 @@ def _density_matching_days(
     date_to: date,
     allowed_ports: set[int] | None,
     ships_per_day: int,
+    request: Any = None,
 ) -> list[date]:
     from django.db.models import Count
 
@@ -497,6 +503,7 @@ def _neighbor_bookings_for_days(
     page_days: list[date],
     allowed_ports: set[int] | None,
     include_cancelled: bool,
+    request: Any = None,
 ):
     """All occupancy (and optional cancelled) calls on the given days — neighbors."""
     if not page_days:
@@ -759,6 +766,7 @@ def build_availability_data(
                 conflict_type=conflict_type,
                 first_arrival=first_arrival,
                 cancellation_reason=cancellation_reason,
+                request=request,
             )
             if ships_per_day is not None:
                 density_days = set(
@@ -768,6 +776,7 @@ def build_availability_data(
                         date_to=date_to,
                         allowed_ports=allowed_ports,
                         ships_per_day=ships_per_day,
+                        request=request,
                     )
                 )
                 matching_days = [day for day in matching_days if day in density_days]
@@ -778,6 +787,7 @@ def build_availability_data(
                 date_to=date_to,
                 allowed_ports=allowed_ports,
                 ships_per_day=ships_per_day,
+                request=request,
             )
         else:
             matching_days = _occupied_matching_days(
@@ -785,6 +795,7 @@ def build_availability_data(
                 date_from=date_from,
                 date_to=date_to,
                 allowed_ports=allowed_ports,
+                request=request,
             )
 
         use_page = page if page is not None else 1
@@ -796,6 +807,7 @@ def build_availability_data(
             page_days=page_days,
             allowed_ports=allowed_ports,
             include_cancelled="c" in status_filters,
+            request=request,
         )
         bookings_by_day, columns = _place_bookings_by_day(
             bookings=bookings,
