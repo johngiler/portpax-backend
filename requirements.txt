@@ -2,12 +2,12 @@
 # Upgrade policy: .cursor/rules/portpax-deps-upgrade.mdc
 Django==6.0.9
 django-cors-headers==4.9.0
-djangorestframework==3.17.2
+djangorestframework==3.18.2
 djangorestframework-simplejwt==5.5.1
 drf-spectacular==0.29.0
 djoser==2.3.5
 social-auth-app-django==7.1.0
-social-auth-core==6.1.1
+social-auth-core==6.2.0
 gunicorn==26.2.0
 daphne==4.2.3
 channels==4.3.2
@@ -17,7 +17,7 @@ redis==6.4.0
 psycopg[binary]==3.3.5
 PyJWT==2.15.0
 python-dotenv==1.2.3
-Pillow==12.3.0
+Pillow==13.0.0
 openpyxl==3.1.5
 reportlab==5.0.1
 cryptography==50.0.1
