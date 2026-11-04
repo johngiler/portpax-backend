@@ -35,6 +35,8 @@ install -m 0644 "$SCRIPT_DIR/filter.d/portpax-nginx.conf" \
   /etc/fail2ban/filter.d/portpax-nginx.conf
 install -m 0644 "$SCRIPT_DIR/jail.d/portpax-api.local" \
   /etc/fail2ban/jail.d/portpax-api.local
+install -m 0644 "$SCRIPT_DIR/jail.d/sshd-port.local" \
+  /etc/fail2ban/jail.d/sshd-port.local
 
 # Ensure sshd jail stays available; do not disable default jails globally.
 if [[ ! -f /etc/fail2ban/jail.local ]]; then
