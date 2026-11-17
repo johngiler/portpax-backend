@@ -11,6 +11,13 @@ def migrate_loa_recalc_and_deactivate_combined(apps, schema_editor):
     PositionComponent = apps.get_model("catalogs", "PositionComponent")
     PositionLoaRecalcRule = apps.get_model("catalogs", "PositionLoaRecalcRule")
 
+    # Fresh DBs still have combined_position NOT NULL until 0036 drops it.
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute(
+            "ALTER TABLE catalogs_positionloarecalcrule "
+            "ALTER COLUMN combined_position_id DROP NOT NULL"
+        )
+
     # Convert legacy combined-based rules to pier pairs.
     for rule in PositionLoaRecalcRule.objects.all():
         combined_id = getattr(rule, "combined_position_id", None)
@@ -160,6 +167,18 @@ class Migration(migrations.Migration):
                 max_digits=7,
             ),
             preserve_default=False,
+        ),
+        # Allow pier-pair rows before 0036 drops combined_position (fresh DBs).
+        migrations.AlterField(
+            model_name="positionloarecalcrule",
+            name="combined_position",
+            field=models.ForeignKey(
+                help_text="Combined slot whose max LOA is shared (e.g. E1+E2).",
+                null=True,
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="loa_recalc_rules",
+                to="catalogs.position",
+            ),
         ),
         migrations.RunPython(migrate_loa_recalc_and_deactivate_combined, noop_reverse),
     ]
