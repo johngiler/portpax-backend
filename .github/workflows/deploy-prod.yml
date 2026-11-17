@@ -1,5 +1,6 @@
 # PRODUCTION deploy (ITM) — package backend and publish via S3 + SSM.
-# Requires IAM role (OIDC) portpax-prod-deploy-backend, trusted for this repo main only.
+# Runs only on itmgroup-mx/portpax-backend (skipped on johngiler BCT mirror).
+# Requires IAM role (OIDC) portpax-prod-deploy-backend, trusted for ITM main only.
 #
 # Always on server: pip, check, migrate, collectstatic, restart gunicorn, reload nginx.
 # Daphne / Celery: optional (workflow_dispatch inputs; push defaults to both on).
@@ -35,6 +36,7 @@ env:
 
 jobs:
   deploy:
+    if: github.repository == 'itmgroup-mx/portpax-backend'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
