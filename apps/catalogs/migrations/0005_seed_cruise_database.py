@@ -1,11 +1,14 @@
 """Seed shipping lines and vessels from backend/data/cruise_database.json (Base_Datos_Cruceros.xlsx)."""
 
 import json
+import logging
 import re
 from decimal import Decimal
 from pathlib import Path
 
 from django.db import migrations
+
+logger = logging.getLogger(__name__)
 
 
 def _slugify(value: str) -> str:
@@ -36,6 +39,14 @@ def seed_cruise_database(apps, schema_editor):
     Vessel = apps.get_model("catalogs", "Vessel")
 
     data_path = Path(__file__).resolve().parents[3] / "data" / "cruise_database.json"
+    if not data_path.is_file():
+        # data/ is gitignored; prod/fresh hosts may have no seed file.
+        logger.warning(
+            "Skipping cruise database seed: %s not found (empty catalog).",
+            data_path,
+        )
+        return
+
     with data_path.open(encoding="utf-8") as f:
         records = json.load(f)
 
