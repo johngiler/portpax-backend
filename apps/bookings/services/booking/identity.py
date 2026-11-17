@@ -100,6 +100,7 @@ def update_booking_identity(
     audit_source: str | None = None,
     audit_extra: dict | None = None,
     rematch_lta: bool = True,
+    notify: bool = True,
 ) -> Booking:
     if booking.status == BookingStatus.C:
         raise BookingValidationError(
@@ -348,6 +349,7 @@ def update_booking_identity(
         booking,
         user=user,
         request=request,
+        notify=notify,
         previous_position_id=old_position_id,
         previous_call_date=old_call_date,
     )

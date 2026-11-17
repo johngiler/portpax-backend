@@ -105,6 +105,7 @@ def create_booking_batch(
     preferred_position_id: int | None = None,
     audit_changes: dict | None = None,
     status: str = BookingStatus.H,
+    notify_conflicts: bool = True,
 ) -> list[Booking]:
     specs = _normalize_entries(
         call_dates=call_dates,
@@ -287,7 +288,11 @@ def create_booking_batch(
         if booking.status in CONFIRMATION_PDF_STATUSES:
             save_confirmation_pdf(booking)
             booking.save(update_fields=["confirmation_pdf", "updated_at"])
-        refresh_related_booking_conflicts(booking, user=created_by)
+        refresh_related_booking_conflicts(
+            booking,
+            user=created_by,
+            notify=notify_conflicts,
+        )
         from apps.bookings.services.booking.first_arrival import (
             recalculate_first_arrival_for_booking,
         )

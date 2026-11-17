@@ -290,6 +290,8 @@ def create_from_resolved_rows(
                             preferred_position_id=preferred_position_id,
                             audit_changes=audit_changes,
                             status=initial_status,
+                            # One campanita at end via notify_bookings_bulk_created.
+                            notify_conflicts=False,
                         )
                         booking = bookings[0]
 

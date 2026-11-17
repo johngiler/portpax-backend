@@ -185,7 +185,8 @@ def materialize_agreement_bookings(
         created = []
 
     for booking in created:
-        refresh_related_booking_conflicts(booking, user=user)
+        # Job-level notify_lta_job fires once at the end.
+        refresh_related_booking_conflicts(booking, user=user, notify=False)
         from apps.bookings.services.booking.first_arrival import (
             recalculate_first_arrival_for_booking,
         )

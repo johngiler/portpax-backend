@@ -161,7 +161,7 @@ def unlink_agreement_bookings(
             user=user,
         )
         # Recompute LTA-zone / occupancy conflicts after FK clear.
-        refresh_related_booking_conflicts(booking, user=user)
+        refresh_related_booking_conflicts(booking, user=user, notify=False)
 
     _append_run_batch_bookings(
         batch,
@@ -348,7 +348,7 @@ def link_matching_bookings(
             },
             user=user,
         )
-        refresh_related_booking_conflicts(booking, user=user)
+        refresh_related_booking_conflicts(booking, user=user, notify=False)
 
     _append_run_batch_bookings(
         batch,

@@ -58,6 +58,7 @@ def update_booking_status(
     allow_lta_claim: bool = False,
     audit_source: str | None = None,
     audit_extra: dict | None = None,
+    notify: bool = True,
 ) -> Booking:
     allowed = set(ALLOWED_TRANSITIONS.get(booking.status, set()))
     # Mass-edit claim: a CO/H booking takes the LTA slot → Confirmada LTA.
@@ -203,7 +204,9 @@ def update_booking_status(
         refresh_related_booking_conflicts,
     )
 
-    refresh_related_booking_conflicts(booking, user=user, request=request)
+    refresh_related_booking_conflicts(
+        booking, user=user, request=request, notify=notify
+    )
     recalculate_first_arrival_for_booking(booking)
 
     status_changes: dict = {"status": {"from": old_status, "to": new_status}}
@@ -260,6 +263,7 @@ def update_booking_operational(
     override_reason: str = "",
     audit_source: str | None = None,
     audit_extra: dict | None = None,
+    notify: bool = True,
 ) -> Booking:
     from apps.accounts.permissions import (
         user_may_edit_booking_schedule,
@@ -466,6 +470,7 @@ def update_booking_operational(
             booking,
             user=user,
             request=request,
+            notify=notify,
             previous_position_id=prior_position_id,
             previous_call_date=prior_call_date,
         )

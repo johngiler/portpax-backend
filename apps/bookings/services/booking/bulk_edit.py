@@ -499,6 +499,7 @@ def apply_bulk_edit_rows(
                         require_lta_agreement=False,
                         audit_source="bulk_edit",
                         audit_extra=audit_extra,
+                        notify=False,
                     )
                     changed_fields.add("status")
                 booking = update_booking_identity(
@@ -512,6 +513,7 @@ def apply_bulk_edit_rows(
                     notes=notes,
                     audit_source="bulk_edit",
                     audit_extra=audit_extra,
+                    notify=False,
                 )
                 booking = update_booking_operational(
                     booking,
@@ -524,6 +526,7 @@ def apply_bulk_edit_rows(
                     override_reason=override_reason,
                     audit_source="bulk_edit",
                     audit_extra=audit_extra,
+                    notify=False,
                 )
                 if claimed_agreement_id and not booking.long_term_agreement_id:
                     booking.long_term_agreement_id = claimed_agreement_id
@@ -544,6 +547,7 @@ def apply_bulk_edit_rows(
                         allow_lta_claim=claiming,
                         audit_source="bulk_edit",
                         audit_extra=audit_extra,
+                        notify=False,
                     )
             updated.append(
                 {
