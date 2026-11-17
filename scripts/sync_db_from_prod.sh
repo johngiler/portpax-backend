@@ -80,7 +80,7 @@ else
     cat <<EOF
 set -euo pipefail
 cd '${PORTPAX_DEV_PATH}'
-DUMP=\$(./scripts/backup_db.sh | tee /dev/stderr | tail -n 1 | tr -d '\r')
+DUMP=\$(bash scripts/backup_db.sh | tee /dev/stderr | tail -n 1 | tr -d '\r')
 if [ -z "\$DUMP" ] || [ "\${DUMP%.sql}" = "\$DUMP" ]; then
   echo "ERROR: could not parse dump path: \$DUMP" >&2
   exit 1

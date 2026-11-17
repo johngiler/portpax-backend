@@ -63,7 +63,7 @@ mkdir -p "$LOCAL_DUMP_DIR"
 
 echo "[sync_db_from_dev] 1/3 Backup on ${REMOTE_HOST}..."
 REMOTE_DUMP="$(
-  ssh "$REMOTE_HOST" "cd '$REMOTE_PATH' && ./scripts/backup_db.sh" \
+  ssh "$REMOTE_HOST" "cd '$REMOTE_PATH' && bash scripts/backup_db.sh" \
     | tee /dev/stderr \
     | tail -n 1 \
     | tr -d '\r'
