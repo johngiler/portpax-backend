@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from apps.bookings.models import BookingImportBatch, BookingStatus
@@ -221,106 +221,140 @@ def create_from_resolved_rows(
         "source": "mass_import",
     }
 
-    for row in deferred:
-        if isinstance(row, dict):
-            retry_rows.append(_normalize_retry_row(row))
+    try:
+        for row in deferred:
+            if isinstance(row, dict):
+                retry_rows.append(_normalize_retry_row(row))
 
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        row_id = row.get("id") or row.get("row_number")
-        try:
-            port_id = int(row["port_id"])
-            shipping_line_id = int(row["shipping_line_id"])
-            vessel_id = int(row["vessel_id"])
-            call_date = date.fromisoformat(str(row["call_date"]))
-            eta = _parse_time(row.get("eta"))
-            etd = _parse_time(row.get("etd"))
-            if eta is None or etd is None:
-                raise BookingBatchCreateError("ETA/ETD inválidos.", "eta")
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_id = row.get("id") or row.get("row_number")
+            try:
+                port_id = int(row["port_id"])
+                shipping_line_id = int(row["shipping_line_id"])
+                vessel_id = int(row["vessel_id"])
+                call_date = date.fromisoformat(str(row["call_date"]))
+                eta = _parse_time(row.get("eta"))
+                etd = _parse_time(row.get("etd"))
+                if eta is None or etd is None:
+                    raise BookingBatchCreateError("ETA/ETD inválidos.", "eta")
 
-            from apps.bookings.services.booking.batch_create import BULK_CREATE_STATUSES
+                from apps.bookings.services.booking.batch_create import (
+                    BULK_CREATE_STATUSES,
+                )
 
-            status_raw = str(row.get("suggested_status") or BookingStatus.H).lower()
-            initial_status = (
-                status_raw if status_raw in BULK_CREATE_STATUSES else BookingStatus.H
-            )
+                status_raw = str(row.get("suggested_status") or BookingStatus.H).lower()
+                initial_status = (
+                    status_raw
+                    if status_raw in BULK_CREATE_STATUSES
+                    else BookingStatus.H
+                )
 
-            preferred_position_id = None
-            raw_pos = row.get("position_id")
-            if raw_pos is not None and raw_pos != "":
-                preferred_position_id = int(raw_pos)
+                preferred_position_id = None
+                raw_pos = row.get("position_id")
+                if raw_pos is not None and raw_pos != "":
+                    preferred_position_id = int(raw_pos)
 
-            candidate = (
-                row.get("lta_space_candidate")
-                or row.get("lta_replace_candidate")
-                or {}
-            )
-            candidate_id = None
-            if isinstance(candidate, dict) and candidate.get("id") is not None:
-                candidate_id = int(candidate["id"])
-            claim = bool(row.get("claim_lta_space") or row.get("replace_lta"))
+                candidate = (
+                    row.get("lta_space_candidate")
+                    or row.get("lta_replace_candidate")
+                    or {}
+                )
+                candidate_id = None
+                if isinstance(candidate, dict) and candidate.get("id") is not None:
+                    candidate_id = int(candidate["id"])
+                claim = bool(row.get("claim_lta_space") or row.get("replace_lta"))
 
-            with transaction.atomic():
-                if claim and candidate_id:
-                    booking = _claim_lta_space_booking(
-                        candidate_id=candidate_id,
-                        vessel_id=vessel_id,
-                        shipping_line_id=shipping_line_id,
-                        eta=eta,
-                        etd=etd,
-                        preferred_position_id=preferred_position_id,
-                        created_by=created_by,
-                    )
-                else:
-                    bookings = create_booking_batch(
-                        port_id=port_id,
-                        shipping_line_id=shipping_line_id,
-                        vessel_id=vessel_id,
-                        call_dates=[call_date],
-                        notes="",
-                        created_by=created_by,
-                        eta=eta,
-                        etd=etd,
-                        preferred_position_id=preferred_position_id,
-                        audit_changes=audit_changes,
-                        status=initial_status,
-                    )
-                    booking = bookings[0]
+                with transaction.atomic():
+                    if claim and candidate_id:
+                        booking = _claim_lta_space_booking(
+                            candidate_id=candidate_id,
+                            vessel_id=vessel_id,
+                            shipping_line_id=shipping_line_id,
+                            eta=eta,
+                            etd=etd,
+                            preferred_position_id=preferred_position_id,
+                            created_by=created_by,
+                        )
+                    else:
+                        bookings = create_booking_batch(
+                            port_id=port_id,
+                            shipping_line_id=shipping_line_id,
+                            vessel_id=vessel_id,
+                            call_dates=[call_date],
+                            notes="",
+                            created_by=created_by,
+                            eta=eta,
+                            etd=etd,
+                            preferred_position_id=preferred_position_id,
+                            audit_changes=audit_changes,
+                            status=initial_status,
+                        )
+                        booking = bookings[0]
 
-            created_booking_ids.append(booking.id)
-            created_port_ids.add(port_id)
-            created.append(
-                {
-                    "id": row_id,
-                    "booking_id": booking.id,
-                    "booking_code": booking.booking_code,
-                }
-            )
-        except (KeyError, TypeError, ValueError, BookingBatchCreateError) as exc:
-            detail = str(exc)
-            failures.append(_failure_payload(row, row_id, detail))
-            retry_rows.append(_normalize_retry_row(row, extra_issues=[detail]))
+                created_booking_ids.append(booking.id)
+                created_port_ids.add(port_id)
+                created.append(
+                    {
+                        "id": row_id,
+                        "booking_id": booking.id,
+                        "booking_code": booking.booking_code,
+                    }
+                )
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                BookingBatchCreateError,
+                DatabaseError,
+            ) as exc:
+                detail = str(exc)
+                failures.append(_failure_payload(row, row_id, detail))
+                retry_rows.append(_normalize_retry_row(row, extra_issues=[detail]))
 
-    batch.created_count = len(created)
-    batch.failed_count = len(failures)
-    batch.created_booking_ids = created_booking_ids
-    batch.failures = failures
-    batch.retry_rows = retry_rows
-    batch.finished_at = timezone.now()
-    batch.save(
-        update_fields=[
-            "created_count",
-            "failed_count",
-            "created_booking_ids",
-            "failures",
-            "retry_rows",
-            "finished_at",
-            "status",
-            "requested_count",
-            "tag",
-        ]
-    )
+        # No empty history cards (0/0/0) when nothing happened or hard-crash mid-run.
+        if not created and not failures and not retry_rows:
+            from apps.audit.services.deletion import allow_audit_deletion
+
+            with allow_audit_deletion():
+                batch.delete()
+            return {
+                "batch_id": None,
+                "created_count": 0,
+                "failed_count": 0,
+                "created": [],
+                "failures": [],
+                "retry_count": 0,
+                "tag_id": tag.id if tag else None,
+                "tag_name": tag.name if tag else None,
+            }
+
+        batch.created_count = len(created)
+        batch.failed_count = len(failures)
+        batch.created_booking_ids = created_booking_ids
+        batch.failures = failures
+        batch.retry_rows = retry_rows
+        batch.finished_at = timezone.now()
+        batch.save(
+            update_fields=[
+                "created_count",
+                "failed_count",
+                "created_booking_ids",
+                "failures",
+                "retry_rows",
+                "finished_at",
+                "status",
+                "requested_count",
+                "tag",
+            ]
+        )
+    except Exception:
+        from apps.audit.services.deletion import allow_audit_deletion
+
+        with allow_audit_deletion():
+            BookingImportBatch.objects.filter(pk=batch.pk).delete()
+        raise
 
     if tag and created_booking_ids:
         assign_tag_to_bookings_tracked(

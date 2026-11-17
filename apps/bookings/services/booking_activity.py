@@ -541,6 +541,8 @@ def _batch_queryset(
     tag_id: int | None = None,
 ):
     qs = BookingImportBatch.objects.select_related("created_by", "tag")
+    # Hide crash leftovers (0/0/0 with no retry payload).
+    qs = qs.exclude(created_count=0, failed_count=0, retry_rows=[])
     if kind == "berthing_import":
         qs = qs.filter(label__startswith="BERTHING PAPERS")
     elif kind == "mass_import":
