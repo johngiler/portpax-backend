@@ -311,20 +311,52 @@ class BookingViewSet(
         )
         if call_dates:
             qs = qs.filter(call_date__in=call_dates)
-        ids_raw = self.request.query_params.get("ids")
-        if ids_raw is not None and str(ids_raw).strip() != "":
-            booking_ids: list[int] = []
-            for part in str(ids_raw).split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                try:
-                    booking_ids.append(int(part))
-                except (TypeError, ValueError):
-                    continue
-            qs = qs.filter(id__in=booking_ids or [0])
+        # Prefer staged id_filter (short query) over raw ids=1,2,… (gunicorn request-line limit).
+        id_filter_key = (self.request.query_params.get("id_filter") or "").strip()
+        if id_filter_key:
+            from apps.bookings.services.list_id_filter import resolve_booking_ids
+
+            staged = resolve_booking_ids(id_filter_key)
+            if staged is None:
+                qs = qs.filter(id__in=[0])
+            else:
+                qs = qs.filter(id__in=staged or [0])
+        else:
+            ids_raw = self.request.query_params.get("ids")
+            if ids_raw is not None and str(ids_raw).strip() != "":
+                booking_ids: list[int] = []
+                for part in str(ids_raw).split(","):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    try:
+                        booking_ids.append(int(part))
+                    except (TypeError, ValueError):
+                        continue
+                qs = qs.filter(id__in=booking_ids or [0])
         ordering = self.request.query_params.get("ordering", "call_date_proximity")
         return apply_booking_list_ordering(qs, ordering)
+
+    @action(detail=False, methods=["post"], url_path="stage-id-filter")
+    def stage_id_filter(self, request):
+        """Persist a large id list; list/export use ?id_filter=<key> (short URL)."""
+        from apps.bookings.services.list_id_filter import stage_booking_ids
+
+        raw = request.data.get("ids")
+        if not isinstance(raw, list) or not raw:
+            return Response(
+                {"detail": "ids debe ser una lista de ids numéricos."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            ids = [int(x) for x in raw]
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "ids debe ser una lista de ids numéricos."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        key = stage_booking_ids(ids)
+        return Response({"id_filter": key, "count": len(ids)})
 
     @action(detail=False, methods=["get"], url_path=r"by-code/(?P<booking_code>[^/]+)")
     def by_code(self, request, booking_code=None):

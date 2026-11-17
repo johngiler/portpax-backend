@@ -3,6 +3,9 @@
 # Dump the Postgres database configured in backend/.env
 # Works on LOCAL / DEV / PRODUCTION (same .env contract).
 #
+# Used by pull scripts: sync_db_from_dev.sh (SSH) / sync_db_from_prod.sh (SSM).
+# Push of dumps to PROD is manual (AWS CLI / SSH) — not automated.
+#
 # Usage (from backend/ or anywhere):
 #   ./scripts/backup_db.sh
 #

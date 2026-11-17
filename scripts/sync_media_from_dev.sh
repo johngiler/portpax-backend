@@ -3,6 +3,11 @@
 # Pull media/ from DEV (portpax-api) into local backend/media/.
 # One-way only: remote → local. Does not upload.
 #
+# Pull matrix (automated):
+#   sync_db_from_dev.sh / sync_db_from_prod.sh
+#   sync_media_from_dev.sh (this) / sync_media_from_prod.sh
+# Push to DEV/PROD: manual only (AWS CLI / SSH) — not scripted.
+#
 # Requires: rsync, SSH Host portpax-api (same as deploy.sh).
 #
 # Usage (from backend/ or anywhere):
@@ -15,8 +20,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-REMOTE_HOST="portpax-api"
-REMOTE_PATH="/home/git/backend"
+# shellcheck source=scripts/_portpax_remote.sh
+source "$SCRIPT_DIR/_portpax_remote.sh"
+
+REMOTE_HOST="$PORTPAX_DEV_HOST"
+REMOTE_PATH="$PORTPAX_DEV_PATH"
 LOCAL_MEDIA="$BACKEND_DIR/media"
 REMOTE_MEDIA="$REMOTE_HOST:$REMOTE_PATH/media/"
 
@@ -32,7 +40,7 @@ for arg in "$@"; do
       DRY_RUN=1
       ;;
     -h|--help)
-      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -58,7 +66,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   RSYNC_OPTS+=(--dry-run)
 fi
 
-echo "[sync_media] $REMOTE_MEDIA → $LOCAL_MEDIA/"
+echo "[sync_media_from_dev] $REMOTE_MEDIA → $LOCAL_MEDIA/"
 rsync "${RSYNC_OPTS[@]}" "$REMOTE_MEDIA" "$LOCAL_MEDIA/"
 
-echo "[sync_media] Done."
+echo "[sync_media_from_dev] Done."

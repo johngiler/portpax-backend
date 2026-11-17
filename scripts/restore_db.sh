@@ -4,6 +4,10 @@
 # Drops the target database first, recreates it, then imports the file.
 # Works on LOCAL / DEV / PRODUCTION (same .env contract).
 #
+# Used by pull scripts: sync_db_from_dev.sh / sync_db_from_prod.sh
+# (--target=dev runs this over SSH on portpax-api).
+# Restoring into PROD intentionally: manual ops only — no push_* script.
+#
 # Usage:
 #   ./scripts/restore_db.sh data/db/20260721-093015.sql
 #   ./scripts/restore_db.sh 20260721-093015.sql          # looks under data/db/
