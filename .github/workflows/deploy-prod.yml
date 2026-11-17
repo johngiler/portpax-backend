@@ -123,13 +123,16 @@ jobs:
             EXTRA+=" --restart-celery"
           fi
           # AWS-RunShellScript uses /bin/sh (dash); wrap remote body in bash -lc.
+          # Bootstrap script from this S3 release if missing (S3 sync drops +x — always bash).
           PARAMS=$(jq -nc --arg uri "$S3_URI" --arg extra "$EXTRA" '
             ($uri | @sh) as $uq
             | (
                 "set -euo pipefail; "
                 + "S=/home/git/backend/scripts/deploy-prod-from-s3.sh; "
-                + "if [ -x \"$" + "S\" ]; then \"$" + "S\" " + $uq + $extra + "; "
-                + "else echo \"ERROR: missing $" + "S — copy deploy-prod-from-s3.sh to the server first\" >&2; exit 1; fi"
+                + "mkdir -p /home/git/backend/scripts; "
+                + "aws s3 cp " + $uq + "scripts/deploy-prod-from-s3.sh \"$S\" --region us-east-1; "
+                + "chmod +x \"$S\"; chown git:git \"$S\"; "
+                + "bash \"$S\" " + $uq + $extra
               ) as $body
             | {commands: ["bash -lc " + ($body | @sh)]}
           ')

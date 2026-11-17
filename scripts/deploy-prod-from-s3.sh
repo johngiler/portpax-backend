@@ -85,6 +85,8 @@ rsync -a --delete \
   --exclude "*.pyc" \
   "${TMP_DIR}/" "${APP_ROOT}/"
 
+# S3 sync does not preserve unix +x; restore script execute bits after publish.
+find "${APP_ROOT}/scripts" -type f -name '*.sh' -exec chmod a+x {} +
 chown -R git:git "$APP_ROOT"
 
 if [[ ! -d "${APP_ROOT}/.venv" ]]; then
