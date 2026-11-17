@@ -93,6 +93,9 @@ chown -R git:git /home/git
 echo "[setup-prod] Removing default nginx site (if present)..."
 rm -f /etc/nginx/sites-enabled/default
 
+echo "[setup-prod] Creating API log files for systemd units..."
+"$SCRIPT_DIR/ensure_app_logs.sh"
+
 if [[ -x "${SCRIPT_DIR}/fail2ban/install.sh" ]]; then
   echo "[setup-prod] Installing PortPax fail2ban jails..."
   "${SCRIPT_DIR}/fail2ban/install.sh"

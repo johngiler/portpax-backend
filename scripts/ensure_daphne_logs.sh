@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# Create Daphne log file (run as root on the API server once, or from deploy).
-set -e
-
-touch /var/log/daphne.log
-chown git:git /var/log/daphne.log
-chmod 644 /var/log/daphne.log
-
-echo "Daphne log: /var/log/daphne.log"
+# Compat wrapper — prefer ensure_app_logs.sh (creates all API unit logs).
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/ensure_app_logs.sh"

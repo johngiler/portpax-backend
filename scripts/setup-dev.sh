@@ -59,4 +59,8 @@ chown -R www-data:www-data /var/www/letsencrypt
 echo "[setup-dev] Removing default nginx site (if present)..."
 rm -f /etc/nginx/sites-enabled/default
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "[setup-dev] Creating API log files for systemd units..."
+"$SCRIPT_DIR/ensure_app_logs.sh"
+
 echo "[setup-dev] Done. See header comments for next steps."
