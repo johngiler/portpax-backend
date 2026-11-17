@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# One-time server setup for PortPax API (Ubuntu). Run as root on api.portpax.com.
-# Installs: Postgres, Nginx, Certbot, Python venv deps.
+# One-time DEV API host setup (BCT, api.portpax.com). Run as root on Ubuntu.
+# Installs local Postgres + Redis + Nginx + Certbot (all-in-one host).
 #
-# After this script, on the server:
+# After this script:
 #   1. Clone or rsync backend to /home/git/backend
 #   2. cp .env.dev.template .env && fill secrets
 #   3. cp config/settings/local_settings.dev.template.py config/settings/local_settings.py
@@ -13,18 +13,26 @@
 #   7. systemctl start portpax-api
 #   8. certbot certonly --webroot -w /var/www/letsencrypt -d api.portpax.com
 #   9. ./scripts/install_server_config.sh --ssl
+#  10. sudo ./scripts/fail2ban/install.sh
+#  11. Install systemd units (gunicorn, daphne, celery-worker, tmux) from scripts/systemd/
 #
-# From your machine: ./scripts/deploy.sh for subsequent updates.
+# Subsequent updates: ./scripts/deploy.sh from your machine.
+# PRODUCTION bootstrap: ./scripts/setup-prod.sh
 #
 
-set -e
+set -euo pipefail
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "ERROR: run as root (sudo $0)" >&2
+  exit 1
+fi
 
 export DEBIAN_FRONTEND=noninteractive
 
-echo "[setup] Updating apt..."
+echo "[setup-dev] Updating apt..."
 apt-get update -qq
 
-echo "[setup] Installing system packages..."
+echo "[setup-dev] Installing system packages..."
 apt-get install -y \
   postgresql postgresql-contrib \
   redis-server \
@@ -33,18 +41,22 @@ apt-get install -y \
   python3 python3-venv python3-dev python3-pip \
   libpq-dev \
   git \
-  rsync
+  rsync \
+  fail2ban \
+  tmux \
+  ccze \
+  btop
 
-echo "[setup] Ensuring user git and app directory..."
+echo "[setup-dev] Ensuring user git and app directory..."
 id git 2>/dev/null || useradd -m -s /bin/bash git
 mkdir -p /home/git/backend
 chown -R git:git /home/git
 
-echo "[setup] ACME webroot for Let's Encrypt..."
+echo "[setup-dev] ACME webroot for Let's Encrypt..."
 mkdir -p /var/www/letsencrypt
 chown -R www-data:www-data /var/www/letsencrypt
 
-echo "[setup] Removing default nginx site (if present)..."
+echo "[setup-dev] Removing default nginx site (if present)..."
 rm -f /etc/nginx/sites-enabled/default
 
-echo "[setup] Done. See header comments in this script for next steps."
+echo "[setup-dev] Done. See header comments for next steps."

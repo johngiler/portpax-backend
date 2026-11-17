@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Create Postgres user and database for PortPax from backend/.env
-# Run as root or postgres on the server after setup.sh.
+# Run as root or postgres on the server after setup-dev.sh (local Postgres).
 # Usage: from backend/ dir: ./scripts/init_db.sh
 #
 
