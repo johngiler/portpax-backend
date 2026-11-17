@@ -1,0 +1,164 @@
+# PRODUCTION deploy (ITM) — package backend and publish via S3 + SSM.
+# Requires IAM role (OIDC) portpax-prod-deploy-backend, trusted for this repo main only.
+#
+# Always on server: pip, check, migrate, collectstatic, restart gunicorn, reload nginx.
+# Daphne / Celery: optional (workflow_dispatch inputs; push defaults to both on).
+#
+# Actions are SHA-pinned (org policy). AWS auth is inline OIDC (no aws-actions/*).
+# Server keeps .env / local_settings.py / .venv / media / data / staticfiles.
+
+name: Deploy production backend
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      restart_daphne:
+        description: Reiniciar Daphne (WebSockets)
+        type: boolean
+        default: true
+      restart_celery:
+        description: Reiniciar Celery worker
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ROLE_ARN: arn:aws:iam::040105284691:role/portpax-prod-deploy-backend
+  RELEASES_BUCKET: itm-portpax-prod-releases-040105284691
+  PROD_API_INSTANCE_ID: i-0bf7f41727c6d932e
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Resolve restart flags
+        id: flags
+        run: |
+          set -euo pipefail
+          # Push → restart both. Manual → honor checkboxes.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            DAPHNE="${{ inputs.restart_daphne }}"
+            CELERY="${{ inputs.restart_celery }}"
+          else
+            DAPHNE=true
+            CELERY=true
+          fi
+          echo "restart_daphne=${DAPHNE}" >> "$GITHUB_OUTPUT"
+          echo "restart_celery=${CELERY}" >> "$GITHUB_OUTPUT"
+          echo "Flags: daphne=${DAPHNE} celery=${CELERY} (gunicorn always)"
+
+      - name: Assume AWS role (OIDC)
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+          CREDS=$(aws sts assume-role-with-web-identity \
+            --role-arn "${AWS_ROLE_ARN}" \
+            --role-session-name "gha-backend-${GITHUB_RUN_ID}" \
+            --web-identity-token "${TOKEN}" \
+            --duration-seconds 3600 \
+            --query Credentials \
+            --output json)
+          echo "AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r .AccessKeyId)" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r .SecretAccessKey)" >> "$GITHUB_ENV"
+          echo "AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r .SessionToken)" >> "$GITHUB_ENV"
+          echo "AWS_DEFAULT_REGION=${AWS_REGION}" >> "$GITHUB_ENV"
+
+      - name: Package release tree
+        run: |
+          set -euo pipefail
+          STAGE="${RUNNER_TEMP}/backend-release"
+          mkdir -p "$STAGE"
+          rsync -a \
+            --exclude ".venv/" \
+            --exclude ".git/" \
+            --exclude ".env" \
+            --exclude "config/settings/local_settings.py" \
+            --exclude "db.sqlite3" \
+            --exclude "media/" \
+            --exclude "data/" \
+            --exclude "staticfiles/" \
+            --exclude "__pycache__/" \
+            --exclude "*.pyc" \
+            --exclude ".github/" \
+            ./ "$STAGE/"
+          test -f "$STAGE/manage.py"
+          echo "STAGE=${STAGE}" >> "$GITHUB_ENV"
+
+      - name: Upload release to S3
+        id: upload
+        run: |
+          set -euo pipefail
+          SHA="${GITHUB_SHA}"
+          PREFIX="backend/${SHA}"
+          DEST="s3://${RELEASES_BUCKET}/${PREFIX}/"
+          aws s3 sync "${STAGE}/" "$DEST" --delete
+          aws s3 sync "${STAGE}/" "s3://${RELEASES_BUCKET}/backend/latest/" --delete
+          echo "s3_uri=${DEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy on EC2 via Session Manager
+        env:
+          S3_URI: ${{ steps.upload.outputs.s3_uri }}
+          INSTANCE_ID: ${{ env.PROD_API_INSTANCE_ID }}
+          RESTART_DAPHNE: ${{ steps.flags.outputs.restart_daphne }}
+          RESTART_CELERY: ${{ steps.flags.outputs.restart_celery }}
+        run: |
+          set -euo pipefail
+          EXTRA=""
+          if [[ "${RESTART_DAPHNE}" == "true" ]]; then
+            EXTRA+=" --restart-daphne"
+          fi
+          if [[ "${RESTART_CELERY}" == "true" ]]; then
+            EXTRA+=" --restart-celery"
+          fi
+          # AWS-RunShellScript uses /bin/sh (dash); wrap remote body in bash -lc.
+          PARAMS=$(jq -nc --arg uri "$S3_URI" --arg extra "$EXTRA" '
+            ($uri | @sh) as $uq
+            | (
+                "set -euo pipefail; "
+                + "S=/home/git/backend/scripts/deploy-prod-from-s3.sh; "
+                + "if [ -x \"$" + "S\" ]; then \"$" + "S\" " + $uq + $extra + "; "
+                + "else echo \"ERROR: missing $" + "S — copy deploy-prod-from-s3.sh to the server first\" >&2; exit 1; fi"
+              ) as $body
+            | {commands: ["bash -lc " + ($body | @sh)]}
+          ')
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "PortPax backend deploy ${GITHUB_SHA}" \
+            --parameters "$PARAMS" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM CommandId=${COMMAND_ID}"
+          for i in $(seq 1 72); do
+            STATUS=$(aws ssm list-command-invocations \
+              --command-id "$COMMAND_ID" \
+              --details \
+              --query "CommandInvocations[0].Status" \
+              --output text)
+            echo "status=${STATUS}"
+            case "$STATUS" in
+              Success) exit 0 ;;
+              Failed|Cancelled|TimedOut)
+                aws ssm list-command-invocations \
+                  --command-id "$COMMAND_ID" \
+                  --details \
+                  --query "CommandInvocations[0].CommandPlugins[0].Output" \
+                  --output text || true
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo "Timed out waiting for SSM command"
+          exit 1

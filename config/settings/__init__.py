@@ -19,11 +19,14 @@ except ImportError as exc:
 FRONTEND_BUILD_PUBLISH_TOKEN = os.environ.get("FRONTEND_BUILD_PUBLISH_TOKEN", "")
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", CELERY_BROKER_URL)
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_RESULT_BACKEND)
+
+from .channel_redis import channel_layer_hosts  # noqa: E402
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [CELERY_BROKER_URL],
+            "hosts": channel_layer_hosts(CELERY_BROKER_URL),
         },
     },
 }

@@ -163,11 +163,13 @@ CELERY_RESULT_BACKEND = os.environ.get(
 # Deploy script publishes frontend build id for Daphne broadcast (empty = disabled).
 FRONTEND_BUILD_PUBLISH_TOKEN = os.environ.get("FRONTEND_BUILD_PUBLISH_TOKEN", "")
 
+from .channel_redis import channel_layer_hosts
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [CELERY_BROKER_URL],
+            "hosts": channel_layer_hosts(CELERY_BROKER_URL),
         },
     },
 }
