@@ -35,8 +35,15 @@ install -m 0644 "$SCRIPT_DIR/filter.d/portpax-nginx.conf" \
   /etc/fail2ban/filter.d/portpax-nginx.conf
 install -m 0644 "$SCRIPT_DIR/jail.d/portpax-api.local" \
   /etc/fail2ban/jail.d/portpax-api.local
-install -m 0644 "$SCRIPT_DIR/jail.d/sshd-port.local" \
-  /etc/fail2ban/jail.d/sshd-port.local
+# DEV BCT hosts listen on SSH :2200. PROD AWS/SSM keeps the default sshd jail — do not
+# overwrite with sshd-port.local unless SSH really is on 2200.
+if ss -lntp 2>/dev/null | grep -q ':2200'; then
+  install -m 0644 "$SCRIPT_DIR/jail.d/sshd-port.local" \
+    /etc/fail2ban/jail.d/sshd-port.local
+  echo "[fail2ban] Installed sshd-port.local (SSH :2200 detected)"
+else
+  echo "[fail2ban] Skipping sshd-port.local (no SSH on :2200)"
+fi
 
 # Ensure sshd jail stays available; do not disable default jails globally.
 if [[ ! -f /etc/fail2ban/jail.local ]]; then

@@ -1,5 +1,8 @@
 # Fail2ban jail — PortPax API (nginx).
 # Install via: sudo ./scripts/fail2ban/install.sh
+#
+# PROD (ALB): require nginx real_ip (conf.d/portpax-realip.conf) first, or bans
+# hit ALB node IPs. ignoreip keeps VPC/health-checker ranges safe as a backstop.
 
 [portpax-nginx]
 enabled  = true
@@ -10,4 +13,4 @@ port     = http,https
 maxretry = 8
 findtime = 10m
 bantime  = 1h
-ignoreip = 127.0.0.1/8 ::1
+ignoreip = 127.0.0.1/8 ::1 10.20.0.0/16
