@@ -71,13 +71,41 @@ DATABASES = {
 }
 
 # Prefer the EC2 instance role; set keys only if IAM user credentials are required.
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")
-AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+# Do not set empty strings — boto3 would skip the instance role chain.
+_AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID") or None
+_AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY") or None
+if _AWS_ACCESS_KEY_ID and _AWS_SECRET_ACCESS_KEY:
+    AWS_ACCESS_KEY_ID = _AWS_ACCESS_KEY_ID
+    AWS_SECRET_ACCESS_KEY = _AWS_SECRET_ACCESS_KEY
+
 AWS_STORAGE_BUCKET_NAME = os.environ.get(
     "AWS_STORAGE_BUCKET_NAME",
     "itm-portpax-prod-files-040105284691",
 )
 AWS_S3_REGION_NAME = os.environ.get("AWS_S3_REGION_NAME", "us-east-1")
+AWS_S3_SIGNATURE_VERSION = "s3v4"
+AWS_DEFAULT_ACL = None
+AWS_QUERYSTRING_AUTH = False
+AWS_S3_FILE_OVERWRITE = False
+
+# Same relative keys as LOCAL/DEV MEDIA_ROOT (shipping_lines/..., bookings/...).
+# .url() stays under MEDIA_URL (/media/...) — see apps.core.storage.MediaS3Storage.
+STORAGES = {
+    "default": {
+        "BACKEND": "apps.core.storage.MediaS3Storage",
+        "OPTIONS": {
+            "bucket_name": AWS_STORAGE_BUCKET_NAME,
+            "region_name": AWS_S3_REGION_NAME,
+            "default_acl": None,
+            "querystring_auth": False,
+            "file_overwrite": False,
+            "object_parameters": {"CacheControl": "max-age=604800"},
+        },
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
 
 MAILGUN_API_KEY = os.environ.get("MAILGUN_API_KEY", "")
 MAILGUN_DOMAIN = os.environ.get("MAILGUN_DOMAIN", "")
